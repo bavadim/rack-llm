@@ -2,3 +2,6 @@ compiled/
 **/compiled/
 doc/
 native/
+models/
+.deps/
+*.log

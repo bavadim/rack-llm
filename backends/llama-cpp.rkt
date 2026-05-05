@@ -81,7 +81,7 @@
                  (apply string-append (map fragment-rx parts))
                  (append* (map fragment-slots parts)))]
       [(gen-node? part)
-       (define name (fresh "GEN"))
+       (define name (fresh "gen"))
        (define capture (capture-name "gen" name))
        (hash-set! gen-ids part name)
        (add-rule!
@@ -89,7 +89,7 @@
                 name capture (gen-node-max-tokens part)))
        (fragment name "([\\s\\S]*?)" (list capture))]
       [(select-node? part)
-       (define name (fresh "SEL"))
+       (define name (fresh "sel"))
        (hash-set! select-ids part name)
        (define branches
          (for/list : (Listof fragment) ([variant (in-list (select-variants part))]
