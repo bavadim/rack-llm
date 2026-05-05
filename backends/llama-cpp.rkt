@@ -1,84 +1,222 @@
 #lang typed/racket/base
 
-(require typed/json
-         typed/net/url
+(require racket/list
          racket/port
+         racket/string
+         typed/json
+         typed/net/url
          "../main.rkt")
 
 (provide make-llama-cpp-model)
 
-(: make-llama-cpp-model (->* () (#:model String #:base-url String #:api-key String) chat-model))
-(define (make-llama-cpp-model
-         #:model [model-name "llama.cpp"]
-         #:base-url [base-url "http://localhost:8080/v1"]
-         #:api-key [api-key (or (getenv "LLAMA_API_KEY") "EMPTY")])
-  (define endpoint
-    (string->url
-     (string-append (strip-trailing-slashes base-url)
-                    "/chat/completions")))
+(define-type Generator (-> String String String))
+(define-type Captures (Immutable-HashTable String String))
+(define-type Ids (HashTable Any String))
 
-  (: complete (-> request String))
-  (define (complete req)
+(struct compiled ([grammar : String] [rx : Regexp] [slots : (Listof String)] [gen-ids : Ids] [select-ids : Ids]) #:transparent)
+(struct fragment ([grammar : String] [rx : String] [slots : (Listof String)]) #:transparent)
+
+(: make-llama-cpp-model (->* () (#:server-url String #:generate (Option Generator) #:name String) chat-model))
+(define (make-llama-cpp-model
+         #:server-url [server-url (or (getenv "RACK_LLM_LLAMA_SERVER")
+                                      "http://localhost:8080")]
+         #:generate [generate #f]
+         #:name [name "llama.cpp"])
+  (define generate-text (or generate (make-http-generator server-url)))
+  (make-chat-model
+   (lambda ([req : grammar-request])
+     (define c (compile-part (grammar-request-part req)))
+     (define prompt (messages->prompt (grammar-request-messages req)))
+     (define text (generate-text prompt (compiled-grammar c)))
+     (define captures (match-compiled c text))
+     (reduce-part (grammar-request-part req)
+                  captures
+                  (compiled-gen-ids c)
+                  (compiled-select-ids c)))
+   #:name name))
+
+(: make-http-generator (-> String Generator))
+(define (make-http-generator server-url)
+  (define endpoint
+    (string->url (string-append (strip-trailing-slash server-url) "/completion")))
+  (lambda ([prompt : String] [grammar : String])
     (define payload
-      (hash-set-present
-       (hash-set-present
-        (hash 'model model-name
-              'messages (map chat-message->jsexpr (request-messages req)))
-        'max_tokens (request-max-tokens req))
-       'grammar (request-grammar req)))
-    (define headers
-      (list "Content-Type: application/json"
-            (format "Authorization: Bearer ~a" api-key)))
+      (jsexpr->bytes
+       (hash 'prompt prompt
+             'grammar grammar)))
     (define in
       (post-pure-port endpoint
-                      (string->bytes/utf-8 (jsexpr->string (cast payload JSExpr)))
-                      headers))
-    (define raw (port->string in))
+                      payload
+                      (list "Content-Type: application/json")))
+    (define response (port->string in))
     (close-input-port in)
-    (response->text (string->jsexpr raw)))
+    (response-content (string->jsexpr response))))
 
-  (make-chat-model complete #:name model-name))
+(: compile-part (-> Part compiled))
+(define (compile-part part)
+  (define next-id : Natural 0)
+  (define gen-ids : Ids (make-hasheq))
+  (define select-ids : Ids (make-hasheq))
+  (define rules : (Listof String) '())
 
-(: chat-message->jsexpr (-> chat-message JSExpr))
-(define (chat-message->jsexpr msg)
-  (hash 'role (symbol->string (chat-message-role msg))
-        'content (chat-message-content msg)))
+  (: fresh (-> String String))
+  (define (fresh prefix)
+    (set! next-id (add1 next-id))
+    (format "~a_~a" prefix next-id))
 
-(: strip-trailing-slashes (-> String String))
-(define (strip-trailing-slashes s)
-  (regexp-replace #px"/+$" s ""))
+  (: add-rule! (-> String Void))
+  (define (add-rule! rule)
+    (set! rules (cons rule rules)))
 
-(: hash-set-present (-> (Immutable-HashTable Symbol Any) Symbol Any (Immutable-HashTable Symbol Any)))
-(define (hash-set-present h k v)
-  (if v (hash-set h k v) h))
-
-(define missing (gensym 'missing))
-
-(: json-ref (->* (Any Symbol) (Any) Any))
-(define (json-ref obj key [default missing])
-  (define (fail)
-    (if (eq? default missing)
-        (error 'json-ref "missing key ~a in ~s" key obj)
-        default))
-  (cond
-    [(hash? obj)
-     (cond
-       [(hash-has-key? obj key) (hash-ref obj key)]
-       [(and (symbol? key) (hash-has-key? obj (symbol->string key)))
-        (hash-ref obj (symbol->string key))]
-       [else (fail)])]
-    [else (fail)]))
-
-(: response->text (-> JSExpr String))
-(define (response->text js)
-  (define choices (json-ref js 'choices))
-  (define choice
+  (: emit (-> Part fragment))
+  (define (emit part)
     (cond
-      [(pair? choices) (car choices)]
-      [(and (vector? choices) (> (vector-length choices) 0))
-       (vector-ref choices 0)]
-      [else (error 'llama-cpp "response has no choices: ~s" js)]))
-  (define content (json-ref (json-ref choice 'message) 'content ""))
+      [(lit-node? part)
+       (fragment (lark-string (lit-node-value part))
+                 (regexp-quote (lit-node-value part))
+                 '())]
+      [(seq-node? part)
+       (define parts (map emit (seq-node-parts part)))
+       (fragment (string-join (map fragment-grammar parts) " ")
+                 (apply string-append (map fragment-rx parts))
+                 (append* (map fragment-slots parts)))]
+      [(gen-node? part)
+       (define name (fresh "GEN"))
+       (define capture (capture-name "gen" name))
+       (hash-set! gen-ids part name)
+       (add-rule!
+        (format "~a[capture=~s, max_tokens=~a]: /(?s:.*)/"
+                name capture (gen-node-max-tokens part)))
+       (fragment name "([\\s\\S]*?)" (list capture))]
+      [(select-node? part)
+       (define name (fresh "SEL"))
+       (hash-set! select-ids part name)
+       (define branches
+         (for/list : (Listof fragment) ([variant (in-list (select-variants part))]
+                                        [index : Natural (in-naturals)])
+           (define branch-name (format "~a_~a" name index))
+           (define branch (emit variant))
+           (define capture (capture-name "select" name index))
+           (add-rule!
+            (format "~a[capture=~s]: ~a"
+                    branch-name capture (fragment-grammar branch)))
+           (fragment branch-name
+                     (string-append "(" (fragment-rx branch) ")")
+                     (cons capture (fragment-slots branch)))))
+       (add-rule! (format "~a: ~a" name (string-join (map fragment-grammar branches) " | ")))
+       (fragment name
+                 (string-append "(?:" (string-join (map fragment-rx branches) "|") ")")
+                 (append* (map fragment-slots branches)))]
+      [(generated-node? part)
+       (fragment (lark-string (generated-node-text part))
+                 (regexp-quote (generated-node-text part))
+                 '())]
+      [(selected-node? part)
+       (emit (selected-node-choice part))]))
+
+  (define start (emit part))
+  (compiled
+   (string-append
+    "%llguidance {}\n\n"
+    (format "start: ~a\n" (fragment-grammar start))
+    (if (null? rules)
+        ""
+        (string-append "\n" (string-join (reverse rules) "\n") "\n")))
+   (pregexp (string-append "^" (fragment-rx start) "$"))
+   (fragment-slots start)
+   (hash-copy gen-ids)
+   (hash-copy select-ids)))
+
+(: match-compiled (-> compiled String Captures))
+(define (match-compiled c text)
+  (define match (regexp-match (compiled-rx c) text))
+  (unless (and match (equal? (car match) text))
+    (error 'llama-cpp "generated text does not match grammar: ~s" text))
+  (define captures (cdr match))
+  (unless (= (length captures) (length (compiled-slots c)))
+    (error 'llama-cpp "internal matcher slot mismatch"))
+  (for/hash : Captures ([slot (in-list (compiled-slots c))]
+                        [value (in-list captures)]
+                        #:when (string? value))
+    (values slot value)))
+
+(: reduce-part (-> Part Captures Ids Ids Part))
+(define (reduce-part part captures gen-ids select-ids)
+  (cond
+    [(lit-node? part) part]
+    [(seq-node? part)
+     (seq-node (map (lambda ([child : Part]) (reduce-part child captures gen-ids select-ids))
+                    (seq-node-parts part)))]
+    [(gen-node? part)
+     (define rule-name (hash-ref gen-ids part))
+     (generated-node part (capture-ref captures (capture-name "gen" rule-name)))]
+    [(select-node? part)
+     (define rule-name (hash-ref select-ids part))
+     (define variants (select-variants part))
+     (define index (selected-index captures rule-name variants))
+     (unless index
+       (error 'llama-cpp "missing select capture for ~a" rule-name))
+     (selected-node part
+                    (reduce-part (list-ref variants index) captures gen-ids select-ids))]
+    [(generated-node? part) part]
+    [(selected-node? part)
+     (selected-node (selected-node-source part)
+                    (reduce-part (selected-node-choice part) captures gen-ids select-ids))]))
+
+(: messages->prompt (-> (Listof chat-message) String))
+(define (messages->prompt messages)
+  (string-join
+   (for/list : (Listof String) ([msg (in-list messages)])
+     (format "~a: ~a" (symbol->string (chat-message-role msg)) (chat-message-content msg)))
+   "\n"))
+
+(: select-variants (-> select-node (Pairof Part (Listof Part))))
+(define (select-variants node)
+  (cons (select-node-first node) (select-node-rest node)))
+
+(: selected-index (-> Captures String (Listof Part) (Option Natural)))
+(define (selected-index captures rule-name variants)
+  (let loop ([rest : (Listof Part) variants]
+             [index : Natural 0])
+    (cond
+      [(null? rest) #f]
+      [(hash-has-key? captures (capture-name "select" rule-name index)) index]
+      [else (loop (cdr rest) (add1 index))])))
+
+(: capture-name (case-> (-> String String String)
+                       (-> String String Natural String)))
+(define (capture-name kind rule-name [index #f])
+  (if index
+      (format "~a:~a:~a" kind rule-name index)
+      (format "~a:~a" kind rule-name)))
+
+(: capture-ref (-> Captures String String))
+(define (capture-ref captures key)
+  (hash-ref captures
+            key
+            (lambda ()
+              (error 'llama-cpp "missing string capture ~s in ~s" key captures))))
+
+(: response-content (-> JSExpr String))
+(define (response-content js)
+  (define content
+    (if (hash? js)
+        (hash-ref js 'content
+                  (lambda ()
+                    (hash-ref js "content" (lambda () #f))))
+        #f))
   (unless (string? content)
-    (error 'llama-cpp "message content is not a string: ~s" content))
+    (error 'llama-cpp "server response has no string content: ~s" js))
   content)
+
+(: jsexpr->bytes (-> JSExpr Bytes))
+(define (jsexpr->bytes js)
+  (string->bytes/utf-8 (jsexpr->string js)))
+
+(: strip-trailing-slash (-> String String))
+(define (strip-trailing-slash s)
+  (regexp-replace #rx"/+$" s ""))
+
+(: lark-string (-> String String))
+(define (lark-string s)
+  (format "~s" s))

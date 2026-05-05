@@ -1,40 +1,49 @@
 #lang typed/racket/base
 
-(require racket/list
-         racket/string)
+(require racket/list)
 
 (provide (struct-out chat-model)
-         (struct-out request)
+         (struct-out grammar-request)
          (struct-out chat-message)
+         (struct-out chat-ast)
+         (struct-out message)
+         (struct-out lit-node)
+         (struct-out seq-node)
+         (struct-out gen-node)
+         (struct-out select-node)
+         (struct-out generated-node)
+         (struct-out selected-node)
+         Role
+         Part
          chat?
          message?
          part?
-         grammar?
          make-chat-model
          model-complete
          chat
-         grammar
+         lit
          seq
          system
          user
          assistant
          gen
          select
+         value
          (rename-out [eval-chat eval])
          grammar->messages)
 
 (define-type Role (U 'system 'user 'assistant))
-(define-type Part (U String seq-node gen-node select-node))
+(define-type Part (U lit-node seq-node gen-node select-node generated-node selected-node))
+(define-type EvalValue (U String Part))
 
 (struct chat-model
   ([name : String]
-   [complete : (-> request String)])
+   [complete : (-> grammar-request Part)])
   #:transparent)
 
-(struct request
+(struct grammar-request
   ([messages : (Listof chat-message)]
-   [max-tokens : (Option Natural)]
-   [grammar : (Option String)])
+   [part : Part])
   #:transparent)
 
 (struct chat-message
@@ -43,13 +52,18 @@
   #:transparent)
 
 (struct chat-ast
-  ([messages : (Listof message)])
+  ([messages : (Listof message)]
+   [values : (Immutable-HashTable Any EvalValue)])
   #:transparent
   #:constructor-name make-chat)
 
 (struct message
   ([role : Role]
-   [parts : (Listof Part)])
+   [body : Part])
+  #:transparent)
+
+(struct lit-node
+  ([value : String])
   #:transparent)
 
 (struct seq-node
@@ -61,35 +75,47 @@
   #:transparent)
 
 (struct select-node
-  ([variants : (Listof Part)])
+  ([first : Part]
+   [rest : (Listof Part)])
   #:transparent)
 
-(: make-chat-model (->* ((-> request String)) (#:name String) chat-model))
+(struct generated-node
+  ([source : gen-node]
+   [text : String])
+  #:transparent)
+
+(struct selected-node
+  ([source : select-node]
+   [choice : Part])
+  #:transparent)
+
+(: make-chat-model (->* ((-> grammar-request Part)) (#:name String) chat-model))
 (define (make-chat-model complete #:name [name "model"])
   (chat-model name complete))
 
-(: model-complete (-> chat-model request String))
+(: model-complete (-> chat-model grammar-request Part))
 (define (model-complete model req)
   ((chat-model-complete model) req))
 
 (: part? (-> Any Boolean))
 (define (part? v)
-  (or (string? v) (seq-node? v) (gen-node? v) (select-node? v)))
-
-(: grammar? (-> Any Boolean))
-(define (grammar? v)
-  (or (chat-ast? v) (message? v) (part? v)))
+  (or (lit-node? v)
+      (seq-node? v)
+      (gen-node? v)
+      (select-node? v)
+      (generated-node? v)
+      (selected-node? v)))
 
 (: chat? (-> Any Boolean))
 (define chat? chat-ast?)
 
 (: chat (message * -> chat-ast))
 (define (chat . messages)
-  (make-chat messages))
+  (make-chat messages (hasheq)))
 
-(: grammar (message * -> chat-ast))
-(define (grammar . messages)
-  (make-chat messages))
+(: lit (-> String lit-node))
+(define (lit value)
+  (lit-node value))
 
 (: seq (Part * -> seq-node))
 (define (seq . parts)
@@ -97,135 +123,129 @@
 
 (: system (Part * -> message))
 (define (system . parts)
-  (message 'system parts))
+  (message 'system (parts->body parts)))
 
 (: user (Part * -> message))
 (define (user . parts)
-  (message 'user parts))
+  (message 'user (parts->body parts)))
 
 (: assistant (Part * -> message))
 (define (assistant . parts)
-  (message 'assistant parts))
+  (message 'assistant (parts->body parts)))
 
 (: gen (-> Natural gen-node))
 (define (gen max-tokens)
   (gen-node max-tokens))
 
-(: select (Part * -> select-node))
-(define (select . variants)
-  (when (null? variants)
-    (error 'select "expected at least one variant"))
-  (select-node variants))
+(: select (-> Part Part * select-node))
+(define (select first . rest)
+  (select-node first rest))
 
 (: grammar->messages (-> chat-ast (Listof chat-message)))
-(define (grammar->messages g)
-  (for/list : (Listof chat-message) ([msg (in-list (chat-ast-messages g))])
+(define (grammar->messages c)
+  (for/list : (Listof chat-message) ([msg (in-list (chat-ast-messages c))])
     (chat-message (message-role msg)
-                  (parts->string (message-parts msg)))))
+                  (part->static-string (message-body msg)))))
+
+(: value (-> chat-ast Any EvalValue))
+(define (value c node)
+  (hash-ref (chat-ast-values c)
+            node
+            (lambda ()
+              (error 'value "no value recorded for node: ~e" node))))
 
 (: eval-chat (-> chat-model chat-ast chat-ast))
-(define (eval-chat model g)
-  (define-values (messages _transcript)
-    (for/fold ([done : (Listof message) '()]
-               [transcript : (Listof chat-message) '()])
-              ([msg (in-list (chat-ast-messages g))])
-      (define-values (msg* transcript*) (eval-message model msg transcript))
-      (values (cons msg* done) transcript*)))
-  (make-chat (reverse messages)))
+(define (eval-chat model c)
+  (define-values (messages _transcript values)
+    (eval-messages model (chat-ast-messages c) '() (chat-ast-values c)))
+  (make-chat messages values))
 
-(: eval-message (-> chat-model message (Listof chat-message)
-                    (Values message (Listof chat-message))))
-(define (eval-message model msg previous-messages)
-  (define-values (parts _buffer)
-    (eval-parts model (message-parts msg) previous-messages (message-role msg) ""))
-  (define msg* (message (message-role msg) (reverse parts)))
-  (values msg* (append previous-messages (list (message->chat-message msg*)))))
-
-(: eval-parts (-> chat-model (Listof Part) (Listof chat-message) Role String
-                   (Values (Listof Part) String)))
-(define (eval-parts model parts previous-messages role buffer)
-  (for/fold ([done : (Listof Part) '()]
-             [current : String buffer])
-            ([part (in-list parts)])
-    (define-values (part* current*) (eval-part model part previous-messages role current))
-    (values (cons part* done) current*)))
-
-(: eval-part (-> chat-model Part (Listof chat-message) Role String
-                 (Values Part String)))
-(define (eval-part model part previous-messages role buffer)
+(: eval-messages
+   (-> chat-model (Listof message) (Listof chat-message) (Immutable-HashTable Any EvalValue)
+       (Values (Listof message) (Listof chat-message) (Immutable-HashTable Any EvalValue))))
+(define (eval-messages model messages transcript valmap)
   (cond
-    [(string? part)
-     (values part (string-append buffer part))]
-    [(seq-node? part)
-     (define-values (parts* buffer*)
-       (eval-parts model (seq-node-parts part) previous-messages role buffer))
-     (values (seq-node (reverse parts*)) buffer*)]
-    [(gen-node? part)
-     (define generated
-       (string-trim
-        (model-complete
-         model
-         (request (messages-with-buffer previous-messages role buffer)
-                  (gen-node-max-tokens part)
-                  #f))))
-     (values generated (string-append buffer generated))]
-    [(select-node? part)
-     (define options (map part->select-string (select-node-variants part)))
-     (define choice
-       (string-trim
-        (model-complete
-         model
-         (request (messages-with-buffer previous-messages role buffer)
-                  (apply max 1 (map string-length options))
-                  (finite-choice-grammar options)))))
-     (define selected (find-selected choice options (select-node-variants part)))
-     (unless selected
-       (error 'select "model returned value outside constrained variants; output=~e variants=~e"
-              choice options))
-     (eval-part model selected previous-messages role buffer)]))
+    [(null? messages) (values '() transcript valmap)]
+    [else
+     (define msg (car messages))
+     (define body (message-body msg))
+     (define-values (body* valmap*)
+       (if (static-part? body)
+           (values body valmap)
+           (let ([body* (model-complete model (grammar-request transcript body))])
+             (values body* (record-values body body* valmap)))))
+     (define content (part->static-string body*))
+     (define msg* (message (message-role msg) body*))
+     (define transcript* (append transcript (list (chat-message (message-role msg) content))))
+     (define-values (rest-messages transcript** valmap**)
+       (eval-messages model (cdr messages) transcript* valmap*))
+     (values (cons msg* rest-messages) transcript** valmap**)]))
 
-(: message->chat-message (-> message chat-message))
-(define (message->chat-message msg)
-  (chat-message (message-role msg)
-                (parts->string (message-parts msg))))
-
-(: parts->string (-> (Listof Part) String))
-(define (parts->string parts)
-  (apply string-append (map part->finished-string parts)))
-
-(: part->finished-string (-> Part String))
-(define (part->finished-string part)
+(: parts->body (-> (Listof Part) Part))
+(define (parts->body parts)
   (cond
-    [(string? part) part]
-    [(seq-node? part) (parts->string (seq-node-parts part))]
-    [(gen-node? part) (error 'grammar->messages "grammar is not finished")]
-    [(select-node? part) (error 'grammar->messages "grammar is not finished")]))
+    [(null? parts) (lit-node "")]
+    [(null? (cdr parts)) (car parts)]
+    [else (seq-node parts)]))
 
-(: part->select-string (-> Part String))
-(define (part->select-string part)
+(: static-part? (-> Part Boolean))
+(define (static-part? part)
   (cond
-    [(string? part) part]
-    [(seq-node? part) (apply string-append (map part->select-string (seq-node-parts part)))]
-    [(gen-node? part) (error 'select "variants must be finite text before selection")]
-    [(select-node? part) (error 'select "nested unresolved select variants are not allowed")]))
+    [(lit-node? part) #t]
+    [(seq-node? part) (andmap static-part? (seq-node-parts part))]
+    [(gen-node? part) #f]
+    [(select-node? part) #f]
+    [(generated-node? part) #t]
+    [(selected-node? part) (static-part? (selected-node-choice part))]))
 
-(: messages-with-buffer (-> (Listof chat-message) Role String (Listof chat-message)))
-(define (messages-with-buffer previous-messages role buffer)
-  (if (string=? buffer "")
-      previous-messages
-      (append previous-messages (list (chat-message role buffer)))))
-
-(: find-selected (-> String (Listof String) (Listof Part) (Option Part)))
-(define (find-selected choice options variants)
+(: part->static-string (-> Part String))
+(define (part->static-string part)
   (cond
-    [(or (null? options) (null? variants)) #f]
-    [(string=? choice (car options)) (car variants)]
-    [else (find-selected choice (cdr options) (cdr variants))]))
+    [(lit-node? part) (lit-node-value part)]
+    [(seq-node? part) (apply string-append (map part->static-string (seq-node-parts part)))]
+    [(generated-node? part) (generated-node-text part)]
+    [(selected-node? part) (part->static-string (selected-node-choice part))]
+    [(gen-node? part) (error 'grammar->messages "grammar contains generated nodes")]
+    [(select-node? part) (error 'grammar->messages "grammar contains selection nodes")]))
 
-(: finite-choice-grammar (-> (Listof String) String))
-(define (finite-choice-grammar options)
-  (format "root ::= ~a" (string-join (map gbnf-string options) " | ")))
+(: record-values
+   (-> Part Part (Immutable-HashTable Any EvalValue) (Immutable-HashTable Any EvalValue)))
+(define (record-values source result valmap)
+  (cond
+    [(and (gen-node? source)
+          (generated-node? result)
+          (eq? (generated-node-source result) source))
+     (hash-set valmap source (generated-node-text result))]
+    [(and (select-node? source)
+          (selected-node? result)
+          (eq? (selected-node-source result) source))
+     (record-values-in-selected
+      source
+      (selected-node-choice result)
+      (hash-set valmap source (selected-node-choice result)))]
+    [(and (seq-node? source) (seq-node? result))
+     (record-values-list (seq-node-parts source) (seq-node-parts result) valmap)]
+    [else valmap]))
 
-(: gbnf-string (-> String String))
-(define (gbnf-string s)
-  (format "~s" s))
+(: record-values-in-selected
+   (-> select-node Part (Immutable-HashTable Any EvalValue) (Immutable-HashTable Any EvalValue)))
+(define (record-values-in-selected source choice valmap)
+  (let loop ([variants : (Listof Part) (cons (select-node-first source) (select-node-rest source))])
+    (cond
+      [(null? variants) valmap]
+      [else
+       (define valmap* (record-values (car variants) choice valmap))
+       (if (eq? valmap* valmap)
+           (loop (cdr variants))
+           valmap*)])))
+
+(: record-values-list
+   (-> (Listof Part) (Listof Part) (Immutable-HashTable Any EvalValue)
+       (Immutable-HashTable Any EvalValue)))
+(define (record-values-list sources results valmap)
+  (cond
+    [(or (null? sources) (null? results)) valmap]
+    [else
+     (record-values-list (cdr sources)
+                         (cdr results)
+                         (record-values (car sources) (car results) valmap))]))
