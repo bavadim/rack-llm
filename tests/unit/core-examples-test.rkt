@@ -2,7 +2,6 @@
 
 (require racket/list
          rackunit
-         rackunit/text-ui
          rack-llm)
 
 (define (make-recording-model outputs requests)
@@ -139,4 +138,5 @@
         (grammar->messages (chat (assistant (gen 10)))))))))
 
 (module+ test
+  (require rackunit/text-ui)
   (run-tests core-examples))

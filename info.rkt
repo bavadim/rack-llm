@@ -3,8 +3,6 @@
 (define collection "rack-llm")
 (define deps
   '("base"
-    "json-lib"
-    "net-lib"
     "typed-racket-lib"
     "typed-racket-more"))
 (define build-deps

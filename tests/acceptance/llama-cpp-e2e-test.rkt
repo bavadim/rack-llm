@@ -1,9 +1,7 @@
 #lang racket/base
 
 (require racket/list
-         racket/string
          rackunit
-         rackunit/text-ui
          rack-llm
          rack-llm/backends/llama-cpp)
 
@@ -38,6 +36,7 @@
               (list "red" "blue"))))))
 
 (module+ test
+  (require rackunit/text-ui)
   (cond
     [acceptance-enabled?
      (run-tests llama-cpp-e2e)]

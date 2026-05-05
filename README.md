@@ -284,12 +284,27 @@ raco test tests/unit
 make test
 ```
 
+Run lint and architecture checks:
+
+```bash
+make lint
+```
+
+`make lint` compiles the package, checks useless `require`s, checks package
+dependency declarations, and runs project-specific API/source-policy tests.
+
 Run every test file. Acceptance tests are skipped unless explicitly enabled:
 
 ```bash
 raco test tests
 # or
 make test-all
+```
+
+Run the normal pre-PR gate:
+
+```bash
+make ci
 ```
 
 Run acceptance tests against a real server:

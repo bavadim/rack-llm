@@ -2,7 +2,6 @@
 
 (require racket/string
          rackunit
-         rackunit/text-ui
          rack-llm
          rack-llm/backends/llama-cpp)
 
@@ -69,4 +68,5 @@
      (check-equal? (value result choice) (lit "ab")))))
 
 (module+ test
+  (require rackunit/text-ui)
   (run-tests llama-cpp-backend-examples))
