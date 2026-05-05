@@ -3,14 +3,12 @@
 (define collection "rack-llm")
 (define deps
   '("base"
+    "json-lib"
     "net-lib"
-    "json-lib"))
+    "typed-racket-lib"
+    "typed-racket-more"))
 (define build-deps
-  '("rackunit-lib"
-    "scribble-lib"
-    "racket-doc"))
-(define scribblings
-  '(("scribblings/rack-llm.scrbl" ())))
-(define pkg-desc "Grammar-first LLM programming primitives for Racket")
+  '("rackunit-lib"))
+(define pkg-desc "Small grammar-AST LLM helper for Racket")
 (define version "0.1.0")
 (define license 'MIT)
