@@ -16,24 +16,21 @@
 (struct compiled ([grammar : String] [rx : Regexp] [slots : (Listof String)] [gen-ids : Ids] [select-ids : Ids]) #:transparent)
 (struct fragment ([grammar : String] [rx : String] [slots : (Listof String)]) #:transparent)
 
-(: make-llama-cpp-model (->* () (#:server-url String #:generate (Option Generator) #:name String) chat-model))
+(: make-llama-cpp-model (->* () (#:server-url String #:generate (Option Generator)) Completer))
 (define (make-llama-cpp-model
          #:server-url [server-url (or (getenv "RACK_LLM_LLAMA_SERVER")
                                       "http://localhost:8080")]
-         #:generate [generate #f]
-         #:name [name "llama.cpp"])
+         #:generate [generate #f])
   (define generate-text (or generate (make-http-generator server-url)))
-  (make-chat-model
-   (lambda ([req : grammar-request])
-     (define c (compile-part (grammar-request-part req)))
-     (define prompt (messages->prompt (grammar-request-messages req)))
-     (define text (generate-text prompt (compiled-grammar c)))
-     (define captures (match-compiled c text))
-     (reduce-part (grammar-request-part req)
-                  captures
-                  (compiled-gen-ids c)
-                  (compiled-select-ids c)))
-   #:name name))
+  (lambda ([transcript : (Listof completed-message)] [target : Part])
+    (define c (compile-part target))
+    (define prompt (messages->prompt transcript))
+    (define text (generate-text prompt (compiled-grammar c)))
+    (define captures (match-compiled c text))
+    (reduce-part target
+                 captures
+                 (compiled-gen-ids c)
+                 (compiled-select-ids c))))
 
 (: make-http-generator (-> String Generator))
 (define (make-http-generator server-url)
@@ -71,24 +68,24 @@
   (: emit (-> Part fragment))
   (define (emit part)
     (cond
-      [(lit-node? part)
-       (fragment (lark-string (lit-node-value part))
-                 (regexp-quote (lit-node-value part))
+      [(lit? part)
+       (fragment (lark-string (lit-value part))
+                 (regexp-quote (lit-value part))
                  '())]
-      [(seq-node? part)
-       (define parts (map emit (seq-node-parts part)))
+      [(seq? part)
+       (define parts (map emit (seq-parts part)))
        (fragment (string-join (map fragment-grammar parts) " ")
                  (apply string-append (map fragment-rx parts))
                  (append* (map fragment-slots parts)))]
-      [(gen-node? part)
+      [(gen? part)
        (define name (fresh "gen"))
        (define capture (capture-name "gen" name))
        (hash-set! gen-ids part name)
        (add-rule!
         (format "~a[capture=~s, max_tokens=~a]: /(?s:.*)/"
-                name capture (gen-node-max-tokens part)))
+                name capture (gen-max-tokens part)))
        (fragment name "([\\s\\S]*?)" (list capture))]
-      [(select-node? part)
+      [(select? part)
        (define name (fresh "sel"))
        (hash-set! select-ids part name)
        (define branches
@@ -107,12 +104,12 @@
        (fragment name
                  (string-append "(?:" (string-join (map fragment-rx branches) "|") ")")
                  (append* (map fragment-slots branches)))]
-      [(generated-node? part)
-       (fragment (lark-string (generated-node-text part))
-                 (regexp-quote (generated-node-text part))
+      [(generated? part)
+       (fragment (lark-string (generated-text part))
+                 (regexp-quote (generated-text part))
                  '())]
-      [(selected-node? part)
-       (emit (selected-node-choice part))]))
+      [(selected? part)
+       (emit (selected-choice part))]))
 
   (define start (emit part))
   (compiled
@@ -143,36 +140,36 @@
 (: reduce-part (-> Part Captures Ids Ids Part))
 (define (reduce-part part captures gen-ids select-ids)
   (cond
-    [(lit-node? part) part]
-    [(seq-node? part)
-     (seq-node (map (lambda ([child : Part]) (reduce-part child captures gen-ids select-ids))
-                    (seq-node-parts part)))]
-    [(gen-node? part)
+    [(lit? part) part]
+    [(seq? part)
+     (seq (map (lambda ([child : Part]) (reduce-part child captures gen-ids select-ids))
+               (seq-parts part)))]
+    [(gen? part)
      (define rule-name (hash-ref gen-ids part))
-     (generated-node part (capture-ref captures (capture-name "gen" rule-name)))]
-    [(select-node? part)
+     (generated part (capture-ref captures (capture-name "gen" rule-name)))]
+    [(select? part)
      (define rule-name (hash-ref select-ids part))
      (define variants (select-variants part))
      (define index (selected-index captures rule-name variants))
      (unless index
        (error 'llama-cpp "missing select capture for ~a" rule-name))
-     (selected-node part
+     (selected part
                     (reduce-part (list-ref variants index) captures gen-ids select-ids))]
-    [(generated-node? part) part]
-    [(selected-node? part)
-     (selected-node (selected-node-source part)
-                    (reduce-part (selected-node-choice part) captures gen-ids select-ids))]))
+    [(generated? part) part]
+    [(selected? part)
+     (selected (selected-source part)
+                    (reduce-part (selected-choice part) captures gen-ids select-ids))]))
 
-(: messages->prompt (-> (Listof chat-message) String))
+(: messages->prompt (-> (Listof completed-message) String))
 (define (messages->prompt messages)
   (string-join
    (for/list : (Listof String) ([msg (in-list messages)])
-     (format "~a: ~a" (symbol->string (chat-message-role msg)) (chat-message-content msg)))
+     (format "~a: ~a" (symbol->string (completed-message-role msg)) (completed-message-content msg)))
    "\n"))
 
-(: select-variants (-> select-node (Pairof Part (Listof Part))))
+(: select-variants (-> select (Pairof Part (Listof Part))))
 (define (select-variants node)
-  (cons (select-node-first node) (select-node-rest node)))
+  (cons (select-first node) (select-rest node)))
 
 (: selected-index (-> Captures String (Listof Part) (Option Natural)))
 (define (selected-index captures rule-name variants)

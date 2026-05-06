@@ -16,72 +16,53 @@
 
 (define expected-core-exports
   '(Part
+    Completer
     Role
     assistant
     chat
-    chat-ast
-    chat-ast-messages
-    chat-ast-values
-    chat-ast?
-    chat-message
-    chat-message-content
-    chat-message-role
-    chat-message?
-    chat-model
-    chat-model-complete
-    chat-model-name
-    chat-model?
+    chat-messages
     chat?
+    completed-message
+    completed-message-content
+    completed-message-role
+    completed-message?
     eval
     gen
-    gen-node
-    gen-node-max-tokens
-    gen-node?
-    generated-node
-    generated-node-source
-    generated-node-text
-    generated-node?
+    gen-max-tokens
+    gen?
+    generated
+    generated-source
+    generated-text
+    generated?
     grammar->messages
-    grammar-request
-    grammar-request-messages
-    grammar-request-part
-    grammar-request?
     lit
-    lit-node
-    lit-node-value
-    lit-node?
-    make-chat
-    make-chat-model
+    lit-value
+    lit?
     message
     message-body
     message-role
     message?
-    model-complete
     part?
     select
-    select-node
-    select-node-first
-    select-node-rest
-    select-node?
-    selected-node
-    selected-node-choice
-    selected-node-source
-    selected-node?
+    select-first
+    select-rest
+    select?
+    selected
+    selected-choice
+    selected-source
+    selected?
     seq
-    seq-node
-    seq-node-parts
-    seq-node?
-    struct:chat-ast
-    struct:chat-message
-    struct:chat-model
-    struct:gen-node
-    struct:generated-node
-    struct:grammar-request
-    struct:lit-node
+    seq-parts
+    seq?
+    struct:chat
+    struct:completed-message
+    struct:gen
+    struct:generated
+    struct:lit
     struct:message
-    struct:select-node
-    struct:selected-node
-    struct:seq-node
+    struct:select
+    struct:selected
+    struct:seq
     system
     user
     value))

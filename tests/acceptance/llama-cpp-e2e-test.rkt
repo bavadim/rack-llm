@@ -18,21 +18,22 @@
 
    (test-case "real llama.cpp server completes a constrained selection"
      (define choice
-       (select (lit "red") (lit "blue")))
-     (define model
+       (select (lit "red") (list (lit "blue"))))
+     (define complete
        (make-llama-cpp-model
         #:server-url server-url))
 
      (define result
-       (eval model
+       (eval complete
              (chat
+              (list
               (system (lit "Return exactly one allowed token."))
-              (assistant choice))))
+              (assistant choice)))))
 
      (define selected (value result choice))
      (check-not-false (member selected (list (lit "red") (lit "blue"))))
      (check-not-false
-      (member (chat-message-content (second (grammar->messages result)))
+      (member (completed-message-content (second (grammar->messages result)))
               (list "red" "blue"))))))
 
 (module+ test

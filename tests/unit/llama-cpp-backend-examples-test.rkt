@@ -18,28 +18,29 @@
        (set-box! captured-grammar grammar)
        "Choose: ab ok")
 
-     (define choice (select (lit "a") (lit "ab")))
+     (define choice (select (lit "a") (list (lit "ab"))))
      (define answer (gen 4))
-     (define model
+     (define complete
        (make-llama-cpp-model
         #:generate fake-generate))
 
      (define part
-       (seq (lit "Choose: ")
-            choice
-            (lit " ")
-            answer))
+       (seq (list (lit "Choose: ")
+                  choice
+                  (lit " ")
+                  answer)))
 
      (define result
-       (eval model
+       (eval complete
              (chat
+              (list
               (system (lit "You are concise."))
-              (assistant part))))
+              (assistant part)))))
 
      (check-equal?
       (grammar->messages result)
-      (list (chat-message 'system "You are concise.")
-            (chat-message 'assistant "Choose: ab ok")))
+      (list (completed-message 'system "You are concise.")
+            (completed-message 'assistant "Choose: ab ok")))
      (check-equal? (value result choice) (lit "ab"))
      (check-equal? (value result answer) "ok")
      (check-equal? (unbox captured-prompt) "system: You are concise.")
@@ -53,18 +54,18 @@
      (check-true (string-contains? grammar "gen_2[capture=\"gen:gen_2\", max_tokens=4]: /(?s:.*)/")))
 
    (test-case "post-match prefers the longest valid selected branch"
-     (define choice (select (lit "a") (lit "ab")))
-     (define model
+     (define choice (select (lit "a") (list (lit "ab"))))
+     (define complete
        (make-llama-cpp-model
         #:generate (lambda (_prompt _grammar) "abc")))
 
      (define result
-       (eval model
-             (chat (assistant (seq choice (lit "c"))))))
+       (eval complete
+             (chat (list (assistant (seq (list choice (lit "c"))))))))
 
      (check-equal?
       (grammar->messages result)
-      (list (chat-message 'assistant "abc")))
+      (list (completed-message 'assistant "abc")))
      (check-equal? (value result choice) (lit "ab")))))
 
 (module+ test

@@ -31,26 +31,27 @@ does not build llama.cpp and does not load native extensions.
          rack-llm/backends/llama-cpp)
 
 (define tone
-  (select (lit "short") (lit "detailed")))
+  (select (lit "short") (list (lit "detailed"))))
 
 (define answer
   (gen 40))
 
-(define model
+(define complete
   (make-llama-cpp-model
    #:server-url "http://localhost:8080"))
 
 (define program
   (chat
+   (list
    (system (lit "Answer accurately."))
    (user
     (lit "Use a ")
     tone
     (lit " answer. What is Racket?"))
-   (assistant answer)))
+   (assistant answer))))
 
 (define result
-  (eval model program))
+  (eval complete program))
 
 (grammar->messages result)
 (value result tone)
@@ -81,18 +82,18 @@ Messages carry chat roles:
 ```
 
 The role is metadata for the transcript. It is not compiled as grammar. If a
-message receives multiple parts, they are wrapped as `(seq part ...)`.
+message receives multiple parts, they are wrapped as `(seq parts)`.
 
 Parts describe the constrained output surface:
 
 ```racket
 (lit string)                 ; exact text
-(seq part ...)               ; concatenation
-(select first rest ...)      ; non-empty choice
+(seq parts)                  ; concatenation
+(select first rest)          ; non-empty choice
 (gen max-tokens)             ; generated text placeholder
 ```
 
-After evaluation, computed nodes are replaced by result nodes:
+After evaluation, computed parts are replaced by result parts:
 
 ```text
 gen    -> generated
@@ -104,22 +105,23 @@ body becomes renderable through `lit`, `seq`, `generated`, and `selected`.
 
 ## Reading Results
 
-Keep references to dynamic nodes before evaluation:
+Keep references to dynamic parts before evaluation:
 
 ```racket
 (define format
-  (select (lit "json") (lit "plain text")))
+  (select (lit "json") (list (lit "plain text"))))
 
 (define body
   (gen 80))
 
 (define result
-  (eval model
+  (eval complete
         (chat
+         (list
          (user (lit "Return ")
                format
                (lit " for the current status."))
-         (assistant body))))
+         (assistant body)))))
 
 (value result format) ; selected Part, for example (lit "json")
 (value result body)   ; generated String
@@ -137,17 +139,17 @@ values.
 
 ## Backend Contract
 
-A backend is a `chat-model`:
+A backend is a `Completer`:
 
 ```text
-grammar-request -> evaluated part
+transcript part -> evaluated part
 ```
 
-The request contains:
+The backend receives:
 
 ```racket
-(grammar-request-messages req) ; previous evaluated messages
-(grammar-request-part req)     ; current dynamic part to complete
+transcript ; previous evaluated messages
+part       ; current dynamic part to complete
 ```
 
 That shape keeps backend-specific work outside the core. A backend may compile
@@ -157,16 +159,13 @@ raw text.
 For tests or custom integrations:
 
 ```racket
-(define model
-  (make-chat-model
-   (lambda (req)
-     (define part (grammar-request-part req))
-     (cond
-       [(gen-node? part)
-        (generated-node part "hello")]
-       [else
-        (error 'example "unsupported part: ~e" part)]))
-   #:name "example"))
+(define complete
+  (lambda (transcript part)
+    (cond
+      [(gen? part)
+       (generated part "hello")]
+      [else
+       (error 'example "unsupported part: ~e" part)])))
 ```
 
 ## llama.cpp Backend
@@ -174,7 +173,7 @@ For tests or custom integrations:
 ```racket
 (require rack-llm/backends/llama-cpp)
 
-(define model
+(define complete
   (make-llama-cpp-model
    #:server-url "http://localhost:8080"))
 ```
