@@ -7,13 +7,15 @@ RACK_LLM_MODEL ?= models/qwen2.5-0.5b-instruct-q4_k_m.gguf
 RACK_LLM_LLAMA_SERVER ?= http://127.0.0.1:8080
 RACK_LLM_TEST_PORT ?= 18080
 
-.PHONY: help install env deps model server lint ci test test-all test-acceptance test-acceptance-local clean-deps
+WATCH_TARGET ?= test
+
+.PHONY: help install env watch-deps deps model server lint ci test test-all test-acceptance test-acceptance-local watch clean-deps
 
 help:
 	@printf '%s\n' \
 	  'Targets:' \
 	  '  make install                 Install the Racket package with raco.' \
-	  '  make env                     Build llama.cpp and download the default model.' \
+	  '  make env                     Install watcher tooling, build llama.cpp, and download the model.' \
 	  '  make deps                    Clone and build llama.cpp with LLGuidance support.' \
 	  '  make model                   Download the default small GGUF model.' \
 	  '  make server                  Run llama-server in the foreground.' \
@@ -23,12 +25,16 @@ help:
 	  '  make test-all                Run all tests through raco; acceptance skips unless enabled.' \
 	  '  make test-acceptance         Run acceptance tests against an already running server.' \
 	  '  make test-acceptance-local   Start a local llama-server, run acceptance tests, stop it.' \
+	  '  make watch                   Re-run tests on source changes and send desktop notifications.' \
 	  '  make clean-deps              Remove downloaded external dependencies.'
 
 install:
 	$(RACO) pkg install --auto
 
-env: deps model
+env: watch-deps deps model
+
+watch-deps:
+	scripts/bootstrap-watch-tools.sh
 
 deps:
 	LLAMA_CPP_DIR="$(LLAMA_CPP_DIR)" \
@@ -70,6 +76,9 @@ test-acceptance-local: model
 	RACK_LLM_TEST_PORT="$(RACK_LLM_TEST_PORT)" \
 	RACO="$(RACO)" \
 	scripts/run-acceptance-local.sh
+
+watch:
+	WATCH_TARGET="$(WATCH_TARGET)" scripts/watch.sh
 
 clean-deps:
 	rm -rf .deps

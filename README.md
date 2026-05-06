@@ -284,6 +284,18 @@ raco test tests/unit
 make test
 ```
 
+Run the unit test target whenever Racket or shell sources change. On macOS this
+uses `osascript` notifications; on Linux it uses `notify-send` when available.
+`make env` installs `watchexec`; on Linux it also installs
+`libnotify-bin`/`libnotify` for desktop notifications and may ask for your
+`sudo` password. To skip notification dependencies, run
+`RACK_LLM_INSTALL_NOTIFY_DEPS=0 make env`.
+
+```bash
+make watch
+make watch WATCH_TARGET=ci
+```
+
 Run lint and architecture checks:
 
 ```bash
