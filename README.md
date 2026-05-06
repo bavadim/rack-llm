@@ -69,10 +69,8 @@ choices and generated text.
 ```text
 Chat         = (Listof Message)
 FixedChat    = (Listof FixedMessage)
-Message      = role + Body
-FixedMessage = role + FixedBody
-Body         = (Listof Part)
-FixedBody    = (Listof FixedPart)
+Message      = role + (Listof Part)
+FixedMessage = role + (Listof FixedPart)
 Part         = FixedPart | gen | select
 FixedPart    = lit | generated | selected
 ```
@@ -92,7 +90,7 @@ Parts describe the constrained output surface:
 
 ```racket
 (lit string)                 ; exact text
-(select first rest)          ; non-empty choice of Body alternatives
+(select first rest)          ; non-empty choice of part-list alternatives
 (gen max-tokens)             ; generated text placeholder
 ```
 
@@ -104,7 +102,7 @@ select -> selected
 ```
 
 The evaluated result is a `FixedChat`: every message body contains only
-`FixedPart` values and is renderable with `fixed-body->string`.
+`FixedPart` values.
 
 ## Reading Results
 
@@ -133,20 +131,16 @@ Keep references to dynamic parts before evaluation:
   (generated-text (first (message-body (second result)))))
 ```
 
-The value returned by `eval` is already the fixed messages. Use
-`fixed-body->string` when you need rendered text:
-
-```racket
-(map (lambda (msg) (fixed-body->string (message-body msg)))
-     result)
-```
+The value returned by `eval` is already the fixed messages, so callers can walk
+the result directly with `message-body`, `selected-choice`, and
+`generated-text`.
 
 ## Backend Contract
 
 A backend is a `Completer`:
 
 ```text
-FixedChat Body -> FixedBody
+FixedChat (Listof part) -> (Listof fixed-part)
 ```
 
 The backend receives:

@@ -23,7 +23,7 @@
                                       "http://localhost:8080")]
          #:generate [generate #f])
   (define generate-text (or generate (make-http-generator server-url)))
-  (lambda ([transcript : FixedChat] [target : Body])
+  (lambda ([transcript : FixedChat] [target : (Listof part)])
     (define c (compile-body target))
     (define prompt (messages->prompt transcript))
     (define text (generate-text prompt (compiled-grammar c)))
@@ -51,7 +51,7 @@
     (close-input-port in)
     (response-content (string->jsexpr response))))
 
-(: compile-body (-> Body compiled))
+(: compile-body (-> (Listof part) compiled))
 (define (compile-body body)
   (define next-id : Natural 0)
   (define gen-ids : GenIds (make-hasheq))
@@ -67,7 +67,7 @@
   (define (add-rule! rule)
     (set! rules (cons rule rules)))
 
-  (: emit-body (-> Body fragment))
+  (: emit-body (-> (Listof part) fragment))
   (define (emit-body body)
     (define parts (map emit body))
     (fragment (string-join (map fragment-grammar parts) " ")
@@ -143,7 +143,7 @@
                         #:when (string? value))
     (values slot value)))
 
-(: reduce-body (-> Body Captures GenIds SelectIds FixedBody))
+(: reduce-body (-> (Listof part) Captures GenIds SelectIds (Listof fixed-part)))
 (define (reduce-body body captures gen-ids select-ids)
   (map (lambda ([child : part]) (reduce-part child captures gen-ids select-ids))
        body))
@@ -180,12 +180,24 @@
    (for/list : (Listof String) ([msg (in-list messages)])
      (format "~a: ~a"
              (symbol->string (message-role msg))
-             (fixed-body->string (message-body msg))))
+             (render-body (message-body msg))))
    "\n"))
 
-(: selected-index (-> Captures String (Listof Body) (Option Natural)))
+(: render-body (-> (Listof fixed-part) String))
+(define (render-body body)
+  (apply string-append (map render-part body)))
+
+(: render-part (-> fixed-part String))
+(define (render-part part)
+  (cond
+    [(lit? part) (lit-value part)]
+    [(generated? part) (generated-text part)]
+    [(selected? part) (render-body (selected-choice part))]
+    [else (error 'llama-cpp "unsupported fixed part: ~e" part)]))
+
+(: selected-index (-> Captures String (Listof (Listof part)) (Option Natural)))
 (define (selected-index captures rule-name variants)
-  (let loop ([rest : (Listof Body) variants]
+  (let loop ([rest : (Listof (Listof part)) variants]
              [index : Natural 0])
     (cond
       [(null? rest) #f]

@@ -15,17 +15,14 @@
    symbol<?))
 
 (define expected-core-exports
-  '(Body
-    Chat
+  '(Chat
     Completer
-    FixedBody
     FixedChat
     FixedMessage
     Message
     Role
     assistant
     eval
-    fixed-body->string
     fixed-part
     fixed-part?
     gen

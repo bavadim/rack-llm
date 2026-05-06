@@ -9,8 +9,6 @@
          (struct-out generated)
          (struct-out selected)
          Role
-         Body
-         FixedBody
          Message
          FixedMessage
          Chat
@@ -19,17 +17,14 @@
          system
          user
          assistant
-         fixed-body->string
          (rename-out [eval-chat eval]))
 
 (define-type Role (U 'system 'user 'assistant))
-(define-type Body (Listof part))
-(define-type FixedBody (Listof fixed-part))
 (define-type Message (message part))
 (define-type FixedMessage (message fixed-part))
 (define-type Chat (Listof Message))
 (define-type FixedChat (Listof FixedMessage))
-(define-type Completer (-> FixedChat Body FixedBody))
+(define-type Completer (-> FixedChat (Listof part) (Listof fixed-part)))
 
 (struct part () #:transparent)
 (struct fixed-part part () #:transparent)
@@ -48,8 +43,8 @@
   #:transparent)
 
 (struct select part
-  ([first : Body]
-   [rest : (Listof Body)])
+  ([first : (Listof part)]
+   [rest : (Listof (Listof part))])
   #:transparent)
 
 (struct generated fixed-part
@@ -59,7 +54,7 @@
 
 (struct selected fixed-part
   ([source : select]
-   [choice : FixedBody])
+   [choice : (Listof fixed-part)])
   #:transparent)
 
 (: system (part * -> Message))
@@ -73,18 +68,6 @@
 (: assistant (part * -> Message))
 (define (assistant . parts)
   (message 'assistant parts))
-
-(: fixed-part->string (-> fixed-part String))
-(define (fixed-part->string part)
-  (cond
-    [(lit? part) (lit-value part)]
-    [(generated? part) (generated-text part)]
-    [(selected? part) (fixed-body->string (selected-choice part))]
-    [else (error 'fixed-part->string "unsupported fixed part: ~e" part)]))
-
-(: fixed-body->string (-> FixedBody String))
-(define (fixed-body->string body)
-  (apply string-append (map fixed-part->string body)))
 
 (: eval-chat (-> Completer Chat FixedChat))
 (define (eval-chat complete messages)
@@ -104,10 +87,10 @@
              (append transcript (list msg*))
              (cons msg* acc))])))
 
-(: body->fixed/maybe (-> Body (Option FixedBody)))
+(: body->fixed/maybe (-> (Listof part) (Option (Listof fixed-part))))
 (define (body->fixed/maybe body)
-  (let loop ([remaining : Body body]
-             [acc : FixedBody '()])
+  (let loop ([remaining : (Listof part) body]
+             [acc : (Listof fixed-part) '()])
     (cond
       [(null? remaining) (reverse acc)]
       [else

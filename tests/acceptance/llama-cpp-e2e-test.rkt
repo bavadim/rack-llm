@@ -32,8 +32,8 @@
      (define selected (selected-choice (first (message-body (second result)))))
      (check-not-false (member selected (list (list (lit "red")) (list (lit "blue")))))
      (check-not-false
-      (member (fixed-body->string (message-body (second result)))
-              (list "red" "blue"))))))
+      (member (first selected)
+              (list (lit "red") (lit "blue")))))))
 
 (module+ test
   (require rackunit/text-ui)
