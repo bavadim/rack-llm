@@ -51,6 +51,8 @@
    [choice : (Listof fixed-part)])
   #:transparent)
 
+(define-predicate fixed-body? (Listof fixed-part))
+
 (: system (part * -> (message part)))
 (define (system . parts)
   (message 'system parts))
@@ -74,21 +76,10 @@
        (define msg (car remaining))
        (define body (message-body msg))
        (define body*
-         (let ([fixed (body->fixed/maybe body)])
-           (if fixed fixed (complete transcript body))))
+         (if (fixed-body? body)
+             body
+             (complete transcript body)))
        (define msg* : (message fixed-part) (message (message-role msg) body*))
        (loop (cdr remaining)
              (append transcript (list msg*))
              (cons msg* acc))])))
-
-(: body->fixed/maybe (-> (Listof part) (Option (Listof fixed-part))))
-(define (body->fixed/maybe body)
-  (let loop ([remaining : (Listof part) body]
-             [acc : (Listof fixed-part) '()])
-    (cond
-      [(null? remaining) (reverse acc)]
-      [else
-       (define p (car remaining))
-       (if (fixed-part? p)
-           (loop (cdr remaining) (cons p acc))
-           #f)])))
