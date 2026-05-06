@@ -15,13 +15,13 @@
    symbol<?))
 
 (define expected-core-exports
-  '(Chat
-    Completer
-    FixedChat
+  '(Program
+    LLM
+    EvaluatedProgram
     assistant
     eval
-    fixed-part
-    fixed-part?
+    value
+    value?
     gen
     gen-max-tokens
     gen?
@@ -36,8 +36,8 @@
     message-body
     message-role
     message?
-    part
-    part?
+    expr
+    expr?
     select
     select-first
     select-rest
@@ -46,19 +46,19 @@
     selected-choice
     selected-source
     selected?
-    struct:fixed-part
+    struct:value
     struct:gen
     struct:generated
     struct:lit
     struct:message
-    struct:part
+    struct:expr
     struct:select
     struct:selected
     system
     user))
 
 (define expected-llama-cpp-exports
-  '(make-llama-cpp-model))
+  '(make-llama-cpp-llm))
 
 (define public-api-contract
   (test-suite

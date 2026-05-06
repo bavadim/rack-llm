@@ -3,7 +3,7 @@
 `rack-llm` is a small Racket library for building structured LLM interactions
 with grammar-constrained generation. It is aimed at the same class of problems
 as Microsoft Guidance: describe the shape of the conversation in code, let the
-model fill only the dynamic parts, and read the selected/generated values back
+model fill only the dynamic expressions, and read the selected/generated values back
 from the evaluated program.
 
 The core is backend-agnostic. The included llama.cpp backend talks to an already
@@ -38,7 +38,7 @@ does not build llama.cpp and does not load native extensions.
   (gen 40))
 
 (define complete
-  (make-llama-cpp-model
+  (make-llama-cpp-llm
    #:server-url "http://localhost:8080"))
 
 (define program
@@ -56,7 +56,7 @@ does not build llama.cpp and does not load native extensions.
 result
 ```
 
-`eval` walks the chat from top to bottom and returns a `FixedChat`. Static
+`eval` walks the program from top to bottom and returns an `EvaluatedProgram`. Static
 messages are copied into the transcript. When a message contains `select` or
 `gen`, the current fixed transcript and that message body are sent to the model
 backend. The backend must return the same AST fragment reduced to concrete
@@ -67,46 +67,46 @@ choices and generated text.
 `rack-llm` programs are ordinary Racket values:
 
 ```text
-Chat         = (Listof (message part))
-FixedChat    = (Listof (message fixed-part))
-message part = role + (Listof Part)
-message fixed-part = role + (Listof FixedPart)
-Part         = FixedPart | gen | select
-FixedPart    = lit | generated | selected
+Program          = (Listof (message expr))
+EvaluatedProgram = (Listof (message value))
+message expr     = role + (Listof expr)
+message value    = role + (Listof value)
+expr             = value | gen | select
+value            = lit | generated | selected
 ```
 
 Messages carry chat roles:
 
 ```racket
-(system part ...)
-(user part ...)
-(assistant part ...)
+(system expr ...)
+(user expr ...)
+(assistant expr ...)
 ```
 
 The role is metadata for the transcript. It is not compiled as grammar. If a
-message receives multiple parts, they are stored directly in its body list.
+message receives multiple expressions, they are stored directly in its body list.
 
-Parts describe the constrained output surface:
+Expressions describe the constrained output surface:
 
 ```racket
 (lit string)                 ; exact text
-(select first rest)          ; non-empty choice of part-list alternatives
+(select first rest)          ; non-empty choice of expr-list alternatives
 (gen max-tokens)             ; generated text placeholder
 ```
 
-After evaluation, computed parts are replaced by fixed result parts:
+After evaluation, computed expressions are replaced by values:
 
 ```text
 gen    -> generated
 select -> selected
 ```
 
-The evaluated result is a `FixedChat`: every message body contains only
-`FixedPart` values.
+The evaluated result is an `EvaluatedProgram`: every message body contains only
+`value` expressions.
 
 ## Reading Results
 
-Keep references to dynamic parts before evaluation:
+Keep references to dynamic expressions before evaluation:
 
 ```racket
 (define format
@@ -137,10 +137,10 @@ the result directly with `message-body`, `selected-choice`, and
 
 ## Backend Contract
 
-A backend is a `Completer`:
+A backend is a `LLM`:
 
 ```text
-FixedChat (Listof part) -> (Listof fixed-part)
+EvaluatedProgram (Listof expr) -> (Listof value)
 ```
 
 The backend receives:
@@ -159,12 +159,12 @@ For tests or custom integrations:
 ```racket
 (define complete
   (lambda (transcript body)
-    (for/list ([part (in-list body)])
+    (for/list ([expr (in-list body)])
       (cond
-        [(lit? part) part]
-        [(gen? part) (generated part "hello")]
+        [(lit? expr) expr]
+        [(gen? expr) (generated expr "hello")]
         [else
-         (error 'example "unsupported part: ~e" part)]))))
+         (error 'example "unsupported expr: ~e" expr)]))))
 ```
 
 ## llama.cpp Backend
@@ -173,7 +173,7 @@ For tests or custom integrations:
 (require rack-llm/backends/llama-cpp)
 
 (define complete
-  (make-llama-cpp-model
+  (make-llama-cpp-llm
    #:server-url "http://localhost:8080"))
 ```
 
@@ -190,7 +190,7 @@ select -> capture "select:<rule>:<branch>"
 
 It sends the grammar and rendered previous messages to llama.cpp `/completion`.
 llama.cpp constrains generation and returns final text. The backend then matches
-that text against the original part locally, validates that the whole output fits
+that text against the original expr locally, validates that the whole output fits
 the supported AST, and rebuilds the reduced AST.
 
 ## Running llama.cpp

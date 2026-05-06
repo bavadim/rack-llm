@@ -20,7 +20,7 @@
      (define choice
        (select (list (lit "red")) (list (list (lit "blue")))))
      (define complete
-       (make-llama-cpp-model
+       (make-llama-cpp-llm
         #:server-url server-url))
 
      (define result

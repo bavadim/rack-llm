@@ -22,7 +22,7 @@
      (define choice (select (list (lit "a")) (list (list (lit "ab")))))
      (define answer (gen 4))
      (define complete
-       (make-llama-cpp-model
+       (make-llama-cpp-llm
         #:generate fake-generate))
 
      (define result
@@ -55,7 +55,7 @@
    (test-case "post-match prefers the longest valid selected branch"
      (define choice (select (list (lit "a")) (list (list (lit "ab")))))
      (define complete
-       (make-llama-cpp-model
+       (make-llama-cpp-llm
         #:generate (lambda (_prompt _grammar) "abc")))
 
      (define result

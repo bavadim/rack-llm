@@ -1,75 +1,74 @@
 #lang typed/racket/base
 
-(provide (struct-out part)
-         (struct-out fixed-part)
+(provide (struct-out expr)
+         (struct-out value)
          (struct-out message)
          (struct-out lit)
          (struct-out gen)
          (struct-out select)
          (struct-out generated)
          (struct-out selected)
-         Chat
-         FixedChat
-         Completer
+         Program
+         EvaluatedProgram
+         LLM
          system
          user
          assistant
-         (rename-out [eval-chat eval]))
+         (rename-out [eval-program eval]))
 
-(define-type Chat (Listof (message part)))
-(define-type FixedChat (Listof (message fixed-part)))
-(define-type Completer (-> FixedChat (Listof part) (Listof fixed-part)))
+(define-type Program (Listof (message expr)))
+(define-type EvaluatedProgram (Listof (message value)))
+(define-type LLM (-> EvaluatedProgram (Listof expr) (Listof value)))
 
-(struct part () #:transparent)
-(struct fixed-part part () #:transparent)
+(struct expr () #:transparent)
+(struct value expr () #:transparent)
 
 (struct: (A) message
   ([role : (U 'system 'user 'assistant)]
    [body : (Listof A)])
   #:transparent)
 
-(struct lit fixed-part
+(struct lit value
   ([value : String])
   #:transparent)
 
-(struct gen part
+(struct gen expr
   ([max-tokens : Natural])
   #:transparent)
 
-(struct select part
-  ([first : (Listof part)]
-   [rest : (Listof (Listof part))])
+(struct select expr
+  ([first : (Listof expr)]
+   [rest : (Listof (Listof expr))])
   #:transparent)
 
-(struct generated fixed-part
+(struct generated value
   ([source : gen]
    [text : String])
   #:transparent)
 
-(struct selected fixed-part
+(struct selected value
   ([source : select]
-   [choice : (Listof fixed-part)])
+   [choice : (Listof value)])
   #:transparent)
 
-(define-predicate fixed-body? (Listof fixed-part))
+(: system (expr * -> (message expr)))
+(define (system . exprs)
+  (message 'system exprs))
 
-(: system (part * -> (message part)))
-(define (system . parts)
-  (message 'system parts))
+(: user (expr * -> (message expr)))
+(define (user . exprs)
+  (message 'user exprs))
 
-(: user (part * -> (message part)))
-(define (user . parts)
-  (message 'user parts))
+(: assistant (expr * -> (message expr)))
+(define (assistant . exprs)
+  (message 'assistant exprs))
 
-(: assistant (part * -> (message part)))
-(define (assistant . parts)
-  (message 'assistant parts))
-
-(: eval-chat (-> Completer Chat FixedChat))
-(define (eval-chat complete messages)
-  (let loop ([remaining : Chat messages]
-             [transcript : FixedChat '()]
-             [acc : FixedChat '()])
+(: eval-program (-> LLM Program EvaluatedProgram))
+(define (eval-program complete messages)
+  (define-predicate fixed-body? (Listof value))
+  (let loop ([remaining : Program messages]
+             [transcript : EvaluatedProgram '()]
+             [acc : EvaluatedProgram '()])
     (cond
       [(null? remaining) (reverse acc)]
       [else
@@ -79,7 +78,7 @@
          (if (fixed-body? body)
              body
              (complete transcript body)))
-       (define msg* : (message fixed-part) (message (message-role msg) body*))
+       (define msg* : (message value) (message (message-role msg) body*))
        (loop (cdr remaining)
              (append transcript (list msg*))
              (cons msg* acc))])))
