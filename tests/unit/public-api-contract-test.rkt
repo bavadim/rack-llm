@@ -15,18 +15,19 @@
    symbol<?))
 
 (define expected-core-exports
-  '(Part
+  '(Body
+    Chat
     Completer
+    FixedBody
+    FixedChat
+    FixedMessage
+    Message
     Role
     assistant
-    chat
-    chat-messages
-    chat?
-    completed-message
-    completed-message-content
-    completed-message-role
-    completed-message?
     eval
+    fixed-body->string
+    fixed-part
+    fixed-part?
     gen
     gen-max-tokens
     gen?
@@ -34,7 +35,6 @@
     generated-source
     generated-text
     generated?
-    grammar->messages
     lit
     lit-value
     lit?
@@ -42,6 +42,7 @@
     message-body
     message-role
     message?
+    part
     part?
     select
     select-first
@@ -51,21 +52,16 @@
     selected-choice
     selected-source
     selected?
-    seq
-    seq-parts
-    seq?
-    struct:chat
-    struct:completed-message
+    struct:fixed-part
     struct:gen
     struct:generated
     struct:lit
     struct:message
+    struct:part
     struct:select
     struct:selected
-    struct:seq
     system
-    user
-    value))
+    user))
 
 (define expected-llama-cpp-exports
   '(make-llama-cpp-model))

@@ -1,6 +1,7 @@
 #lang racket/base
 
-(require racket/string
+(require racket/list
+         racket/string
          rackunit
          rack-llm
          rack-llm/backends/llama-cpp)
@@ -18,31 +19,29 @@
        (set-box! captured-grammar grammar)
        "Choose: ab ok")
 
-     (define choice (select (lit "a") (list (lit "ab"))))
+     (define choice (select (list (lit "a")) (list (list (lit "ab")))))
      (define answer (gen 4))
      (define complete
        (make-llama-cpp-model
         #:generate fake-generate))
 
-     (define part
-       (seq (list (lit "Choose: ")
-                  choice
-                  (lit " ")
-                  answer)))
-
      (define result
        (eval complete
-             (chat
-              (list
+             (list
               (system (lit "You are concise."))
-              (assistant part)))))
+              (assistant (lit "Choose: ") choice (lit " ") answer))))
 
      (check-equal?
-      (grammar->messages result)
-      (list (completed-message 'system "You are concise.")
-            (completed-message 'assistant "Choose: ab ok")))
-     (check-equal? (value result choice) (lit "ab"))
-     (check-equal? (value result answer) "ok")
+      result
+      (list (message 'system (list (lit "You are concise.")))
+            (message 'assistant
+                     (list (lit "Choose: ")
+                           (selected choice (list (lit "ab")))
+                           (lit " ")
+                           (generated answer "ok")))))
+     (define assistant-body (message-body (second result)))
+     (check-equal? (selected-choice (second assistant-body)) (list (lit "ab")))
+     (check-equal? (generated-text (fourth assistant-body)) "ok")
      (check-equal? (unbox captured-prompt) "system: You are concise.")
 
      (define grammar (unbox captured-grammar))
@@ -54,19 +53,22 @@
      (check-true (string-contains? grammar "gen_2[capture=\"gen:gen_2\", max_tokens=4]: /(?s:.*)/")))
 
    (test-case "post-match prefers the longest valid selected branch"
-     (define choice (select (lit "a") (list (lit "ab"))))
+     (define choice (select (list (lit "a")) (list (list (lit "ab")))))
      (define complete
        (make-llama-cpp-model
         #:generate (lambda (_prompt _grammar) "abc")))
 
      (define result
        (eval complete
-             (chat (list (assistant (seq (list choice (lit "c"))))))))
+             (list (assistant choice (lit "c")))))
 
      (check-equal?
-      (grammar->messages result)
-      (list (completed-message 'assistant "abc")))
-     (check-equal? (value result choice) (lit "ab")))))
+      result
+      (list (message 'assistant
+                     (list (selected choice (list (lit "ab")))
+                           (lit "c")))))
+     (check-equal? (selected-choice (first (message-body (first result))))
+                   (list (lit "ab"))))))
 
 (module+ test
   (require rackunit/text-ui)

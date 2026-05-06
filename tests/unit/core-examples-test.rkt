@@ -22,122 +22,120 @@
    (test-case "static chats render without calling the model"
      (define requests (box '()))
      (define program
-       (chat
-        (list
+       (list
         (system (lit "You are concise."))
-        (user (lit "Hello")))))
+        (user (lit "Hello"))))
 
      (check-equal?
-      (grammar->messages (eval (make-recording-model '() requests) program))
+      (eval (make-recording-model '() requests) program)
       (list
-       (completed-message 'system "You are concise.")
-       (completed-message 'user "Hello")))
+       (message 'system (list (lit "You are concise.")))
+       (message 'user (list (lit "Hello")))))
      (check-equal? (unbox requests) '()))
 
    (test-case "select and gen nodes become readable transcript text"
      (define requests (box '()))
-     (define choice (select (lit "a") (list (lit "ab"))))
+     (define choice (select (list (lit "a")) (list (list (lit "ab")))))
      (define answer (gen 4))
      (define program
-       (chat
-        (list
+       (list
         (system (lit "You are concise."))
         (user
          (lit "Choose: ")
          choice
          (lit "c"))
-        (assistant answer))))
+        (assistant answer)))
 
      (define result
        (eval
         (make-recording-model
          (list
-          (seq (list (lit "Choose: ")
-                     (selected choice (lit "ab"))
-                     (lit "c")))
-          (generated answer "ok"))
+          (list (lit "Choose: ")
+                (selected choice (list (lit "ab")))
+                (lit "c"))
+          (list (generated answer "ok")))
          requests)
         program))
 
      (check-equal?
-      (grammar->messages result)
+      result
       (list
-       (completed-message 'system "You are concise.")
-       (completed-message 'user "Choose: abc")
-       (completed-message 'assistant "ok")))
-     (check-equal? (value result choice) (lit "ab"))
-     (check-equal? (value result answer) "ok"))
+       (message 'system (list (lit "You are concise.")))
+       (message 'user
+                (list (lit "Choose: ")
+                      (selected choice (list (lit "ab")))
+                      (lit "c")))
+       (message 'assistant (list (generated answer "ok")))))
+     (define user-selection (second (message-body (second result))))
+     (define assistant-generation (first (message-body (third result))))
+     (check-equal? (selected-choice user-selection) (list (lit "ab")))
+     (check-equal? (generated-text assistant-generation) "ok"))
 
    (test-case "evaluated AST preserves result nodes"
-     (define choice (select (lit "x") (list (lit "y"))))
+     (define choice (select (list (lit "x")) (list (list (lit "y")))))
      (define answer (gen 5))
      (define result
        (eval (make-recording-model
-              (list (selected choice (lit "y"))
-                    (generated answer "hello"))
+              (list (list (selected choice (list (lit "y"))))
+                    (list (generated answer "hello")))
               (box '()))
-             (chat
-              (list
+             (list
               (user choice)
-              (assistant answer)))))
+              (assistant answer))))
 
-     (check-true (selected? (message-body (first (chat-messages result)))))
-     (check-true (generated? (message-body (second (chat-messages result)))))
+     (check-true (selected? (first (message-body (first result)))))
+     (check-true (generated? (first (message-body (second result)))))
      (check-equal?
-      (grammar->messages result)
-      (list (completed-message 'user "y")
-            (completed-message 'assistant "hello"))))
+      result
+      (list (message 'user (list (selected choice (list (lit "y")))))
+            (message 'assistant (list (generated answer "hello"))))))
 
    (test-case "nested dynamic nodes record values from the selected branch"
      (define nested-answer (gen 3))
      (define nested-choice
-       (select (seq (list (lit "a") nested-answer))
-               (list (lit "b"))))
+       (select (list (lit "a") nested-answer)
+               (list (list (lit "b")))))
 
      (define result
        (eval (make-recording-model
-              (list (selected nested-choice
-                              (seq (list (lit "a")
-                                         (generated nested-answer "xx")))))
+              (list (list (selected nested-choice
+                                    (list (lit "a")
+                                          (generated nested-answer "xx")))))
               (box '()))
-             (chat (list (assistant nested-choice)))))
+             (list (assistant nested-choice))))
 
-     (check-equal? (value result nested-choice)
-                   (seq (list (lit "a") (generated nested-answer "xx"))))
-     (check-equal? (value result nested-answer) "xx"))
+     (define selected-body
+       (selected-choice (first (message-body (first result)))))
+     (check-equal? selected-body
+                   (list (lit "a") (generated nested-answer "xx")))
+     (check-equal? (generated-text (second selected-body)) "xx"))
 
    (test-case "model requests receive only previous evaluated messages"
      (define requests (box '()))
-     (define choice (select (lit "a") (list (lit "ab"))))
+     (define choice (select (list (lit "a")) (list (list (lit "ab")))))
      (define answer (gen 4))
 
      (eval
       (make-recording-model
        (list
-        (seq (list (lit "Choose: ")
-                   (selected choice (lit "ab"))
-                   (lit "c")))
-        (generated answer "ok"))
+        (list (lit "Choose: ")
+              (selected choice (list (lit "ab")))
+              (lit "c"))
+        (list (generated answer "ok")))
        requests)
-      (chat
-       (list
+      (list
        (system (lit "You are concise."))
        (user (lit "Choose: ") choice (lit "c"))
-       (assistant answer))))
+       (assistant answer)))
 
      (define ordered-requests (reverse (unbox requests)))
      (check-equal? (length ordered-requests) 2)
      (check-equal?
       (car (first ordered-requests))
-      (list (completed-message 'system "You are concise.")))
-     (check-true (seq? (cdr (first ordered-requests))))
-     (check-true (gen? (cdr (second ordered-requests)))))
-
-   (test-case "unevaluated dynamic chats cannot be rendered"
-     (check-exn
-      #rx"grammar contains generated nodes"
-      (lambda ()
-        (grammar->messages (chat (list (assistant (gen 10))))))))))
+      (list (message 'system (list (lit "You are concise.")))))
+     (check-equal? (cdr (first ordered-requests))
+                   (list (lit "Choose: ") choice (lit "c")))
+     (check-equal? (cdr (second ordered-requests)) (list answer)))))
 
 (module+ test
   (require rackunit/text-ui)

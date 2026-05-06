@@ -31,7 +31,8 @@ does not build llama.cpp and does not load native extensions.
          rack-llm/backends/llama-cpp)
 
 (define tone
-  (select (lit "short") (list (lit "detailed"))))
+  (select (list (lit "short"))
+          (list (list (lit "detailed")))))
 
 (define answer
   (gen 40))
@@ -41,36 +42,39 @@ does not build llama.cpp and does not load native extensions.
    #:server-url "http://localhost:8080"))
 
 (define program
-  (chat
-   (list
+  (list
    (system (lit "Answer accurately."))
    (user
     (lit "Use a ")
     tone
     (lit " answer. What is Racket?"))
-   (assistant answer))))
+   (assistant answer)))
 
 (define result
   (eval complete program))
 
-(grammar->messages result)
-(value result tone)
-(value result answer)
+result
 ```
 
-`eval` walks the chat from top to bottom. Static messages are copied into the
-transcript. When a message contains `select` or `gen`, the current transcript and
-that message body are sent to the model backend. The backend must return the
-same AST fragment reduced to concrete choices and generated text.
+`eval` walks the chat from top to bottom and returns a `FixedChat`. Static
+messages are copied into the transcript. When a message contains `select` or
+`gen`, the current fixed transcript and that message body are sent to the model
+backend. The backend must return the same AST fragment reduced to concrete
+choices and generated text.
 
 ## Core Ideas
 
 `rack-llm` programs are ordinary Racket values:
 
 ```text
-chat    = message ...
-message = role + part
-part    = lit | seq | select | gen | generated | selected
+Chat         = (Listof Message)
+FixedChat    = (Listof FixedMessage)
+Message      = role + Body
+FixedMessage = role + FixedBody
+Body         = (Listof Part)
+FixedBody    = (Listof FixedPart)
+Part         = FixedPart | gen | select
+FixedPart    = lit | generated | selected
 ```
 
 Messages carry chat roles:
@@ -82,26 +86,25 @@ Messages carry chat roles:
 ```
 
 The role is metadata for the transcript. It is not compiled as grammar. If a
-message receives multiple parts, they are wrapped as `(seq parts)`.
+message receives multiple parts, they are stored directly in its body list.
 
 Parts describe the constrained output surface:
 
 ```racket
 (lit string)                 ; exact text
-(seq parts)                  ; concatenation
-(select first rest)          ; non-empty choice
+(select first rest)          ; non-empty choice of Body alternatives
 (gen max-tokens)             ; generated text placeholder
 ```
 
-After evaluation, computed parts are replaced by result parts:
+After evaluation, computed parts are replaced by fixed result parts:
 
 ```text
 gen    -> generated
 select -> selected
 ```
 
-The evaluated chat keeps the same message/container shape, but every message
-body becomes renderable through `lit`, `seq`, `generated`, and `selected`.
+The evaluated result is a `FixedChat`: every message body contains only
+`FixedPart` values and is renderable with `fixed-body->string`.
 
 ## Reading Results
 
@@ -109,63 +112,65 @@ Keep references to dynamic parts before evaluation:
 
 ```racket
 (define format
-  (select (lit "json") (list (lit "plain text"))))
+  (select (list (lit "json"))
+          (list (list (lit "plain text")))))
 
 (define body
   (gen 80))
 
 (define result
   (eval complete
-        (chat
-         (list
+        (list
          (user (lit "Return ")
                format
                (lit " for the current status."))
-         (assistant body)))))
+         (assistant body))))
 
-(value result format) ; selected Part, for example (lit "json")
-(value result body)   ; generated String
+(define selected-format
+  (selected-choice (second (message-body (first result)))))
+
+(define generated-body
+  (generated-text (first (message-body (second result)))))
 ```
 
-Use `grammar->messages` when you need the final transcript:
+The value returned by `eval` is already the fixed messages. Use
+`fixed-body->string` when you need rendered text:
 
 ```racket
-(grammar->messages result)
+(map (lambda (msg) (fixed-body->string (message-body msg)))
+     result)
 ```
-
-Calling `grammar->messages` on an unevaluated chat that still contains `gen` or
-`select` raises an error. This is intentional: rendering requires concrete
-values.
 
 ## Backend Contract
 
 A backend is a `Completer`:
 
 ```text
-transcript part -> evaluated part
+FixedChat Body -> FixedBody
 ```
 
 The backend receives:
 
 ```racket
-transcript ; previous evaluated messages
-part       ; current dynamic part to complete
+transcript ; previous fixed messages
+body       ; current dynamic message body to complete
 ```
 
 That shape keeps backend-specific work outside the core. A backend may compile
-the part however it wants, but it must return the reduced AST fragment, not just
+the body however it wants, but it must return the fixed AST fragment, not just
 raw text.
 
 For tests or custom integrations:
 
 ```racket
 (define complete
-  (lambda (transcript part)
-    (cond
-      [(gen? part)
-       (generated part "hello")]
-      [else
-       (error 'example "unsupported part: ~e" part)])))
+  (lambda (transcript body)
+    (for/list ([part (in-list body)])
+      (cond
+        [(lit? part) part]
+        [(gen? part) (generated part "hello")]
+        [else
+         (error 'example "unsupported part: ~e" part)]))))
 ```
 
 ## llama.cpp Backend
@@ -181,7 +186,7 @@ For tests or custom integrations:
 If `#:server-url` is omitted, the backend reads
 `RACK_LLM_LLAMA_SERVER` and then falls back to `http://localhost:8080`.
 
-The backend compiles one message body `part` to `%llguidance` Lark and adds
+The backend compiles one message body to `%llguidance` Lark and adds
 captures for computed nodes:
 
 ```text
