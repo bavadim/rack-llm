@@ -18,9 +18,6 @@
   '(Chat
     Completer
     FixedChat
-    FixedMessage
-    Message
-    Role
     assistant
     eval
     fixed-part

@@ -8,9 +8,6 @@
          (struct-out select)
          (struct-out generated)
          (struct-out selected)
-         Role
-         Message
-         FixedMessage
          Chat
          FixedChat
          Completer
@@ -19,18 +16,15 @@
          assistant
          (rename-out [eval-chat eval]))
 
-(define-type Role (U 'system 'user 'assistant))
-(define-type Message (message part))
-(define-type FixedMessage (message fixed-part))
-(define-type Chat (Listof Message))
-(define-type FixedChat (Listof FixedMessage))
+(define-type Chat (Listof (message part)))
+(define-type FixedChat (Listof (message fixed-part)))
 (define-type Completer (-> FixedChat (Listof part) (Listof fixed-part)))
 
 (struct part () #:transparent)
 (struct fixed-part part () #:transparent)
 
 (struct: (A) message
-  ([role : Role]
+  ([role : (U 'system 'user 'assistant)]
    [body : (Listof A)])
   #:transparent)
 
@@ -57,15 +51,15 @@
    [choice : (Listof fixed-part)])
   #:transparent)
 
-(: system (part * -> Message))
+(: system (part * -> (message part)))
 (define (system . parts)
   (message 'system parts))
 
-(: user (part * -> Message))
+(: user (part * -> (message part)))
 (define (user . parts)
   (message 'user parts))
 
-(: assistant (part * -> Message))
+(: assistant (part * -> (message part)))
 (define (assistant . parts)
   (message 'assistant parts))
 
@@ -82,7 +76,7 @@
        (define body*
          (let ([fixed (body->fixed/maybe body)])
            (if fixed fixed (complete transcript body))))
-       (define msg* : FixedMessage (message (message-role msg) body*))
+       (define msg* : (message fixed-part) (message (message-role msg) body*))
        (loop (cdr remaining)
              (append transcript (list msg*))
              (cons msg* acc))])))

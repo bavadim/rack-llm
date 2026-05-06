@@ -67,10 +67,10 @@ choices and generated text.
 `rack-llm` programs are ordinary Racket values:
 
 ```text
-Chat         = (Listof Message)
-FixedChat    = (Listof FixedMessage)
-Message      = role + (Listof Part)
-FixedMessage = role + (Listof FixedPart)
+Chat         = (Listof (message part))
+FixedChat    = (Listof (message fixed-part))
+message part = role + (Listof Part)
+message fixed-part = role + (Listof FixedPart)
 Part         = FixedPart | gen | select
 FixedPart    = lit | generated | selected
 ```
