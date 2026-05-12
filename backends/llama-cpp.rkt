@@ -9,31 +9,31 @@
 
 (provide make-llama-cpp-llm)
 
-(define-type Generator (-> String String String))
-(define-type Captures (Immutable-HashTable String String))
-(define-type GenIds (HashTable gen String))
-(define-type SelectIds (HashTable select String))
+(define-type TextGenerator (-> String String String))
+(define-type CapturedValues (Immutable-HashTable String String))
+(define-type GenerationRuleIds (HashTable gen String))
+(define-type SelectionRuleIds (HashTable select String))
 
-(struct compiled ([grammar : String] [rx : Regexp] [slots : (Listof String)] [gen-ids : GenIds] [select-ids : SelectIds]) #:transparent)
-(struct fragment ([grammar : String] [rx : String] [slots : (Listof String)]) #:transparent)
+(struct grammar-compilation ([grammar : String] [regex : Regexp] [capture-slots : (Listof String)] [generation-rule-ids : GenerationRuleIds] [selection-rule-ids : SelectionRuleIds]) #:transparent)
+(struct compilation-fragment ([grammar-rule : String] [regex-pattern : String] [capture-slots : (Listof String)]) #:transparent)
 
-(: make-llama-cpp-llm (->* () (#:server-url String #:generate (Option Generator)) LLM))
+(: make-llama-cpp-llm (->* () (#:server-url String #:generate (Option TextGenerator)) LLM))
 (define (make-llama-cpp-llm
          #:server-url [server-url (or (getenv "RACK_LLM_LLAMA_SERVER")
                                       "http://localhost:8080")]
          #:generate [generate #f])
   (define generate-text (or generate (make-http-generator server-url)))
   (lambda ([transcript : EvaluatedProgram] [target : (Listof expr)])
-    (define c (compile-body target))
+    (define compilation (compile-expressions target))
     (define prompt (messages->prompt transcript))
-    (define text (generate-text prompt (compiled-grammar c)))
-    (define captures (match-compiled c text))
-    (reduce-body target
-                 captures
-                 (compiled-gen-ids c)
-                 (compiled-select-ids c))))
+    (define text (generate-text prompt (grammar-compilation-grammar compilation)))
+    (define captures (match-compilation compilation text))
+    (reduce-expressions target
+                        captures
+                        (grammar-compilation-generation-rule-ids compilation)
+                        (grammar-compilation-selection-rule-ids compilation))))
 
-(: make-http-generator (-> String Generator))
+(: make-http-generator (-> String TextGenerator))
 (define (make-http-generator server-url)
   (define endpoint
     (string->url (string-append (regexp-replace #rx"/+$" server-url "") "/completion")))
@@ -49,129 +49,129 @@
                       (list "Content-Type: application/json")))
     (define response (port->string in))
     (close-input-port in)
-    (response-content (string->jsexpr response))))
+    (extract-response-content (string->jsexpr response))))
 
-(: compile-body (-> (Listof expr) compiled))
-(define (compile-body body)
+(: compile-expressions (-> (Listof expr) grammar-compilation))
+(define (compile-expressions expressions)
   (define next-id : Natural 0)
-  (define gen-ids : GenIds (make-hasheq))
-  (define select-ids : SelectIds (make-hasheq))
+  (define generation-rule-ids : GenerationRuleIds (make-hasheq))
+  (define selection-rule-ids : SelectionRuleIds (make-hasheq))
   (define rules : (Listof String) '())
 
-  (: fresh (-> String String))
-  (define (fresh prefix)
+  (: generate-unique-id (-> String String))
+  (define (generate-unique-id prefix)
     (set! next-id (add1 next-id))
     (format "~a_~a" prefix next-id))
 
-  (: add-rule! (-> String Void))
-  (define (add-rule! rule)
+  (: add-grammar-rule! (-> String Void))
+  (define (add-grammar-rule! rule)
     (set! rules (cons rule rules)))
 
-  (: emit-body (-> (Listof expr) fragment))
-  (define (emit-body body)
-    (define parts (map emit body))
-    (fragment (string-join (map fragment-grammar parts) " ")
-              (apply string-append (map fragment-rx parts))
-              (append* (map fragment-slots parts))))
+  (: compile-expression-list (-> (Listof expr) compilation-fragment))
+  (define (compile-expression-list expr-list)
+    (define fragments (map compile-single-expression expr-list))
+    (compilation-fragment (string-join (map compilation-fragment-grammar-rule fragments) " ")
+                          (apply string-append (map compilation-fragment-regex-pattern fragments))
+                          (append* (map compilation-fragment-capture-slots fragments))))
 
-  (: emit (-> expr fragment))
-  (define (emit expr)
+  (: compile-single-expression (-> expr compilation-fragment))
+  (define (compile-single-expression expr)
     (cond
       [(lit? expr)
-       (fragment (lark-string (lit-value expr))
-                 (regexp-quote (lit-value expr))
-                 '())]
+       (compilation-fragment (quote-string (lit-value expr))
+                             (regexp-quote (lit-value expr))
+                             '())]
       [(gen? expr)
-       (define name (fresh "gen"))
-       (define capture (capture-name "gen" name))
-       (hash-set! gen-ids expr name)
-       (add-rule!
+       (define rule-name (generate-unique-id "gen"))
+       (define capture-key (make-capture-name "gen" rule-name))
+       (hash-set! generation-rule-ids expr rule-name)
+       (add-grammar-rule!
         (format "~a[capture=~s, max_tokens=~a]: /(?s:.*)/"
-                name capture (gen-max-tokens expr)))
-       (fragment name "([\\s\\S]*?)" (list capture))]
+                rule-name capture-key (gen-max-tokens expr)))
+       (compilation-fragment rule-name "([\\s\\S]*?)" (list capture-key))]
       [(select? expr)
-       (define name (fresh "sel"))
-       (hash-set! select-ids expr name)
-       (define variants (cons (select-first expr) (select-rest expr)))
-       (define branches
-         (for/list : (Listof fragment) ([variant (in-list variants)]
-                                        [index : Natural (in-naturals)])
-           (define branch-name (format "~a_~a" name index))
-           (define branch (emit-body variant))
-           (define capture (capture-name "select" name index))
-           (add-rule!
+       (define rule-name (generate-unique-id "sel"))
+       (hash-set! selection-rule-ids expr rule-name)
+       (define options (cons (select-first expr) (select-rest expr)))
+       (define option-fragments
+         (for/list : (Listof compilation-fragment) ([option (in-list options)]
+                                                    [index : Natural (in-naturals)])
+           (define option-rule-name (format "~a_~a" rule-name index))
+           (define option-fragment (compile-expression-list option))
+           (define capture-key (make-capture-name "select" rule-name index))
+           (add-grammar-rule!
             (format "~a[capture=~s]: ~a"
-                    branch-name capture (fragment-grammar branch)))
-           (fragment branch-name
-                     (string-append "(" (fragment-rx branch) ")")
-                     (cons capture (fragment-slots branch)))))
-       (add-rule! (format "~a: ~a" name (string-join (map fragment-grammar branches) " | ")))
-       (fragment name
-                 (string-append "(?:" (string-join (map fragment-rx branches) "|") ")")
-                 (append* (map fragment-slots branches)))]
+                    option-rule-name capture-key (compilation-fragment-grammar-rule option-fragment)))
+           (compilation-fragment option-rule-name
+                                 (string-append "(" (compilation-fragment-regex-pattern option-fragment) ")")
+                                 (cons capture-key (compilation-fragment-capture-slots option-fragment)))))
+       (add-grammar-rule! (format "~a: ~a" rule-name (string-join (map compilation-fragment-grammar-rule option-fragments) " | ")))
+       (compilation-fragment rule-name
+                             (string-append "(?:" (string-join (map compilation-fragment-regex-pattern option-fragments) "|") ")")
+                             (append* (map compilation-fragment-capture-slots option-fragments)))]
       [(generated? expr)
-       (fragment (lark-string (generated-text expr))
-                 (regexp-quote (generated-text expr))
-                 '())]
+       (compilation-fragment (quote-string (generated-text expr))
+                             (regexp-quote (generated-text expr))
+                             '())]
       [(selected? expr)
-       (emit-body (selected-choice expr))]
+       (compile-expression-list (selected-choice expr))]
       [else (error 'llama-cpp "unsupported expr: ~e" expr)]))
 
-  (define start (emit-body body))
-  (compiled
+  (define start-fragment (compile-expression-list expressions))
+  (grammar-compilation
    (string-append
     "%llguidance {}\n\n"
-    (format "start: ~a\n" (fragment-grammar start))
+    (format "start: ~a\n" (compilation-fragment-grammar-rule start-fragment))
     (if (null? rules)
         ""
         (string-append "\n" (string-join (reverse rules) "\n") "\n")))
-   (pregexp (string-append "^" (fragment-rx start) "$"))
-   (fragment-slots start)
-   (hash-copy gen-ids)
-   (hash-copy select-ids)))
+   (pregexp (string-append "^" (compilation-fragment-regex-pattern start-fragment) "$"))
+   (compilation-fragment-capture-slots start-fragment)
+   (hash-copy generation-rule-ids)
+   (hash-copy selection-rule-ids)))
 
-(: match-compiled (-> compiled String Captures))
-(define (match-compiled c text)
-  (define match (regexp-match (compiled-rx c) text))
+(: match-compilation (-> grammar-compilation String CapturedValues))
+(define (match-compilation compilation text)
+  (define match (regexp-match (grammar-compilation-regex compilation) text))
   (unless (and match (equal? (car match) text))
     (error 'llama-cpp "generated text does not match grammar: ~s" text))
   (define captures (cdr match))
-  (unless (= (length captures) (length (compiled-slots c)))
+  (unless (= (length captures) (length (grammar-compilation-capture-slots compilation)))
     (error 'llama-cpp "internal matcher slot mismatch"))
-  (for/hash : Captures ([slot (in-list (compiled-slots c))]
-                        [value (in-list captures)]
-                        #:when (string? value))
+  (for/hash : CapturedValues ([slot (in-list (grammar-compilation-capture-slots compilation))]
+                              [value (in-list captures)]
+                              #:when (string? value))
     (values slot value)))
 
-(: reduce-body (-> (Listof expr) Captures GenIds SelectIds (Listof value)))
-(define (reduce-body body captures gen-ids select-ids)
-  (map (lambda ([child : expr]) (reduce-expr child captures gen-ids select-ids))
-       body))
+(: reduce-expressions (-> (Listof expr) CapturedValues GenerationRuleIds SelectionRuleIds (Listof value)))
+(define (reduce-expressions expressions captures generation-rule-ids selection-rule-ids)
+  (map (lambda ([child : expr]) (reduce-single-expression child captures generation-rule-ids selection-rule-ids))
+       expressions))
 
-(: reduce-expr (-> expr Captures GenIds SelectIds value))
-(define (reduce-expr expr captures gen-ids select-ids)
+(: reduce-single-expression (-> expr CapturedValues GenerationRuleIds SelectionRuleIds value))
+(define (reduce-single-expression expr captures generation-rule-ids selection-rule-ids)
   (cond
     [(lit? expr) expr]
     [(gen? expr)
-     (define rule-name (hash-ref gen-ids expr))
-     (define capture (capture-name "gen" rule-name))
+     (define rule-name (hash-ref generation-rule-ids expr))
+     (define capture-key (make-capture-name "gen" rule-name))
      (generated expr
                 (hash-ref captures
-                          capture
+                          capture-key
                           (lambda ()
-                            (error 'llama-cpp "missing string capture ~s in ~s" capture captures))))]
+                            (error 'llama-cpp "missing string capture ~s in ~s" capture-key captures))))]
     [(select? expr)
-     (define rule-name (hash-ref select-ids expr))
-     (define variants (cons (select-first expr) (select-rest expr)))
-     (define index (selected-index captures rule-name variants))
-     (unless index
+     (define rule-name (hash-ref selection-rule-ids expr))
+     (define options (cons (select-first expr) (select-rest expr)))
+     (define selected-index (find-selected-index captures rule-name options))
+     (unless selected-index
        (error 'llama-cpp "missing select capture for ~a" rule-name))
      (selected expr
-               (reduce-body (list-ref variants index) captures gen-ids select-ids))]
+               (reduce-expressions (list-ref options selected-index) captures generation-rule-ids selection-rule-ids))]
     [(generated? expr) expr]
     [(selected? expr)
      (selected (selected-source expr)
-               (reduce-body (selected-choice expr) captures gen-ids select-ids))]
+               (reduce-expressions (selected-choice expr) captures generation-rule-ids selection-rule-ids))]
     [else (error 'llama-cpp "unsupported expr: ~e" expr)]))
 
 (: messages->prompt (-> EvaluatedProgram String))
@@ -195,24 +195,24 @@
     [(selected? expr) (render-body (selected-choice expr))]
     [else (error 'llama-cpp "unsupported fixed expr: ~e" expr)]))
 
-(: selected-index (-> Captures String (Listof (Listof expr)) (Option Natural)))
-(define (selected-index captures rule-name variants)
-  (let loop ([rest : (Listof (Listof expr)) variants]
+(: find-selected-index (-> CapturedValues String (Listof (Listof expr)) (Option Natural)))
+(define (find-selected-index captures rule-name options)
+  (let loop ([remaining-options : (Listof (Listof expr)) options]
              [index : Natural 0])
     (cond
-      [(null? rest) #f]
-      [(hash-has-key? captures (capture-name "select" rule-name index)) index]
-      [else (loop (cdr rest) (add1 index))])))
+      [(null? remaining-options) #f]
+      [(hash-has-key? captures (make-capture-name "select" rule-name index)) index]
+      [else (loop (cdr remaining-options) (add1 index))])))
 
-(: capture-name (case-> (-> String String String)
-                       (-> String String Natural String)))
-(define (capture-name kind rule-name [index #f])
+(: make-capture-name (case-> (-> String String String)
+                              (-> String String Natural String)))
+(define (make-capture-name kind rule-name [index #f])
   (if index
       (format "~a:~a:~a" kind rule-name index)
       (format "~a:~a" kind rule-name)))
 
-(: response-content (-> JSExpr String))
-(define (response-content js)
+(: extract-response-content (-> JSExpr String))
+(define (extract-response-content js)
   (define content
     (if (hash? js)
         (hash-ref js 'content
@@ -223,6 +223,6 @@
     (error 'llama-cpp "server response has no string content: ~s" js))
   content)
 
-(: lark-string (-> String String))
-(define (lark-string s)
+(: quote-string (-> String String))
+(define (quote-string s)
   (format "~s" s))
