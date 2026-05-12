@@ -1,6 +1,7 @@
 #lang racket/base
 
 (require racket/list
+         racket/stream
          rackunit
          rack-llm)
 
@@ -27,7 +28,7 @@
         (user (lit "Hello"))))
 
      (check-equal?
-      (eval (make-recording-model '() requests) program)
+      (stream-first (eval (make-recording-model '() requests) program))
       (list
        (message 'system (list (lit "You are concise.")))
        (message 'user (list (lit "Hello")))))
@@ -47,15 +48,16 @@
         (assistant answer)))
 
      (define result
-       (eval
-        (make-recording-model
-         (list
-          (list (lit "Choose: ")
-                (selected choice (list (lit "ab")))
-                (lit "c"))
-          (list (generated answer "ok")))
-         requests)
-        program))
+       (stream-first
+        (eval
+         (make-recording-model
+          (list
+           (list (lit "Choose: ")
+                 (selected choice (list (lit "ab")))
+                 (lit "c"))
+           (list (generated answer "ok")))
+          requests)
+         program)))
 
      (check-equal?
       result
@@ -75,13 +77,14 @@
      (define choice (select (list (lit "x")) (list (list (lit "y")))))
      (define answer (gen 5))
      (define result
-       (eval (make-recording-model
-              (list (list (selected choice (list (lit "y"))))
-                    (list (generated answer "hello")))
-              (box '()))
-             (list
-              (user choice)
-              (assistant answer))))
+       (stream-first
+        (eval (make-recording-model
+               (list (list (selected choice (list (lit "y"))))
+                     (list (generated answer "hello")))
+               (box '()))
+              (list
+               (user choice)
+               (assistant answer)))))
 
      (check-true (selected? (first (message-body (first result)))))
      (check-true (generated? (first (message-body (second result)))))
@@ -97,12 +100,13 @@
                (list (list (lit "b")))))
 
      (define result
-       (eval (make-recording-model
-              (list (list (selected nested-choice
-                                    (list (lit "a")
-                                          (generated nested-answer "xx")))))
-              (box '()))
-             (list (assistant nested-choice))))
+       (stream-first
+        (eval (make-recording-model
+               (list (list (selected nested-choice
+                                     (list (lit "a")
+                                           (generated nested-answer "xx")))))
+               (box '()))
+              (list (assistant nested-choice)))))
 
      (define selected-body
        (selected-choice (first (message-body (first result)))))
@@ -115,26 +119,28 @@
      (define choice (select (list (lit "a")) (list (list (lit "ab")))))
      (define answer (gen 4))
 
-     (eval
-      (make-recording-model
+     (stream-first
+      (eval
+       (make-recording-model
+        (list
+         (list (lit "Choose: ")
+               (selected choice (list (lit "ab")))
+               (lit "c"))
+         (list (generated answer "ok")))
+        requests)
        (list
-        (list (lit "Choose: ")
-              (selected choice (list (lit "ab")))
-              (lit "c"))
-        (list (generated answer "ok")))
-       requests)
-      (list
-       (system (lit "You are concise."))
-       (user (lit "Choose: ") choice (lit "c"))
-       (assistant answer)))
+        (system (lit "You are concise."))
+        (user (lit "Choose: ") choice (lit "c"))
+        (assistant answer))))
 
      (define ordered-requests (reverse (unbox requests)))
      (check-equal? (length ordered-requests) 2)
      (check-equal?
       (car (first ordered-requests))
       (list (message 'system (list (lit "You are concise.")))))
-     (check-equal? (cdr (first ordered-requests))
-                   (list (lit "Choose: ") choice (lit "c")))
+     (check-equal?
+      (cdr (first ordered-requests))
+      (list (lit "Choose: ") choice (lit "c")))
      (check-equal? (cdr (second ordered-requests)) (list answer)))))
 
 (module+ test

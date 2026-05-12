@@ -2,6 +2,7 @@
 
 (require racket/list
          racket/string
+         racket/stream
          rackunit
          rack-llm
          rack-llm/backends/llama-cpp)
@@ -25,11 +26,12 @@
        (make-llama-cpp-llm
         #:generate fake-generate))
 
-     (define result
-       (eval complete
-             (list
-              (system (lit "You are concise."))
-              (assistant (lit "Choose: ") choice (lit " ") answer))))
+(define result
+        (stream-first
+         (eval complete
+               (list
+                (system (lit "You are concise."))
+                (assistant (lit "Choose: ") choice (lit " ") answer)))))
 
      (check-equal?
       result
@@ -58,9 +60,10 @@
        (make-llama-cpp-llm
         #:generate (lambda (_prompt _grammar) "abc")))
 
-     (define result
-       (eval complete
-             (list (assistant choice (lit "c")))))
+(define result
+        (stream-first
+         (eval complete
+               (list (assistant choice (lit "c"))))))
 
      (check-equal?
       result

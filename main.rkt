@@ -1,7 +1,6 @@
-#lang typed/racket
+#lang typed/racket/base
 
 (require typed/racket/stream)
-(require typed/racket/maybe)
 
 (provide (struct-out expr)
 				 (struct-out value)
@@ -66,28 +65,33 @@
 (define (assistant . exprs)
 	(message 'assistant exprs))
 
-(: eval-program (-> LLM Program (Streamof EvaluatedProgram)))
+(: eval-program (-> LLM Program (Sequenceof EvaluatedProgram)))
 (define (eval-program llm program)
-	(define-predicate is-program? (Listof value))
-	(let loop ([remaining : Program program]
-						 [transcript : EvaluatedProgram '()]
-						 [acc : EvaluatedProgram '()])
-		(cond
-			[(null? remaining) (
-				(stream-cons (reverse acc) (eval-program llm program)))]
-			[else
-				(let* ( [msg (car remaining)]
-								[body (message-body msg)]
-								[body* (if (is-program? body) body (llm transcript body))]
-								[msg* : (message value) (message (message-role msg) body*)])
-					(loop (cdr remaining)
-						 (append transcript (list msg*))
-						 (cons msg* acc)))])))
+  (define-predicate is-program? (Listof value))
+  (let loop ([remaining : Program program]
+             [transcript : EvaluatedProgram '()]
+             [acc : EvaluatedProgram '()])
+    (cond
+      [(null? remaining)
+       (list (reverse acc))]
+      [else
+       (let* ([msg (car remaining)]
+              [body (message-body msg)]
+              [body* (if (is-program? body) body (llm transcript body))]
+              [msg* : (message value) (message (message-role msg) body*)])
+         (loop (cdr remaining)
+               (append transcript (list msg*))
+               (cons msg* acc)))])))
 
 (define-type Check (-> EvaluatedProgram Boolean))
 
-(: find-program (-> LLM Program (Listof Check) (Maybe EvaluatedProgram)))
+(: find-program (-> LLM Program (Listof Check) (U EvaluatedProgram #f)))
 (define (find-program llm program checks)
-  (for/first ([variant : EvaluatedProgram (stream-take (eval-program llm program) 10)]
-              #:when (andmap (lambda ([check : Check]) (check variant)) checks))
-    variant))
+  (let ([variants (cast (stream-take (eval-program llm program) 10) (Listof EvaluatedProgram))])
+    (let loop ([vs : (Listof EvaluatedProgram) variants])
+      (cond
+        [(null? vs) #f]
+        [else (let ([v (car vs)])
+                (if (andmap (lambda ([c : Check]) (c v)) checks)
+                    v
+                    (loop (cdr vs))))]))))

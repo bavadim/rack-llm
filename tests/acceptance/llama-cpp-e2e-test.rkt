@@ -1,6 +1,7 @@
 #lang racket/base
 
 (require racket/list
+         racket/stream
          rackunit
          rack-llm
          rack-llm/backends/llama-cpp)
@@ -23,11 +24,12 @@
        (make-llama-cpp-llm
         #:server-url server-url))
 
-     (define result
-       (eval complete
-             (list
-              (system (lit "Return exactly one allowed token."))
-              (assistant choice))))
+(define result
+        (stream-first
+         (eval complete
+               (list
+                (system (lit "Return exactly one allowed token."))
+                (assistant choice)))))
 
      (define selected (selected-choice (first (message-body (second result)))))
      (check-not-false (member selected (list (list (lit "red")) (list (lit "blue")))))

@@ -51,12 +51,12 @@ does not build llama.cpp and does not load native extensions.
    (assistant answer)))
 
 (define result
-  (eval complete program))
+  (stream-first (eval complete program)))
 
 result
 ```
 
-`eval` walks the program from top to bottom and returns an `EvaluatedProgram`. Static
+`eval` walks the program from top to bottom and returns a lazy stream of `EvaluatedProgram`s. Static
 messages are copied into the transcript. When a message contains `select` or
 `gen`, the current fixed transcript and that message body are sent to the model
 backend. The backend must return the same AST fragment reduced to concrete
@@ -117,12 +117,13 @@ Keep references to dynamic expressions before evaluation:
   (gen 80))
 
 (define result
-  (eval complete
-        (list
-         (user (lit "Return ")
-               format
-               (lit " for the current status."))
-         (assistant body))))
+  (stream-first
+   (eval complete
+         (list
+          (user (lit "Return ")
+                format
+                (lit " for the current status."))
+          (assistant body))))
 
 (define selected-format
   (selected-choice (second (message-body (first result)))))
