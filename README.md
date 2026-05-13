@@ -7,8 +7,8 @@ model fill only the dynamic expressions, and read the selected/generated values 
 from the evaluated program.
 
 The core is backend-agnostic. The included llama.cpp backend talks to an already
-running llama.cpp HTTP server, sends `%llguidance` grammar, and validates the
-returned text against the original AST in Racket.
+running llama.cpp HTTP server and asks only for top-K next-token probabilities.
+Grammar control, Gumbel decoding, and predicate checks live in Racket.
 
 ## Installation
 
@@ -56,11 +56,11 @@ does not build llama.cpp and does not load native extensions.
 result
 ```
 
-`eval` walks the program from top to bottom and returns a lazy stream of `EvaluatedProgram`s. Static
-messages are copied into the transcript. When a message contains `select` or
-`gen`, the current fixed transcript and that message body are sent to the model
-backend. The backend must return the same AST fragment reduced to concrete
-choices and generated text.
+`eval` walks the program from top to bottom and returns a lazy stream of
+`EvaluatedProgram`s. Static messages are copied into the transcript. When a
+message contains `select` or `gen`, Racket compiles that message body to a
+matcher, repeatedly asks the backend for top-K next-token candidates, and emits
+complete grammar-valid bodies as a stream.
 
 ## Core Ideas
 
@@ -138,34 +138,30 @@ the result directly with `message-body`, `selected-choice`, and
 
 ## Backend Contract
 
-A backend is a `LLM`:
+A backend is a `TokenOracle`:
 
 ```text
-EvaluatedProgram (Listof expr) -> (Listof value)
+EvaluatedProgram String -> (Listof token-candidate)
 ```
 
 The backend receives:
 
 ```racket
 transcript ; previous fixed messages
-body       ; current dynamic message body to complete
+prefix     ; current generated prefix for the active message body
 ```
 
-That shape keeps backend-specific work outside the core. A backend may compile
-the body however it wants, but it must return the fixed AST fragment, not just
-raw text.
+That shape keeps model serving outside the core. The backend does not decide
+which sequence wins and does not validate the grammar; it only exposes a finite
+next-token distribution.
 
 For tests or custom integrations:
 
 ```racket
 (define complete
-  (lambda (transcript body)
-    (for/list ([expr (in-list body)])
-      (cond
-        [(lit? expr) expr]
-        [(gen? expr) (generated expr "hello")]
-        [else
-         (error 'example "unsupported expr: ~e" expr)]))))
+  (lambda (transcript prefix)
+    (list (token-candidate "hello" -0.1)
+          (token-candidate "world" -1.0))))
 ```
 
 ## llama.cpp Backend
@@ -181,24 +177,16 @@ For tests or custom integrations:
 If `#:server-url` is omitted, the backend reads
 `RACK_LLM_LLAMA_SERVER` and then falls back to `http://localhost:8080`.
 
-The backend compiles one message body to `%llguidance` Lark and adds
-captures for computed nodes:
-
-```text
-gen    -> capture "gen:<rule>"
-select -> capture "select:<rule>:<branch>"
-```
-
-It sends the grammar and rendered previous messages to llama.cpp `/completion`.
-llama.cpp constrains generation and returns final text. The backend then matches
-that text against the original expr locally, validates that the whole output fits
-the supported AST, and rebuilds the reduced AST.
+The backend sends the rendered previous messages plus the active prefix to
+llama.cpp `/completion` with `n_predict = 1`, requests token probabilities, and
+returns them as `token-candidate`s. The sampler in Racket handles grammar
+matching and Gumbel ordering.
 
 ## Running llama.cpp
 
 Acceptance tests and real examples need:
 
-1. `llama-server` built with `%llguidance` grammar support.
+1. `llama-server` with completion probabilities enabled.
 2. A GGUF model.
 3. A running HTTP server.
 

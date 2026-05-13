@@ -1,97 +1,71 @@
 #lang typed/racket/base
 
-(require typed/racket/stream)
+(require typed/racket/stream
+         "common-combinators.rkt"
+         "grammar.rkt"
+         "sampler.rkt")
 
 (provide (struct-out expr)
-				 (struct-out value)
-				 (struct-out message)
-				 (struct-out lit)
-				 (struct-out gen)
-				 (struct-out select)
-				 (struct-out generated)
-				 (struct-out selected)
-				 Program
-				 EvaluatedProgram
-				 LLM
-				 system
-				 user
-				 assistant
-				 (rename-out [eval-program eval]))
+         (struct-out value)
+         (struct-out message)
+         (struct-out lit)
+         (struct-out gen)
+         (struct-out select)
+         (struct-out generated)
+         (struct-out selected)
+         (struct-out token-candidate)
+         Program
+         EvaluatedProgram
+         TokenOracle
+         system
+         user
+         assistant
+         (rename-out [eval-program eval]))
 
-(define-type Program (Listof (message expr)))
-(define-type EvaluatedProgram (Listof (message value)))
-(define-type LLM (-> EvaluatedProgram (Listof expr) (Listof value)))
+;; Public program semantics
 
-(struct expr () #:transparent)
-(struct value expr () #:transparent)
+(define empty-transcript : EvaluatedProgram '())
 
-(struct: (A) message
-	([role : (U 'system 'user 'assistant)]
-	 [body : (Listof A)])
-	#:transparent)
+(: eval-program (-> TokenOracle Program EvaluatedProgramStream))
+(define (eval-program oracle program)
+  (stream-foldM (lambda ([transcript : EvaluatedProgram] [msg : (message expr)])
+                  (message-step oracle transcript msg))
+                empty-transcript
+                program))
 
-(struct lit value
-	([value : String])
-	#:transparent)
+(: message-step (-> TokenOracle EvaluatedProgram (message expr) EvaluatedProgramStream))
+(define (message-step oracle transcript msg)
+  (define role (message-role msg))
+  (stream-map
+   (lambda ([body : EvaluatedBody])
+     (append transcript (list (message role body))))
+   (message-bodies oracle transcript msg)))
 
-(struct gen expr
-	([max-tokens : Natural])
-	#:transparent)
+(: message-bodies (-> TokenOracle EvaluatedProgram (message expr) EvaluatedBodyStream))
+(define (message-bodies oracle transcript msg)
+  (define body (message-body msg))
+  (if (evaluated-body? body)
+      (list body)
+      (decode-body oracle transcript body)))
 
-(struct select expr
-	([first : (Listof expr)]
-	 [rest : (Listof (Listof expr))])
-	#:transparent)
-
-(struct generated value
-	([source : gen]
-	 [text : String])
-	#:transparent)
-
-(struct selected value
-	([source : select]
-	 [choice : (Listof value)])
-	#:transparent)
-
-(: system (expr * -> (message expr)))
-(define (system . exprs)
-	(message 'system exprs))
-
-(: user (expr * -> (message expr)))
-(define (user . exprs)
-	(message 'user exprs))
-
-(: assistant (expr * -> (message expr)))
-(define (assistant . exprs)
-	(message 'assistant exprs))
-
-(: eval-program (-> LLM Program (Sequenceof EvaluatedProgram)))
-(define (eval-program llm program)
-  (define-predicate is-program? (Listof value))
-  (let loop ([remaining : Program program]
-             [transcript : EvaluatedProgram '()]
-             [acc : EvaluatedProgram '()])
-    (cond
-      [(null? remaining)
-       (list (reverse acc))]
-      [else
-       (let* ([msg (car remaining)]
-              [body (message-body msg)]
-              [body* (if (is-program? body) body (llm transcript body))]
-              [msg* : (message value) (message (message-role msg) body*)])
-         (loop (cdr remaining)
-               (append transcript (list msg*))
-               (cons msg* acc)))])))
+;; Predicate layer
 
 (define-type Check (-> EvaluatedProgram Boolean))
+(define-type Checks (Listof Check))
 
-(: find-program (-> LLM Program (Listof Check) (U EvaluatedProgram #f)))
-(define (find-program llm program checks)
-  (let ([variants (cast (stream-take (eval-program llm program) 10) (Listof EvaluatedProgram))])
-    (let loop ([vs : (Listof EvaluatedProgram) variants])
-      (cond
-        [(null? vs) #f]
-        [else (let ([v (car vs)])
-                (if (andmap (lambda ([c : Check]) (c v)) checks)
-                    v
-                    (loop (cdr vs))))]))))
+(: checked-programs (-> Checks EvaluatedProgramStream EvaluatedProgramStream))
+(define (checked-programs checks variants)
+  (stream-filter
+   (lambda ([variant : EvaluatedProgram])
+     (andmap (lambda ([c : Check]) (c variant)) checks))
+   variants))
+
+(: first-satisfying (-> Natural Checks EvaluatedProgramStream (U EvaluatedProgram #f)))
+(define (first-satisfying limit checks variants)
+  (stream-first-option
+   (checked-programs checks
+                     (stream-take variants limit))))
+
+(: find-program (-> TokenOracle Program Checks (U EvaluatedProgram #f)))
+(define (find-program oracle program checks)
+  (first-satisfying 10 checks (eval-program oracle program)))

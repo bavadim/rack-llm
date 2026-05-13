@@ -7,14 +7,17 @@
 
 (define (make-recording-model outputs requests)
   (define remaining (box outputs))
-  (lambda (transcript target)
-    (set-box! requests (cons (cons transcript target) (unbox requests)))
-    (define xs (unbox remaining))
+  (lambda (transcript prefix)
+    (set-box! requests (cons (cons transcript prefix) (unbox requests)))
     (cond
-      [(null? xs) (error 'recording "no output left")]
+      [(not (string=? prefix "")) '()]
       [else
-       (set-box! remaining (cdr xs))
-       (car xs)])))
+       (define xs (unbox remaining))
+       (cond
+         [(null? xs) (error 'recording "no output left")]
+         [else
+          (set-box! remaining (cdr xs))
+          (list (token-candidate (car xs) 0.0))])])))
 
 (define core-examples
   (test-suite
@@ -51,11 +54,7 @@
        (stream-first
         (eval
          (make-recording-model
-          (list
-           (list (lit "Choose: ")
-                 (selected choice (list (lit "ab")))
-                 (lit "c"))
-           (list (generated answer "ok")))
+          (list "Choose: abc" "ok")
           requests)
          program)))
 
@@ -79,8 +78,7 @@
      (define result
        (stream-first
         (eval (make-recording-model
-               (list (list (selected choice (list (lit "y"))))
-                     (list (generated answer "hello")))
+               (list "y" "hello")
                (box '()))
               (list
                (user choice)
@@ -102,9 +100,7 @@
      (define result
        (stream-first
         (eval (make-recording-model
-               (list (list (selected nested-choice
-                                     (list (lit "a")
-                                           (generated nested-answer "xx")))))
+               (list "axx")
                (box '()))
               (list (assistant nested-choice)))))
 
@@ -122,26 +118,24 @@
      (stream-first
       (eval
        (make-recording-model
-        (list
-         (list (lit "Choose: ")
-               (selected choice (list (lit "ab")))
-               (lit "c"))
-         (list (generated answer "ok")))
+        (list "Choose: abc" "ok")
         requests)
        (list
         (system (lit "You are concise."))
         (user (lit "Choose: ") choice (lit "c"))
         (assistant answer))))
 
-     (define ordered-requests (reverse (unbox requests)))
+     (define ordered-requests
+       (filter (lambda (request) (string=? (cdr request) ""))
+               (reverse (unbox requests))))
      (check-equal? (length ordered-requests) 2)
      (check-equal?
       (car (first ordered-requests))
       (list (message 'system (list (lit "You are concise.")))))
      (check-equal?
       (cdr (first ordered-requests))
-      (list (lit "Choose: ") choice (lit "c")))
-     (check-equal? (cdr (second ordered-requests)) (list answer)))))
+      "")
+     (check-equal? (cdr (second ordered-requests)) ""))))
 
 (module+ test
   (require rackunit/text-ui)

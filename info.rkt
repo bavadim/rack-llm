@@ -4,7 +4,8 @@
 (define deps
   '("base"
     "typed-racket-lib"
-    "typed-racket-more"))
+    "typed-racket-more"
+    "typed-racket-stream"))
 (define build-deps
   '("rackunit-lib"))
 (define pkg-desc "Small grammar-AST LLM helper for Racket")

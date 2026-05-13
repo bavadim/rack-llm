@@ -16,7 +16,7 @@
 
 (define expected-core-exports
   '(Program
-    LLM
+    TokenOracle
     EvaluatedProgram
     assistant
     eval
@@ -46,6 +46,7 @@
     selected-choice
     selected-source
     selected?
+    struct:token-candidate
     struct:value
     struct:gen
     struct:generated
@@ -54,6 +55,10 @@
     struct:expr
     struct:select
     struct:selected
+    token-candidate
+    token-candidate-logp
+    token-candidate-text
+    token-candidate?
     system
     user))
 

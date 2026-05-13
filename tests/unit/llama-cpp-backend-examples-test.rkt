@@ -1,7 +1,6 @@
 #lang racket/base
 
 (require racket/list
-         racket/string
          racket/stream
          rackunit
          rack-llm
@@ -11,14 +10,12 @@
   (test-suite
    "llama.cpp backend examples"
 
-   (test-case "backend compiles select and gen nodes to llguidance captures"
-     (define captured-prompt (box #f))
-     (define captured-grammar (box #f))
+   (test-case "backend is a token oracle and core reduces AST locally"
+     (define captured-prompts (box '()))
 
-     (define (fake-generate prompt grammar)
-       (set-box! captured-prompt prompt)
-       (set-box! captured-grammar grammar)
-       "Choose: ab ok")
+     (define (fake-generate prompt)
+       (set-box! captured-prompts (cons prompt (unbox captured-prompts)))
+       (list (token-candidate "Choose: ab ok" 0.0)))
 
      (define choice (select (list (lit "a")) (list (list (lit "ab")))))
      (define answer (gen 4))
@@ -44,21 +41,13 @@
      (define assistant-body (message-body (second result)))
      (check-equal? (selected-choice (second assistant-body)) (list (lit "ab")))
      (check-equal? (generated-text (fourth assistant-body)) "ok")
-     (check-equal? (unbox captured-prompt) "system: You are concise.")
-
-     (define grammar (unbox captured-grammar))
-     (check-true (string-prefix? grammar "%llguidance"))
-     (check-true (string-contains? grammar "start: \"Choose: \" sel_1 \" \" gen_2"))
-     (check-true (string-contains? grammar "sel_1_0[capture=\"select:sel_1:0\"]: \"a\""))
-     (check-true (string-contains? grammar "sel_1_1[capture=\"select:sel_1:1\"]: \"ab\""))
-     (check-true (string-contains? grammar "sel_1: sel_1_0 | sel_1_1"))
-     (check-true (string-contains? grammar "gen_2[capture=\"gen:gen_2\", max_tokens=4]: /(?s:.*)/")))
+     (check-equal? (last (unbox captured-prompts)) "system: You are concise."))
 
    (test-case "post-match prefers the longest valid selected branch"
      (define choice (select (list (lit "a")) (list (list (lit "ab")))))
      (define complete
        (make-llama-cpp-llm
-        #:generate (lambda (_prompt _grammar) "abc")))
+        #:generate (lambda (_prompt) (list (token-candidate "abc" 0.0)))))
 
 (define result
         (stream-first
