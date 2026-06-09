@@ -20,6 +20,9 @@
          system
          user
          assistant
+         value->string
+         body->string
+         message->string
          (rename-out [eval-program eval]))
 
 ;; Public program semantics
@@ -48,24 +51,18 @@
       (list body)
       (decode-body oracle transcript body)))
 
-;; Predicate layer
+(: value->string (-> value String))
+(define (value->string v)
+  (cond
+    [(lit? v) (lit-value v)]
+    [(generated? v) (generated-text v)]
+    [(selected? v) (body->string (selected-choice v))]
+    [else (error 'rack-llm "unsupported evaluated value: ~e" v)]))
 
-(define-type Check (-> EvaluatedProgram Boolean))
-(define-type Checks (Listof Check))
+(: body->string (-> EvaluatedBody String))
+(define (body->string body)
+  (apply string-append (map value->string body)))
 
-(: checked-programs (-> Checks EvaluatedProgramStream EvaluatedProgramStream))
-(define (checked-programs checks variants)
-  (stream-filter
-   (lambda ([variant : EvaluatedProgram])
-     (andmap (lambda ([c : Check]) (c variant)) checks))
-   variants))
-
-(: first-satisfying (-> Natural Checks EvaluatedProgramStream (U EvaluatedProgram #f)))
-(define (first-satisfying limit checks variants)
-  (stream-first-option
-   (checked-programs checks
-                     (stream-take variants limit))))
-
-(: find-program (-> TokenOracle Program Checks (U EvaluatedProgram #f)))
-(define (find-program oracle program checks)
-  (first-satisfying 10 checks (eval-program oracle program)))
+(: message->string (-> (message value) String))
+(define (message->string msg)
+  (body->string (message-body msg)))

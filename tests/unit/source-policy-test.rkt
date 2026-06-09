@@ -9,13 +9,15 @@
 (define-runtime-path grammar-source "../../grammar.rkt")
 (define-runtime-path sampler-source "../../sampler.rkt")
 (define-runtime-path llama-cpp-source "../../backends/llama-cpp.rkt")
+(define-runtime-path openai-responses-source "../../backends/openai-responses.rkt")
 
 (define production-sources
   (list main-source
         common-source
-        grammar-source
-        sampler-source
-        llama-cpp-source))
+  grammar-source
+  sampler-source
+  llama-cpp-source
+  openai-responses-source))
 
 (define functional-core-sources
   (list main-source
@@ -64,12 +66,19 @@
      (for ([path (in-list production-sources)])
        (check-equal? (count-matches #px"#:mutable\\b" (source path)) 0)))
 
-   (test-case "llama.cpp backend has no local mutation"
-     (define text (source llama-cpp-source))
-     (check-equal? (count-matches #rx"\\(set!" text) 0)
-     (check-equal? (count-matches #px"\\bmake-hasheq\\b" text) 0)
-     (check-equal? (count-matches #rx"hash-set!" text) 0)
-     (check-equal? (count-matches #px"\\bbox\\b" text) 0))))
+     (test-case "llama.cpp backend has no local mutation"
+       (define text (source llama-cpp-source))
+       (check-equal? (count-matches #rx"\\(set!" text) 0)
+       (check-equal? (count-matches #px"\\bmake-hasheq\\b" text) 0)
+       (check-equal? (count-matches #rx"hash-set!" text) 0)
+       (check-equal? (count-matches #px"\\bbox\\b" text) 0))
+
+     (test-case "OpenAI Responses backend has no local mutation"
+       (define text (source openai-responses-source))
+       (check-equal? (count-matches #rx"\\(set!" text) 0)
+       (check-equal? (count-matches #px"\\bmake-hasheq\\b" text) 0)
+       (check-equal? (count-matches #rx"hash-set!" text) 0)
+       (check-equal? (count-matches #px"\\bbox\\b" text) 0))))
 
 (module+ test
   (require rackunit/text-ui)

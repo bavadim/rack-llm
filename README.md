@@ -1,328 +1,114 @@
 # rack-llm
 
-`rack-llm` is a small Racket library for building structured LLM interactions
-with grammar-constrained generation. It is aimed at the same class of problems
-as Microsoft Guidance: describe the shape of the conversation in code, let the
-model fill only the dynamic expressions, and read the selected/generated values back
-from the evaluated program.
+`rack-llm` is a small Racket library for writing LLM programs and reading a
+lazy stream of valid results.
 
-The core is backend-agnostic. The included llama.cpp backend talks to an already
-running llama.cpp HTTP server and asks only for top-K next-token probabilities.
-Grammar control, Gumbel decoding, and predicate checks live in Racket.
-
-## Installation
-
-From this repository:
+## Install
 
 ```bash
 raco pkg install --auto
 raco test tests/unit
 ```
 
-The package currently depends only on Racket libraries. The llama.cpp backend
-does not build llama.cpp and does not load native extensions.
+For the bundled llama.cpp backend:
 
-## Quick Start
+```bash
+make env
+make server
+```
 
 ```racket
 #lang racket
 
-(require rack-llm
+(require racket/stream
+         racket/match
+         (rename-in rack-llm [eval llm-eval])
          rack-llm/backends/llama-cpp)
 
-(define tone
-  (select (list (lit "short"))
-          (list (list (lit "detailed")))))
+(define complete
+  (make-llama-cpp-llm #:server-url "http://127.0.0.1:8080"))
+```
 
-(define answer
-  (gen 40))
+For OpenAI Responses API:
+
+```racket
+(require rack-llm/backends/openai-responses)
 
 (define complete
-  (make-llama-cpp-llm
-   #:server-url "http://localhost:8080"))
-
-(define program
-  (list
-   (system (lit "Answer accurately."))
-   (user
-    (lit "Use a ")
-    tone
-    (lit " answer. What is Racket?"))
-   (assistant answer)))
-
-(define result
-  (stream-first (eval complete program)))
-
-result
+  (make-openai-responses-llm
+   #:model "gpt-5.4-nano"))
 ```
 
-`eval` walks the program from top to bottom and returns a lazy stream of
-`EvaluatedProgram`s. Static messages are copied into the transcript. When a
-message contains `select` or `gen`, Racket compiles that message body to a
-matcher, repeatedly asks the backend for top-K next-token candidates, and emits
-complete grammar-valid bodies as a stream.
+Use `message->string` to read an evaluated assistant message as a plain string.
 
-## Core Ideas
+## JSON
 
-`rack-llm` programs are ordinary Racket values:
-
-```text
-Program          = (Listof (message expr))
-EvaluatedProgram = (Listof (message value))
-message expr     = role + (Listof expr)
-message value    = role + (Listof value)
-expr             = value | gen | select
-value            = lit | generated | selected
-```
-
-Messages carry chat roles:
+Task: choose a deployment decision.
+Input: a short deployment report.
+Output: a JSON string with `status` and `retry`.
 
 ```racket
-(system expr ...)
-(user expr ...)
-(assistant expr ...)
-```
-
-The role is metadata for the transcript. It is not compiled as grammar. If a
-message receives multiple expressions, they are stored directly in its body list.
-
-Expressions describe the constrained output surface:
-
-```racket
-(lit string)                 ; exact text
-(select first rest)          ; non-empty choice of expr-list alternatives
-(gen max-tokens)             ; generated text placeholder
-```
-
-After evaluation, computed expressions are replaced by values:
-
-```text
-gen    -> generated
-select -> selected
-```
-
-The evaluated result is an `EvaluatedProgram`: every message body contains only
-`value` expressions.
-
-## Reading Results
-
-Keep references to dynamic expressions before evaluation:
-
-```racket
-(define format
-  (select (list (lit "json"))
-          (list (list (lit "plain text")))))
-
-(define body
-  (gen 80))
+(define decision
+  (select (list (lit "{\"status\":\"ok\",\"retry\":false}"))
+          (list (list (lit "{\"status\":\"warning\",\"retry\":true}"))
+                (list (lit "{\"status\":\"error\",\"retry\":true}")))))
 
 (define result
   (stream-first
-   (eval complete
-         (list
-          (user (lit "Return ")
-                format
-                (lit " for the current status."))
-          (assistant body))))
+   (llm-eval complete
+             (list (user (lit "Deploy report: tests passed, latency is high. Return JSON."))
+                   (assistant decision)))))
 
-(define selected-format
-  (selected-choice (second (message-body (first result)))))
-
-(define generated-body
-  (generated-text (first (message-body (second result)))))
+(message->string (last result))
 ```
 
-The value returned by `eval` is already the fixed messages, so callers can walk
-the result directly with `message-body`, `selected-choice`, and
-`generated-text`.
+## Calculator
 
-## Backend Contract
-
-A backend is a `TokenOracle`:
-
-```text
-EvaluatedProgram String -> (Listof token-candidate)
-```
-
-The backend receives:
+Task: solve a tiny arithmetic problem.
+Input: `Use 2, 3, 4 with + and *`.
+Output: a generated expression, evaluated by Racket code.
 
 ```racket
-transcript ; previous fixed messages
-prefix     ; current generated prefix for the active message body
+(define result
+  (stream-first
+   (llm-eval complete
+             (list (user (lit "Generate one Racket expression using 2, 3, 4, +, *."))
+                   (assistant (gen 12))))))
+
+(define (calc x)
+  (match x
+    [(? number?) x]
+    [`(+ ,a ,b) (+ (calc a) (calc b))]
+    [`(* ,a ,b) (* (calc a) (calc b))]))
+
+(calc (read (open-input-string (message->string (last result)))))
 ```
 
-That shape keeps model serving outside the core. The backend does not decide
-which sequence wins and does not validate the grammar; it only exposes a finite
-next-token distribution.
+## Tic-Tac-Toe Search
 
-For tests or custom integrations:
+Task: find a winning move for `X`.
+Input board: `X X . / O O . / . . .`
+Output: the accepted move index.
 
 ```racket
-(define complete
-  (lambda (transcript prefix)
-    (list (token-candidate "hello" -0.1)
-          (token-candidate "world" -1.0))))
+(define board '#("X" "X" "" "O" "O" "" "" "" ""))
+(define wins '((0 1 2) (3 4 5) (6 7 8) (0 3 6) (1 4 7) (2 5 8) (0 4 8) (2 4 6)))
+(define (win? i) (define b (vector-copy board)) (vector-set! b i "X")
+  (for/or ([w wins]) (for/and ([j w]) (string=? "X" (vector-ref b j)))))
+
+(define move
+  (select (list (lit "0"))
+          (map (lambda (i) (list (lit (number->string i)))) '(1 2 3 4 5 6 7 8))))
+
+(define accepted
+  (stream-filter
+   (lambda (r) (win? (string->number (message->string (last r)))))
+   (llm-eval complete
+             (list (user (lit "Choose the winning tic-tac-toe move for X."))
+                   (assistant move)))))
+
+(message->string (last (stream-first accepted)))
 ```
 
-## llama.cpp Backend
-
-```racket
-(require rack-llm/backends/llama-cpp)
-
-(define complete
-  (make-llama-cpp-llm
-   #:server-url "http://localhost:8080"))
-```
-
-If `#:server-url` is omitted, the backend reads
-`RACK_LLM_LLAMA_SERVER` and then falls back to `http://localhost:8080`.
-
-The backend sends the rendered previous messages plus the active prefix to
-llama.cpp `/completion` with `n_predict = 1`, requests token probabilities, and
-returns them as `token-candidate`s. The sampler in Racket handles grammar
-matching and Gumbel ordering.
-
-## Running llama.cpp
-
-Acceptance tests and real examples need:
-
-1. `llama-server` with completion probabilities enabled.
-2. A GGUF model.
-3. A running HTTP server.
-
-On this machine llama.cpp is available under:
-
-```bash
-/home/vadim/opt/llama.cpp
-/home/vadim/.local/bin/llama-server
-```
-
-Example with a small Qwen GGUF model:
-
-```bash
-mkdir -p models
-wget -O models/qwen2.5-0.5b-instruct-q4_k_m.gguf \
-  https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf
-
-llama-server \
-  --model models/qwen2.5-0.5b-instruct-q4_k_m.gguf \
-  --host 127.0.0.1 \
-  --port 8080
-```
-
-Then use:
-
-```bash
-export RACK_LLM_LLAMA_SERVER=http://127.0.0.1:8080
-```
-
-## Environment Automation
-
-`raco` remains the Racket package and test runner. `make` is used only for
-external Unix orchestration: cloning/building llama.cpp, downloading a GGUF
-model, and managing a local test server.
-
-Build llama.cpp with LLGuidance support:
-
-```bash
-make deps
-```
-
-Download the default small Qwen model:
-
-```bash
-make model
-```
-
-Do both:
-
-```bash
-make env
-```
-
-Run a foreground server for manual use:
-
-```bash
-make server
-```
-
-The main variables are overrideable:
-
-```bash
-make deps LLAMA_CPP_REF=master LLAMA_CPP_DIR=.deps/llama.cpp
-make model RACK_LLM_MODEL=models/qwen2.5-0.5b-instruct-q4_k_m.gguf
-make server RACK_LLM_MODEL=models/qwen2.5-0.5b-instruct-q4_k_m.gguf
-```
-
-## Tests
-
-The test layout separates fast unit tests from model-backed acceptance tests:
-
-```text
-tests/unit/          fast tests, no network, no model
-tests/acceptance/    real llama.cpp HTTP server, no mocks
-```
-
-Run unit tests:
-
-```bash
-raco test tests/unit
-# or
-make test
-```
-
-Run the unit test target whenever Racket or shell sources change. On macOS this
-uses `osascript` notifications; on Linux it uses `notify-send` when available.
-`make env` installs `watchexec`; on Linux it also installs
-`libnotify-bin`/`libnotify` for desktop notifications and may ask for your
-`sudo` password. To skip notification dependencies, run
-`RACK_LLM_INSTALL_NOTIFY_DEPS=0 make env`.
-
-```bash
-make watch
-make watch WATCH_TARGET=ci
-```
-
-Run lint and architecture checks:
-
-```bash
-make lint
-```
-
-`make lint` compiles the package, checks useless `require`s, checks package
-dependency declarations, and runs project-specific API/source-policy tests.
-
-Run every test file. Acceptance tests are skipped unless explicitly enabled:
-
-```bash
-raco test tests
-# or
-make test-all
-```
-
-Run the normal pre-PR gate:
-
-```bash
-make ci
-```
-
-Run acceptance tests against a real server:
-
-```bash
-export RACK_LLM_ACCEPTANCE=1
-export RACK_LLM_LLAMA_SERVER=http://127.0.0.1:8080
-raco test tests/acceptance
-# or
-make test-acceptance RACK_LLM_LLAMA_SERVER=http://127.0.0.1:8080
-```
-
-The acceptance tests do not start llama.cpp and do not mock the backend. They
-assume the server is already running with a model that supports constrained
-completion through llama.cpp guidance grammar.
-
-For a fully local acceptance run, let `make` start and stop a temporary
-`llama-server`:
-
-```bash
-make test-acceptance-local
-```
+`llm-eval` returns a lazy stream. Limits, filters, and stopping policy belong to
+client code.

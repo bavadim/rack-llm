@@ -91,6 +91,19 @@
       (list (message 'user (list (selected choice (list (lit "y")))))
             (message 'assistant (list (generated answer "hello"))))))
 
+   (test-case "evaluated values render to strings"
+     (define choice (select (list (lit "a")) (list (list (lit "b")))))
+     (define answer (gen 5))
+     (define msg
+       (message 'assistant
+                (list (lit "prefix ")
+                      (selected choice (list (lit "b")))
+                      (lit " ")
+                      (generated answer "done"))))
+     (check-equal? (message->string msg) "prefix b done")
+     (check-equal? (body->string (message-body msg)) "prefix b done")
+     (check-equal? (value->string (first (message-body msg))) "prefix "))
+
    (test-case "nested dynamic nodes record values from the selected branch"
      (define nested-answer (gen 3))
      (define nested-choice

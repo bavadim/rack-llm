@@ -19,6 +19,7 @@
     TokenOracle
     EvaluatedProgram
     assistant
+    body->string
     eval
     value
     value?
@@ -59,11 +60,16 @@
     token-candidate-logp
     token-candidate-text
     token-candidate?
+    value->string
+    message->string
     system
     user))
 
 (define expected-llama-cpp-exports
   '(make-llama-cpp-llm))
+
+(define expected-openai-responses-exports
+  '(make-openai-responses-llm))
 
 (define public-api-contract
   (test-suite
@@ -73,9 +79,13 @@
      (check-equal? (module-export-names 'rack-llm)
                    (sort expected-core-exports symbol<?)))
 
-   (test-case "llama.cpp backend exports are intentional"
-     (check-equal? (module-export-names 'rack-llm/backends/llama-cpp)
-                   (sort expected-llama-cpp-exports symbol<?)))))
+     (test-case "llama.cpp backend exports are intentional"
+       (check-equal? (module-export-names 'rack-llm/backends/llama-cpp)
+                     (sort expected-llama-cpp-exports symbol<?)))
+
+     (test-case "OpenAI Responses backend exports are intentional"
+       (check-equal? (module-export-names 'rack-llm/backends/openai-responses)
+                     (sort expected-openai-responses-exports symbol<?)))))
 
 (module+ test
   (require rackunit/text-ui)

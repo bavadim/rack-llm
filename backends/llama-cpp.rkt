@@ -118,20 +118,8 @@
    (for/list : (Listof String) ([msg (in-list messages)])
      (format "~a: ~a"
              (symbol->string (message-role msg))
-             (render-body (message-body msg))))
+             (message->string msg)))
    "\n"))
-
-(: render-body (-> (Listof value) String))
-(define (render-body body)
-  (apply string-append (map render-expr body)))
-
-(: render-expr (-> value String))
-(define (render-expr expr)
-  (cond
-    [(lit? expr) (lit-value expr)]
-    [(generated? expr) (generated-text expr)]
-    [(selected? expr) (render-body (selected-choice expr))]
-    [else (error 'llama-cpp "unsupported fixed expr: ~e" expr)]))
 
 ;; Response decoding
 

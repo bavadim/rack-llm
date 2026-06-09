@@ -6,7 +6,6 @@
          stream-pure
          stream-bind
          stream-foldM
-         stream-first-option
          sum-map)
 
 (: stream-append-lazy (All (A) (-> (Sequenceof A) (-> (Sequenceof A)) (Sequenceof A))))
@@ -36,11 +35,6 @@
            (stream-bind (lambda ([state : B]) (step state x)) states))
          (stream-pure init)
          xs))
-
-(: stream-first-option (All (A) (-> (Sequenceof A) (U A #f))))
-(define (stream-first-option xs)
-  (and (not (stream-empty? xs))
-       (stream-first xs)))
 
 (: sum-map (All (A) (-> (-> A Natural) (Listof A) Natural)))
 (define (sum-map f xs)

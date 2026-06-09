@@ -11,7 +11,7 @@ racket_files=$(
 )
 
 printf 'Compiling package modules...\n'
-"$RACO" make main.rkt grammar.rkt sampler.rkt common-combinators.rkt backends/llama-cpp.rkt
+"$RACO" make main.rkt grammar.rkt sampler.rkt common-combinators.rkt backends/llama-cpp.rkt backends/openai-responses.rkt
 
 printf 'Checking requires...\n'
 check_output=$("$RACO" check-requires $racket_files 2>&1 || true)
