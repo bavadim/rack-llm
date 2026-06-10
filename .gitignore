@@ -5,3 +5,4 @@ native/
 models/
 .deps/
 *.log
+venv/

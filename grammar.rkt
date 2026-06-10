@@ -24,8 +24,10 @@
          (struct-out lit)
          (struct-out gen)
          (struct-out select)
+         (struct-out at-least-once)
          (struct-out generated)
          (struct-out selected)
+         (struct-out repeated)
          (struct-out token-candidate)
          system
          user
@@ -88,6 +90,10 @@
    [rest : (Listof Choice)])
   #:transparent)
 
+(struct at-least-once expr
+  ([grammar : Grammar])
+  #:transparent)
+
 (struct generated value
   ([source : gen]
    [text : String])
@@ -96,6 +102,11 @@
 (struct selected value
   ([source : select]
    [choice : EvaluatedBody])
+  #:transparent)
+
+(struct repeated value
+  ([source : at-least-once]
+   [text : String])
   #:transparent)
 
 (: system (expr * -> (message expr)))
@@ -204,11 +215,15 @@
      (parse-literal (generated-text e) e k source pos)]
     [(selected? e)
      (parse-choice (selected-source e) (selected-choice e) k follows? source pos)]
+    [(repeated? e)
+     (parse-literal (repeated-text e) e k source pos)]
     [(select? e)
      (result-choose
       (select-choices e)
       (lambda ([choice : Choice])
         (parse-choice e choice k follows? source pos)))]
+    [(at-least-once? e)
+     (parse-at-least-once e k source pos)]
     [(gen? e)
      (parse-gen e k follows? source pos)]
     [else result-empty]))
@@ -218,6 +233,36 @@
   (wrap-choice source
                (length choice)
                ((parse-seq choice k follows?) input pos)))
+
+(: parse-at-least-once
+   (-> at-least-once Parser ParseInput ParsePosition ParseResult))
+(define (parse-at-least-once expr k source start-pos)
+  (define grammar (at-least-once-grammar expr))
+  (define grammar-size (length grammar))
+
+  (: finish Parser)
+  (define (finish input end-pos)
+    (prepend-value
+     (repeated expr (substring (parse-input-text input) start-pos end-pos))
+     (k input end-pos)))
+
+  (: repeat Parser)
+  (define (repeat input pos)
+    (result-union (finish input pos)
+                  (parse-next input pos)))
+
+  (: parse-next Parser)
+  (define (parse-next input pos)
+    (: after-item Parser)
+    (define (after-item next-input next-pos)
+      (if (> next-pos pos)
+          (repeat next-input next-pos)
+          result-empty))
+    (drop-leading-values
+     grammar-size
+     ((parse-seq grammar after-item #t) input pos)))
+
+  (parse-next source start-pos))
 
 (: parse-literal (-> String value Parser ParseInput ParsePosition ParseResult))
 (define (parse-literal literal value k source pos)
@@ -299,6 +344,14 @@
                 (cons value values))
               results))
 
+(: drop-leading-values (-> Natural ParseResult ParseResult))
+(define (drop-leading-values count results)
+  (result-map
+   (lambda ([values : EvaluatedBody])
+     (let-values ([(_prefix tail) (split-at values count)])
+       tail))
+   results))
+
 (: wrap-choice (-> select Natural ParseResult ParseResult))
 (define (wrap-choice source choice-size results)
   (result-map
@@ -354,6 +407,8 @@
   (cond
     [(gen? e) (gen-max-tokens e)]
     [(select? e) (apply max (map target-token-budget (select-choices e)))]
+    [(at-least-once? e)
+     (target-token-budget (at-least-once-grammar e))]
     [(selected? e) (target-token-budget (selected-choice e))]
     [else 1]))
 

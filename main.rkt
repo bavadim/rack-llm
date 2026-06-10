@@ -11,8 +11,10 @@
          (struct-out lit)
          (struct-out gen)
          (struct-out select)
+         (struct-out at-least-once)
          (struct-out generated)
          (struct-out selected)
+         (struct-out repeated)
          (struct-out token-candidate)
          Program
          EvaluatedProgram
@@ -57,6 +59,7 @@
     [(lit? v) (lit-value v)]
     [(generated? v) (generated-text v)]
     [(selected? v) (body->string (selected-choice v))]
+    [(repeated? v) (repeated-text v)]
     [else (error 'rack-llm "unsupported evaluated value: ~e" v)]))
 
 (: body->string (-> EvaluatedBody String))

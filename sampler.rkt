@@ -11,6 +11,9 @@
 
 (define-type GumbelScore Flonum)
 
+;; Repetition is unbounded in the AST, so decoding still needs an operational cap.
+(define repeating-search-budget : TokenBudget 256)
+
 (struct frontier-node
   ([depth : TokenBudget]
    [logp : LogProb]
@@ -124,7 +127,26 @@
 
 (: search-budget (-> Grammar TokenBudget))
 (define (search-budget target)
-  (max 8 (+ 16 (target-token-budget target))))
+  (max 8
+       (+ 16 (target-token-budget target))
+       (if (grammar-repeats? target)
+           repeating-search-budget
+           0)))
+
+(: grammar-repeats? (-> Grammar Boolean))
+(define (grammar-repeats? grammar)
+  (ormap expr-repeats? grammar))
+
+(: expr-repeats? (-> expr Boolean))
+(define (expr-repeats? e)
+  (cond
+    [(at-least-once? e) #t]
+    [(select? e)
+     (ormap grammar-repeats?
+            (cons (select-first e) (select-rest e)))]
+    [(selected? e)
+     (grammar-repeats? (selected-choice e))]
+    [else #f]))
 
 ;; Agenda
 

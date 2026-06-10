@@ -18,6 +18,9 @@
   '(Program
     TokenOracle
     EvaluatedProgram
+    at-least-once
+    at-least-once-grammar
+    at-least-once?
     assistant
     body->string
     eval
@@ -37,6 +40,10 @@
     message-body
     message-role
     message?
+    repeated
+    repeated-source
+    repeated-text
+    repeated?
     expr
     expr?
     select
@@ -48,6 +55,8 @@
     selected-source
     selected?
     struct:token-candidate
+    struct:at-least-once
+    struct:repeated
     struct:value
     struct:gen
     struct:generated

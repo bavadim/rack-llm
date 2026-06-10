@@ -123,6 +123,109 @@
                    (list (lit "a") (generated nested-answer "xx")))
      (check-equal? (generated-text (second selected-body)) "xx"))
 
+   (test-case "at-least-once records one or more repetitions as text"
+     (define repeated-as
+       (at-least-once (list (lit "a"))))
+
+     (define one
+       (stream-first
+        (eval (make-recording-model (list "a") (box '()))
+              (list (assistant repeated-as)))))
+     (define many
+       (stream-first
+        (eval (make-recording-model (list "aaa") (box '()))
+              (list (assistant repeated-as)))))
+
+     (check-equal?
+      one
+      (list (message 'assistant (list (repeated repeated-as "a")))))
+     (check-equal?
+      many
+      (list (message 'assistant (list (repeated repeated-as "aaa"))))))
+
+   (test-case "at-least-once repeats a compound grammar"
+     (define choice
+       (select (list (lit "a")) (list (list (lit "b")))))
+     (define repeated-items
+       (at-least-once
+        (list (lit "<") choice (lit ">"))))
+
+     (define result
+       (stream-first
+        (eval (make-recording-model (list "<a><b>") (box '()))
+              (list (assistant repeated-items)))))
+
+     (check-equal?
+      result
+      (list
+       (message 'assistant
+                (list (repeated repeated-items "<a><b>"))))))
+
+   (test-case "at-least-once can exceed the ordinary grammar budget"
+     (define repeated-as
+       (at-least-once (list (lit "a"))))
+     (define count 40)
+     (define (model _transcript prefix)
+       (list
+        (token-candidate
+         (if (< (string-length prefix) count) "a" "z")
+         0.0)))
+
+     (define result
+       (stream-first
+        (eval model
+              (list (assistant repeated-as (lit "z"))))))
+
+     (check-equal?
+      (repeated-text (first (message-body (first result))))
+      (make-string count #\a)))
+
+   (test-case "at-least-once rejects zero and empty repetitions"
+     (define required-a
+       (at-least-once (list (lit "a"))))
+     (define empty-repeat
+       (at-least-once '()))
+
+     (check-true
+      (stream-empty?
+       (eval (make-recording-model (list "z") (box '()))
+             (list (assistant required-a (lit "z"))))))
+     (check-true
+      (stream-empty?
+       (eval (make-recording-model (list "x") (box '()))
+             (list (assistant empty-repeat))))))
+
+   (test-case "JSON list tail uses select plus at-least-once"
+     (define item
+       (select (list (lit "\"a\""))
+               (list (list (lit "\"b\"")))))
+     (define tail
+       (select
+        '()
+        (list
+         (list
+          (at-least-once
+           (list (lit ", ") item))))))
+
+     (define one
+       (stream-first
+        (eval (make-recording-model (list "[\"a\"]") (box '()))
+              (list (assistant (lit "[") item tail (lit "]"))))))
+     (define many
+       (stream-first
+        (eval (make-recording-model
+               (list "[\"a\", \"b\", \"a\"]")
+               (box '()))
+              (list (assistant (lit "[") item tail (lit "]"))))))
+
+     (check-equal?
+      (selected-choice (third (message-body (first one))))
+      '())
+     (define many-tail
+       (selected-choice (third (message-body (first many)))))
+     (check-equal? (repeated-text (first many-tail))
+                   ", \"b\", \"a\""))
+
    (test-case "model requests receive only previous evaluated messages"
      (define requests (box '()))
      (define choice (select (list (lit "a")) (list (list (lit "ab")))))
