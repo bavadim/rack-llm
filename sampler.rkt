@@ -42,18 +42,63 @@
 
 (: gumbel-stream (-> (-> FrontierNode (Listof FrontierNode)) FrontierNode EvaluatedBodyStream))
 (define (gumbel-stream expand root)
+  (define debug-search? : Boolean
+    (and (getenv "RACK_LLM_DEBUG_SEARCH") #t))
+  (define debug-every : Positive-Integer
+    (let ([value (getenv "RACK_LLM_DEBUG_EVERY")])
+      (if value
+          (assert (or (string->number value) 100) exact-positive-integer?)
+          100)))
+  (define popped : Natural 0)
+  (define expanded : Natural 0)
+  (define children : Natural 0)
+  (define last-yield-popped : Natural 0)
+  (define last-yield-expanded : Natural 0)
+  (define started-at : Flonum (current-inexact-milliseconds))
+
   (: step (-> FrontierAgenda EvaluatedBodyStream))
   (define (step queue)
     (define next (agenda-pop queue))
     (cond
       [(not next) empty-stream]
       [else
+       (set! popped (add1 popped))
        (define current (agenda-view-item next))
        (define rest (agenda-view-rest next))
+       (when (and debug-search? (zero? (remainder popped debug-every)))
+         (eprintf
+          "sampler progress: elapsed=~a popped=~a expanded=~a queue=~a children=~a depth=~a\n"
+          (real->decimal-string
+           (/ (- (current-inexact-milliseconds) started-at) 1000.0)
+           1)
+          popped
+          expanded
+          (length (agenda-items queue))
+          children
+          (frontier-node-depth current))
+         (flush-output (current-error-port)))
+       (define yields (frontier-yields current))
+       (when (and debug-search? (not (null? yields)))
+         (eprintf
+          "sampler yield: bodies=~a depth=~a queue=~a popped=~a (+~a) expanded=~a (+~a) children=~a\n"
+          (length yields)
+          (frontier-node-depth current)
+          (length (agenda-items queue))
+          popped
+          (- popped last-yield-popped)
+          expanded
+          (- expanded last-yield-expanded)
+          children)
+         (flush-output (current-error-port))
+         (set! last-yield-popped popped)
+         (set! last-yield-expanded expanded))
        (stream-append-lazy
-        (frontier-yields current)
+        yields
         (lambda ()
-          (step (agenda-push* rest (frontier-successors expand current)))))]))
+          (set! expanded (add1 expanded))
+          (define successors (frontier-successors expand current))
+          (set! children (+ children (length successors)))
+          (step (agenda-push* rest successors))))]))
   (step (agenda-singleton frontier-better? root)))
 
 (: frontier-expander (-> TokenOracle EvaluatedProgram TokenBudget (-> FrontierNode (Listof FrontierNode))))

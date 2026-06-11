@@ -60,7 +60,17 @@
 (: completion-token-generator (-> CompletionClient CompletionParams TokenGenerator))
 (define (completion-token-generator client params)
   (lambda ([prompt : String])
-    (decode-completion-response (client (completion-request prompt params)))))
+    (define request (completion-request prompt params))
+    (define response (client request))
+    (decode-completion-response
+     (if (empty-response? response)
+         (client request)
+         response))))
+
+(: empty-response? (-> CompletionResponse Boolean))
+(define (empty-response? response)
+  (and (hash? response)
+       (zero? (hash-count response))))
 
 ;; Completion client
 
