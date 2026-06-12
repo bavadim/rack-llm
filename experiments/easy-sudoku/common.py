@@ -8,10 +8,23 @@ from pathlib import Path
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 DEFAULT_DATASET = EXPERIMENT_DIR / "dataset.jsonl"
 
-SYSTEM_PROMPT = """Solve the 4 by 4 mini-Sudoku completion task.
+SYSTEM_PROMPT = """Solve the 4 by 4 mini-Sudoku completion task carefully.
+Each row, column, and 2 by 2 box must contain digits 1, 2, 3, 4 exactly once.
+Determine every listed cell from its row, column, and box.
+Digits in the output array may repeat because they belong to different cells.
 Return only a JSON array of digits in the requested cell order.
 Use numbers without quotes, for example: [2,4,1]
-Do not explain the answer and do not use Markdown."""
+Do not explain the answer and do not use Markdown.
+
+Example:
+Grid:
+.234
+341.
+2.43
+4321
+Cells: r1c1, r2c4, r3c2
+The missing values in that order are 1, 2, 1.
+Answer: [1,2,1]"""
 
 
 def load_cases(path=DEFAULT_DATASET):
@@ -48,6 +61,7 @@ def user_prompt(case):
 Each row, column, and 2 by 2 box contains digits 1, 2, 3, 4 exactly once.
 Find only the digits replacing those dots.
 Return exactly {case["missing_count"]} numbers, in the listed cell order.
+The returned numbers do not need to be distinct.
 Do not return completed rows.
 
 Grid:
@@ -58,7 +72,11 @@ Answer:"""
 
 
 def llama_completion_prompt(system_prompt, prompt):
-    return f"system: {system_prompt}\nuser: {prompt}"
+    return (
+        f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
+        f"<|im_start|>user\n{prompt}\n/no_think<|im_end|>\n"
+        "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    )
 
 
 def parse_answer(output, expected_length):

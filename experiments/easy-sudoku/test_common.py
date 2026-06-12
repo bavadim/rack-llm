@@ -26,7 +26,7 @@ class EasySudokuTest(unittest.TestCase):
 
     def test_dataset_has_ten_cases_per_level(self):
         self.assertEqual(len(self.cases), 30)
-        for missing_count in (3, 4, 5):
+        for missing_count in (2, 3, 4):
             self.assertEqual(
                 len(select_cases(self.cases, missing=missing_count)),
                 10,
@@ -79,7 +79,9 @@ class EasySudokuTest(unittest.TestCase):
     def test_native_completion_prompt_matches_llama_backend(self):
         self.assertEqual(
             llama_completion_prompt("system text", "user text"),
-            "system: system text\nuser: user text",
+            "<|im_start|>system\nsystem text<|im_end|>\n"
+            "<|im_start|>user\nuser text\n/no_think<|im_end|>\n"
+            "<|im_start|>assistant\n<think>\n\n</think>\n\n",
         )
 
     def test_summary_reports_pass_at_one_and_pass_at_k(self):

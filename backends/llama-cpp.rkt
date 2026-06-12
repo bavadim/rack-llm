@@ -9,6 +9,7 @@
 (provide make-llama-cpp-llm)
 
 (define-type Prompt String)
+(define-type PromptRenderer (-> EvaluatedProgram String Prompt))
 (define-type TokenDistribution (Listof token-candidate))
 (define-type TokenGenerator (-> Prompt TokenDistribution))
 (define-type CompletionResponse JSExpr)
@@ -30,6 +31,7 @@
 (: make-llama-cpp-llm (->* () (#:server-url String
                                #:n-probs Natural
                                #:temperature Flonum
+                               #:render-prompt PromptRenderer
                                #:generate (Option TokenGenerator))
                             TokenOracle))
 (define (make-llama-cpp-llm
@@ -37,19 +39,20 @@
                                       "http://localhost:8080")]
          #:n-probs [n-probs 64]
          #:temperature [temperature 0.8]
+         #:render-prompt [render-prompt oracle-prompt]
          #:generate [generate #f])
   (define next-token-distribution : TokenGenerator
     (or generate (llama-cpp-token-generator
                   server-url
                   (completion-params n-probs temperature))))
-  (token-oracle next-token-distribution))
+  (token-oracle next-token-distribution render-prompt))
 
 ;; Token oracle
 
-(: token-oracle (-> TokenGenerator TokenOracle))
-(define (token-oracle next-token-distribution)
+(: token-oracle (-> TokenGenerator PromptRenderer TokenOracle))
+(define (token-oracle next-token-distribution render-prompt)
   (lambda ([transcript : EvaluatedProgram] [prefix : String])
-    (next-token-distribution (oracle-prompt transcript prefix))))
+    (next-token-distribution (render-prompt transcript prefix))))
 
 (: llama-cpp-token-generator (-> String CompletionParams TokenGenerator))
 (define (llama-cpp-token-generator server-url params)

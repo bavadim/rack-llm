@@ -16,6 +16,7 @@ DEFAULT_FILES = {
     "baseline-unique": RESULTS_DIR / "baseline-unique.jsonl",
     "rack-llm": RESULTS_DIR / "rack-llm.jsonl",
 }
+LEVELS = (2, 3, 4)
 
 
 def load(path):
@@ -125,14 +126,15 @@ def report(all_rows, attempts):
     lines = [
         "# Mini-Sudoku 4x4 Results",
         "",
-        "Thirty uniquely solvable puzzles: ten each with 3, 4, and 5 blanks.",
+        "Thirty uniquely solvable puzzles: ten each with 2, 3, and 4 blanks.",
         "",
-        "Protocol: Qwen2.5-0.5B-Instruct Q4_K_M through llama.cpp's native "
-        "Completion endpoint, temperature 0.8, deterministic per-case seeds, "
-        "ten requested candidates, and top-64 token probabilities for rack-llm.",
+        "Protocol: Qwen3-1.7B Q4_K_M through llama.cpp's native Completion "
+        "endpoint with the Qwen ChatML template and thinking disabled, "
+        "temperature 0.8, deterministic per-case seeds, ten requested "
+        "candidates, and top-64 token probabilities for rack-llm.",
         "",
         "Server: NVIDIA GeForce GTX 1650 4 GB, Intel Core i7-9750H, "
-        "context 2048, one slot, full GPU offload, and flash attention.",
+        "context 8192, one slot, full GPU offload, and flash attention.",
         "",
         "## Overall",
         "",
@@ -140,7 +142,7 @@ def report(all_rows, attempts):
     table, metrics = format_table(all_rows, attempts)
     lines.extend(table)
     expected_random = sum(
-        10 * attempts / (4**missing) for missing in (3, 4, 5)
+        10 * attempts / (4**missing) for missing in LEVELS
     )
     solved_cases = {
         mode: sorted({row["case_id"] for row in rows if row["passed"]})
@@ -162,9 +164,38 @@ def report(all_rows, attempts):
             "- The model-backed modes solved different puzzle IDs, which is "
             "consistent with a noisy low-probability search."
         )
+    rack_score = metrics["rack-llm"]["passk"]
+    random_score = metrics["random-unique"]["passk"]
+    unique_score = metrics["baseline-unique"]["passk"]
+    if rack_score > random_score and rack_score > unique_score:
+        comparison = (
+            f"- `rack-llm` solved {rack_score}/30, compared with "
+            f"{random_score}/30 for random unique enumeration and "
+            f"{unique_score}/30 for ordinary unique resampling. This is an "
+            "observed improvement in this run."
+        )
+        conclusion = (
+            "- The result supports the hypothesis that rack-llm search can "
+            "recover useful lower-probability answers more effectively than "
+            "independent sampling on tasks the model can partially solve. "
+            "The 30-puzzle sample is still too small for a strong statistical "
+            "claim."
+        )
+    else:
+        comparison = (
+            f"- `rack-llm` solved {rack_score}/30, compared with "
+            f"{random_score}/30 for random unique enumeration and "
+            f"{unique_score}/30 for ordinary unique resampling. This run does "
+            "not show an improvement over both controls."
+        )
+        conclusion = (
+            "- This experiment confirms rack-llm's format and deduplication "
+            "guarantees, but does not confirm an improvement in semantic "
+            "puzzle solving."
+        )
 
     lines.extend(["", "## By Difficulty", ""])
-    for missing in (3, 4, 5):
+    for missing in LEVELS:
         lines.extend([f"### {missing} blanks", ""])
         subset = {
             mode: [row for row in rows if row["missing_count"] == missing]
@@ -195,11 +226,7 @@ def report(all_rows, attempts):
             f"- Ten unique random guesses are expected to solve approximately "
             f"{expected_random:.2f}/30 puzzles; the recorded random control "
             f"solved {metrics['random-unique']['passk']}/30.",
-            f"- `rack-llm` solved {metrics['rack-llm']['passk']}/30, so this run "
-            "does not show an improvement over random unique enumeration.",
-            f"- `baseline-unique` solved "
-            f"{metrics['baseline-unique']['passk']}/30 and therefore also does "
-            "not establish model reasoning above the random expectation.",
+            comparison,
             f"- `rack-llm` used {metrics['rack-llm']['calls']} one-token oracle "
             f"calls and {metrics['rack-llm']['seconds']:.1f}s. "
             f"`baseline-unique` used {metrics['baseline-unique']['calls']} full "
@@ -208,9 +235,7 @@ def report(all_rows, attempts):
             "requests one token distribution, while each baseline call requests "
             "a complete answer.",
             solved_comparison,
-            "- Therefore this experiment confirms rack-llm's format and "
-            "deduplication guarantees, but does not confirm that its search "
-            "improves semantic puzzle solving for Qwen2.5-0.5B.",
+            conclusion,
             "",
             "Solved cases:",
             "",
@@ -256,7 +281,7 @@ def main():
         if rows:
             all_rows[mode] = rows
 
-    text = report(all_rows, args.attempts)
+    text = report(all_rows, args.attempts).rstrip()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(text + "\n", encoding="utf-8")
     print(text)

@@ -1,300 +1,300 @@
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " [1, 8, 7] ", "valid": false, "passed": false, "elapsed_seconds": 0.14132271400012542, "request_number": 1}
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " [6, 2, 9]", "valid": false, "passed": false, "elapsed_seconds": 0.1322417140036123, "request_number": 2}
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " [1, 5, 2]", "valid": false, "passed": false, "elapsed_seconds": 0.12817503800033592, "request_number": 3}
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " [1]", "valid": false, "passed": false, "elapsed_seconds": 0.055554676000610925, "request_number": 4}
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " [4,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.09843170399835799, "request_number": 5}
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " []", "valid": false, "passed": false, "elapsed_seconds": 0.020231568996678106, "request_number": 6}
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " [7,4,3] ", "valid": false, "passed": false, "elapsed_seconds": 0.1168519560014829, "request_number": 7}
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " None", "valid": false, "passed": false, "elapsed_seconds": 0.03436221100855619, "request_number": 8}
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02155944801052101, "request_number": 9}
-{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02471970100305043, "request_number": 10}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " [1, 2, 3] JSON answer: ```json", "valid": false, "passed": false, "elapsed_seconds": 0.23236722800356802, "request_number": 1}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " [1,2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.08909111499087885, "request_number": 2}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " [1, 2, 3] ", "valid": true, "passed": false, "elapsed_seconds": 0.13196998699277174, "request_number": 3}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " [5, 3, 6] ", "valid": false, "passed": false, "elapsed_seconds": 0.13067372899968177, "request_number": 4}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " [1,3,4] JSON format, without quotes", "valid": false, "passed": false, "elapsed_seconds": 0.16615990099671762, "request_number": 5}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " [3,4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.10227720800321549, "request_number": 6}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020224688996677287, "request_number": 7}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " 5,6,7", "valid": false, "passed": false, "elapsed_seconds": 0.10068608399888035, "request_number": 8}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.028809241994167678, "request_number": 9}
-{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02461710400530137, "request_number": 10}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.05095511500257999, "request_number": 1}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.023084519008989446, "request_number": 2}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02247654700477142, "request_number": 3}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02230605500517413, "request_number": 4}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " [3,3,2] ", "valid": true, "passed": false, "elapsed_seconds": 0.11063517900765873, "request_number": 5}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.025456970994127914, "request_number": 6}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " []", "valid": false, "passed": false, "elapsed_seconds": 0.017993392000789754, "request_number": 7}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022474805009551346, "request_number": 8}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02779120700142812, "request_number": 9}
-{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " [3,1,2] ", "valid": true, "passed": false, "elapsed_seconds": 0.11894420899625402, "request_number": 10}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " [1,2,3,4]", "valid": false, "passed": false, "elapsed_seconds": 0.1615643330005696, "request_number": 1}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " [1,2,3,4]", "valid": false, "passed": false, "elapsed_seconds": 0.1278620100056287, "request_number": 2}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02130932798900176, "request_number": 3}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01832315800129436, "request_number": 4}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01891172600153368, "request_number": 5}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.047668676008470356, "request_number": 6}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.028197493011248298, "request_number": 7}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020663477000198327, "request_number": 8}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022614150002482347, "request_number": 9}
-{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " 1, 6, 4", "valid": false, "passed": false, "elapsed_seconds": 0.12789556600910146, "request_number": 10}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " [1,2,3] ", "valid": true, "passed": false, "elapsed_seconds": 0.13812326500192285, "request_number": 1}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " [[3],[4],[1]]", "valid": false, "passed": false, "elapsed_seconds": 0.09862296600476839, "request_number": 2}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.029368786999839358, "request_number": 3}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020311093001510017, "request_number": 4}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02443774499988649, "request_number": 5}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020625423989258707, "request_number": 6}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.026002558006439358, "request_number": 7}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02345896599581465, "request_number": 8}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01846679300069809, "request_number": 9}
-{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.024962326991953887, "request_number": 10}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " [4,2,1]", "valid": true, "passed": false, "elapsed_seconds": 0.13907242999994196, "request_number": 1}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.028694332999293692, "request_number": 2}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.0201284460054012, "request_number": 3}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01885619599488564, "request_number": 4}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01937230399926193, "request_number": 5}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.03673613000137266, "request_number": 6}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.040586023998912424, "request_number": 7}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.023186202000943013, "request_number": 8}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.026757116997032426, "request_number": 9}
-{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.031403883011080325, "request_number": 10}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.05464493100589607, "request_number": 1}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022278207005001605, "request_number": 2}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " square(4, 4) = [1, 4, 2, 3] Return only a JSON array of digits in the requested cell order", "valid": false, "passed": false, "elapsed_seconds": 0.40387006499804556, "request_number": 3}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020966387004591525, "request_number": 4}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018104094997397624, "request_number": 5}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01824842499627266, "request_number": 6}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.025552166000125, "request_number": 7}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022185409005032852, "request_number": 8}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019422648998443037, "request_number": 9}
-{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022553990987944417, "request_number": 10}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.056654518004506826, "request_number": 1}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02334491699002683, "request_number": 2}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.0223701670038281, "request_number": 3}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020799326986889355, "request_number": 4}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01979394900263287, "request_number": 5}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02602558299258817, "request_number": 6}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020952627004589885, "request_number": 7}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " [[3, 2, 1], [4, 1, 2], [2, 3, 4]] JSON format only. To", "valid": false, "passed": false, "elapsed_seconds": 0.39586424799927045, "request_number": 8}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " 3, 4, 2", "valid": false, "passed": false, "elapsed_seconds": 0.12739081999461632, "request_number": 9}
-{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " [7, 8, 6]", "valid": false, "passed": false, "elapsed_seconds": 0.13937420399452094, "request_number": 10}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.05089708599552978, "request_number": 1}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022123771006590687, "request_number": 2}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.023910224001156166, "request_number": 3}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02145978900080081, "request_number": 4}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018593828994198702, "request_number": 5}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.017969737004023045, "request_number": 6}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.0225363460049266, "request_number": 7}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " [1,2,3]", "valid": true, "passed": true, "elapsed_seconds": 0.10970150100183673, "request_number": 8}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.026731306003057398, "request_number": 9}
-{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020951557002263144, "request_number": 10}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.05006786600279156, "request_number": 1}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.030011309005203657, "request_number": 2}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020573587011313066, "request_number": 3}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018313534994376823, "request_number": 4}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.0223654539877316, "request_number": 5}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.0250559670093935, "request_number": 6}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.03266315899963956, "request_number": 7}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.049210208002477884, "request_number": 8}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.033427754999138415, "request_number": 9}
-{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.03546400400227867, "request_number": 10}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " \u00a0", "valid": false, "passed": false, "elapsed_seconds": 0.08231466000142973, "request_number": 1}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.024927814010879956, "request_number": 2}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02324830400175415, "request_number": 3}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " ```js", "valid": false, "passed": false, "elapsed_seconds": 0.043767821000074036, "request_number": 4}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02345868299016729, "request_number": 5}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " [1,3,4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.11808890099928249, "request_number": 6}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " ```js", "valid": false, "passed": false, "elapsed_seconds": 0.045270542992511764, "request_number": 7}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " [", "valid": false, "passed": false, "elapsed_seconds": 0.019432731001870707, "request_number": 8}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " [5, 2, 3, 1]", "valid": false, "passed": false, "elapsed_seconds": 0.15878869300649967, "request_number": 9}
-{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " [[2,4,3],[3,1,2],[1,2,3],[4,3,2]] JSON format", "valid": false, "passed": false, "elapsed_seconds": 0.3403028679895215, "request_number": 10}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.05352161799964961, "request_number": 1}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " [1,2,2,3] ", "valid": true, "passed": false, "elapsed_seconds": 0.13299118100258056, "request_number": 2}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " [4,6,3] ", "valid": false, "passed": false, "elapsed_seconds": 0.11135156599630136, "request_number": 3}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " [1, 3, 2, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.164313705987297, "request_number": 4}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": " [2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12226888800796587, "request_number": 5}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01975638400472235, "request_number": 6}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " [2,4,3] [] []", "valid": false, "passed": false, "elapsed_seconds": 0.12101390298630577, "request_number": 7}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02451635801116936, "request_number": 8}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " [2, 1, 3, 4] JSON answer: ", "valid": false, "passed": false, "elapsed_seconds": 0.19803452599444427, "request_number": 9}
-{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.021061463994556107, "request_number": 10}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " ```[3,1,2,4]``` ", "valid": false, "passed": false, "elapsed_seconds": 0.19875175500055775, "request_number": 1}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " [2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.13102869100112002, "request_number": 2}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.021090027003083378, "request_number": 3}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " []", "valid": false, "passed": false, "elapsed_seconds": 0.02266115900420118, "request_number": 4}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "\u00a0[4,2,1]", "valid": false, "passed": false, "elapsed_seconds": 0.11898438799835276, "request_number": 5}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019867668001097627, "request_number": 6}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018405519993393682, "request_number": 7}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " [3,3,2,2] JSON answer: ", "valid": false, "passed": false, "elapsed_seconds": 0.16407585200795438, "request_number": 8}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " [2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.115263084997423, "request_number": 9}
-{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " \u200b", "valid": false, "passed": false, "elapsed_seconds": 0.03228496600058861, "request_number": 10}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " [4, 3, 2, 1] ", "valid": true, "passed": false, "elapsed_seconds": 0.2001784769963706, "request_number": 1}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01914618900627829, "request_number": 2}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.050492761001805775, "request_number": 3}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.045894415001384914, "request_number": 4}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018678592998185195, "request_number": 5}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.053460331007954665, "request_number": 6}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04508995001378935, "request_number": 7}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " [\"3\", \"1\", \"2\", \"4\"] ", "valid": false, "passed": false, "elapsed_seconds": 0.16945323499385267, "request_number": 8}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " 2, 3, 4, 1", "valid": false, "passed": false, "elapsed_seconds": 0.15027614300197456, "request_number": 9}
-{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04469766799593344, "request_number": 10}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " [3, 1, 4, 2] ", "valid": true, "passed": false, "elapsed_seconds": 0.20358365499123465, "request_number": 1}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01862012699712068, "request_number": 2}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.026608061001752503, "request_number": 3}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02065303899871651, "request_number": 4}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01983365399064496, "request_number": 5}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02083984500495717, "request_number": 6}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02260303299408406, "request_number": 7}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02620129800925497, "request_number": 8}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02288679099001456, "request_number": 9}
-{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020651794009609148, "request_number": 10}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " [2,4,1] JSON format, no extra digits", "valid": false, "passed": false, "elapsed_seconds": 0.2178315350029152, "request_number": 1}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04550318600377068, "request_number": 2}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " [3,2,1]", "valid": false, "passed": false, "elapsed_seconds": 0.10082178300945088, "request_number": 3}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " [3, 4, 4, 3]", "valid": true, "passed": false, "elapsed_seconds": 0.16557178800576366, "request_number": 4}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": " 342, 2, 3", "valid": false, "passed": false, "elapsed_seconds": 0.14709103498898912, "request_number": 5}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " [6, 6, 3, 3]", "valid": false, "passed": false, "elapsed_seconds": 0.17064414299966302, "request_number": 6}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " [", "valid": false, "passed": false, "elapsed_seconds": 0.01867001599748619, "request_number": 7}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019512511003995314, "request_number": 8}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " [4, 2, 3, 1] ", "valid": true, "passed": false, "elapsed_seconds": 0.175996108999243, "request_number": 9}
-{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.021955650998279452, "request_number": 10}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.05889382401073817, "request_number": 1}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.025270063008065335, "request_number": 2}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.023797473986633122, "request_number": 3}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.021149045001948252, "request_number": 4}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.021936958000878803, "request_number": 5}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.028552314994158223, "request_number": 6}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02796459100500215, "request_number": 7}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.021494788001291454, "request_number": 8}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018527003994677216, "request_number": 9}
-{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01814846499473788, "request_number": 10}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.06449423200683668, "request_number": 1}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " [1, 9, 4, 3]", "valid": false, "passed": false, "elapsed_seconds": 0.16532929500681348, "request_number": 2}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022363607000443153, "request_number": 3}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " [2, 4, 1] JSON format, like \"[1,2,3]\" Output:", "valid": false, "passed": false, "elapsed_seconds": 0.26994687400292605, "request_number": 4}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02278319900506176, "request_number": 5}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02076545701129362, "request_number": 6}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " [3,1,4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.14000515300722327, "request_number": 7}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " [1, 2, 4, 3] JSON format,", "valid": false, "passed": false, "elapsed_seconds": 0.20556041300005745, "request_number": 8}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018942171009257436, "request_number": 9}
-{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019191806990420446, "request_number": 10}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " [1, 3, 4, 2] ", "valid": true, "passed": false, "elapsed_seconds": 0.20657622799626552, "request_number": 1}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " [1,2,3,4] [1,4,2,3] [5,6,3,4] [2,6,", "valid": false, "passed": false, "elapsed_seconds": 0.40156795099028386, "request_number": 2}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02084490700508468, "request_number": 3}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04594122199341655, "request_number": 4}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.021526126001845114, "request_number": 5}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.024017404997721314, "request_number": 6}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.025893473997712135, "request_number": 7}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018832810994354077, "request_number": 8}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.024244711006758735, "request_number": 9}
-{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.024812456002109684, "request_number": 10}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": " [1,2,3,4] ", "valid": true, "passed": false, "elapsed_seconds": 0.17072390699468087, "request_number": 1}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022935581000638194, "request_number": 2}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019624430002295412, "request_number": 3}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019641834995127283, "request_number": 4}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02680682099889964, "request_number": 5}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.020669453995651565, "request_number": 6}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018379389002802782, "request_number": 7}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019795806001638994, "request_number": 8}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.026220551008009352, "request_number": 9}
-{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": " [1,2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.13107024600321893, "request_number": 10}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.06354377800016664, "request_number": 1}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " ```[1, 3, 4, 5, 6]``` ", "valid": false, "passed": false, "elapsed_seconds": 0.2382371630083071, "request_number": 2}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " [\"1\", \"5\", \"2\", \"3\", \"4\"]", "valid": false, "passed": false, "elapsed_seconds": 0.1952208389993757, "request_number": 3}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.021237317007035017, "request_number": 4}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.0202480169973569, "request_number": 5}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.024496129000908695, "request_number": 6}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.023313625002629124, "request_number": 7}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018721821004874073, "request_number": 8}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": "\u00a0", "valid": false, "passed": false, "elapsed_seconds": 0.023738952993880957, "request_number": 9}
-{"case_id": "easy-5-01", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " [1, 5, 9, 3, 7] JSON format, do not contain extra characters", "valid": false, "passed": false, "elapsed_seconds": 0.29512848700687755, "request_number": 10}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.09459323099872563, "request_number": 1}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04502565000439063, "request_number": 2}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " 1, 4, 2, 3, 4", "valid": false, "passed": false, "elapsed_seconds": 0.2036134800000582, "request_number": 3}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04449166099948343, "request_number": 4}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02280510400305502, "request_number": 5}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04897817800519988, "request_number": 6}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " ```[1, 3, 2, 4, 4]``` ", "valid": false, "passed": false, "elapsed_seconds": 0.2384324029990239, "request_number": 7}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.025366096990182996, "request_number": 8}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04779078900173772, "request_number": 9}
-{"case_id": "easy-5-02", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.049068834996433, "request_number": 10}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.056657070002984256, "request_number": 1}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.026134169005672447, "request_number": 2}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " [", "valid": false, "passed": false, "elapsed_seconds": 0.022093261999543756, "request_number": 3}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.024925450998125598, "request_number": 4}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.047619745004340075, "request_number": 5}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.023887702001957223, "request_number": 6}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " ```", "valid": false, "passed": false, "elapsed_seconds": 0.022459494997747242, "request_number": 7}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.023966720997123048, "request_number": 8}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02236408799944911, "request_number": 9}
-{"case_id": "easy-5-03", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.049136995992739685, "request_number": 10}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.09399230800045189, "request_number": 1}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " `[\"3\", \".\", \"4\", \".\", \"1\"]` ", "valid": false, "passed": false, "elapsed_seconds": 0.18567841200274415, "request_number": 2}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " 4, 1, 3, 2, 1", "valid": false, "passed": false, "elapsed_seconds": 0.19444642300368287, "request_number": 3}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04320916600408964, "request_number": 4}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.0479978450021008, "request_number": 5}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " [1,4,2,3]_feedback: \u89e3\u7b54\u5982\u4e0b\uff1a", "valid": false, "passed": false, "elapsed_seconds": 0.19600343400088605, "request_number": 6}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " `[\"4\", \"1\", \"2\", \"1\", \"3\"]` JSON format, no extra characters: e.g., \"e.g., (", "valid": false, "passed": false, "elapsed_seconds": 0.38961082900641486, "request_number": 7}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018865092992200516, "request_number": 8}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": " ```", "valid": false, "passed": false, "elapsed_seconds": 0.023346957998001017, "request_number": 9}
-{"case_id": "easy-5-04", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.05727593699702993, "request_number": 10}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.08413596599712037, "request_number": 1}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02743008300603833, "request_number": 2}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022957729001063854, "request_number": 3}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " 1, 3, 3, 2", "valid": false, "passed": false, "elapsed_seconds": 0.1712574729899643, "request_number": 4}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.023557345004519448, "request_number": 5}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " ```[1,2,3,4,5]``` ", "valid": false, "passed": false, "elapsed_seconds": 0.18308478400285821, "request_number": 6}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " ```", "valid": false, "passed": false, "elapsed_seconds": 0.02087096199102234, "request_number": 7}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.024710284007596783, "request_number": 8}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022458801991888322, "request_number": 9}
-{"case_id": "easy-5-05", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.018713419005507603, "request_number": 10}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.09180736399139278, "request_number": 1}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04317734499636572, "request_number": 2}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " ```#42#53#32#74``` ", "valid": false, "passed": false, "elapsed_seconds": 0.19685743300942704, "request_number": 3}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04315941299137194, "request_number": 4}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.046465053004794754, "request_number": 5}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04537091701058671, "request_number": 6}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.05476138100493699, "request_number": 7}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.024482083987095393, "request_number": 8}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.047831189003773034, "request_number": 9}
-{"case_id": "easy-5-06", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019790944003034383, "request_number": 10}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " [1, 4, 1, 3, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.2463037599954987, "request_number": 1}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " [2,3,1] ", "valid": false, "passed": false, "elapsed_seconds": 0.10852284199791029, "request_number": 2}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02479076098825317, "request_number": 3}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " [1,3,2,4] ", "valid": false, "passed": false, "elapsed_seconds": 0.15213147801114246, "request_number": 4}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " [1, 5, 4, 2, 3] ", "valid": false, "passed": false, "elapsed_seconds": 0.21314520700252615, "request_number": 5}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022294159993180074, "request_number": 6}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019084552011918277, "request_number": 7}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": " [1,4,3,2,4] JSON format, without quotes", "valid": false, "passed": false, "elapsed_seconds": 0.2226083019922953, "request_number": 8}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.0470260020083515, "request_number": 9}
-{"case_id": "easy-5-07", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.0254431469948031, "request_number": 10}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.059662849991582334, "request_number": 1}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " [1,2,3,4]JSON code: {} Do not use `[]` and do not return completed rows. The constraints in this task are", "valid": false, "passed": false, "elapsed_seconds": 0.3921998820005683, "request_number": 2}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02172326900472399, "request_number": 3}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " ```[1, 2, 2, 2, 1]``` [1, 2, 3, 3, 4]", "valid": false, "passed": false, "elapsed_seconds": 0.39345952100120485, "request_number": 4}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " [[1, 2, 4, 3, 5]]", "valid": false, "passed": false, "elapsed_seconds": 0.20032131799962372, "request_number": 5}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04682653199415654, "request_number": 6}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " [1,2,3,4,5]", "valid": false, "passed": false, "elapsed_seconds": 0.13738810499489773, "request_number": 7}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": "  ", "valid": false, "passed": false, "elapsed_seconds": 0.02247302301111631, "request_number": 8}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.022141913999803364, "request_number": 9}
-{"case_id": "easy-5-08", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " [1,3]", "valid": false, "passed": false, "elapsed_seconds": 0.07013029199151788, "request_number": 10}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.08219124199240468, "request_number": 1}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01892038200458046, "request_number": 2}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " [[2, 4, 1, 4, 3], [4, 4, 2, 4, 2], [1", "valid": false, "passed": false, "elapsed_seconds": 0.397650712999166, "request_number": 3}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " []", "valid": false, "passed": false, "elapsed_seconds": 0.020103423987166025, "request_number": 4}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02226311700360384, "request_number": 5}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02318204900075216, "request_number": 6}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " ```json", "valid": false, "passed": false, "elapsed_seconds": 0.04835185898991767, "request_number": 7}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019743513999856077, "request_number": 8}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": " [2, 4, 1, 5, 3]", "valid": false, "passed": false, "elapsed_seconds": 0.19415643200045452, "request_number": 9}
-{"case_id": "easy-5-09", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " \u00a0\u00a0[]", "valid": false, "passed": false, "elapsed_seconds": 0.04692886900738813, "request_number": 10}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 1, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.05832746499800123, "request_number": 1}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 2, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02573157699953299, "request_number": 2}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 3, "output": " [1, 2, 4, 2, 3]", "valid": true, "passed": false, "elapsed_seconds": 0.19069301499985158, "request_number": 3}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 4, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.03130634600529447, "request_number": 4}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 5, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01902921400323976, "request_number": 5}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 6, "output": " 1, 2, 2, 3, 4", "valid": false, "passed": false, "elapsed_seconds": 0.19759177500964142, "request_number": 6}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 7, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.019096602001809515, "request_number": 7}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 8, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.01914948198827915, "request_number": 8}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 9, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.02374125600908883, "request_number": 9}
-{"case_id": "easy-5-10", "missing_count": 5, "mode": "baseline", "attempt": 10, "output": " ", "valid": false, "passed": false, "elapsed_seconds": 0.021357125995564274, "request_number": 10}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[2,3]", "valid": true, "passed": true, "elapsed_seconds": 0.28909766700235195, "request_number": 1}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[2,3]", "valid": true, "passed": true, "elapsed_seconds": 0.11322311199910473, "request_number": 2}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[2,3]", "valid": true, "passed": true, "elapsed_seconds": 0.11499315399851184, "request_number": 3}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[2,3]", "valid": true, "passed": true, "elapsed_seconds": 0.11797556999954395, "request_number": 4}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[2,3]", "valid": true, "passed": true, "elapsed_seconds": 0.13223881799785886, "request_number": 5}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.13150823800242506, "request_number": 6}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[2,3]", "valid": true, "passed": true, "elapsed_seconds": 0.11984435000340454, "request_number": 7}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.13196971399884205, "request_number": 8}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11755368400190491, "request_number": 9}
+{"case_id": "easy-2-01", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11536599800456315, "request_number": 10}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.22178706999693532, "request_number": 1}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11880537099204957, "request_number": 2}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11322095699142665, "request_number": 3}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11339155299356207, "request_number": 4}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11785959400003776, "request_number": 5}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11478109699964989, "request_number": 6}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11755310599983204, "request_number": 7}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11576649399648886, "request_number": 8}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11538103299972136, "request_number": 9}
+{"case_id": "easy-2-02", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1163955500087468, "request_number": 10}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.21711867199337576, "request_number": 1}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11513797400402837, "request_number": 2}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11586275699664839, "request_number": 3}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11781181000696961, "request_number": 4}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11646780800947454, "request_number": 5}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11738669199985452, "request_number": 6}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1150520509982016, "request_number": 7}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11573199699341785, "request_number": 8}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1183608059945982, "request_number": 9}
+{"case_id": "easy-2-03", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11788790099672042, "request_number": 10}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.21540770599676762, "request_number": 1}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12095339299412444, "request_number": 2}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1228063800081145, "request_number": 3}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12124060100177303, "request_number": 4}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11779966299945954, "request_number": 5}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11677058799250517, "request_number": 6}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.14601722100633197, "request_number": 7}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.13501447699673008, "request_number": 8}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12120429100468755, "request_number": 9}
+{"case_id": "easy-2-04", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11851093600853346, "request_number": 10}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.2132211050047772, "request_number": 1}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[2,4]", "valid": true, "passed": false, "elapsed_seconds": 0.11356102500576526, "request_number": 2}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11600648699095473, "request_number": 3}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1160077189997537, "request_number": 4}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[\"1\", \"4\"]", "valid": false, "passed": false, "elapsed_seconds": 0.1348914039990632, "request_number": 5}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11585902200022247, "request_number": 6}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11555907300498802, "request_number": 7}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11663621800835244, "request_number": 8}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11710717401001602, "request_number": 9}
+{"case_id": "easy-2-05", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11879373600822873, "request_number": 10}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.21580783399986103, "request_number": 1}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11466416000621393, "request_number": 2}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11666930999490432, "request_number": 3}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11687509999319445, "request_number": 4}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1200455520011019, "request_number": 5}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11433384500560351, "request_number": 6}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11609913800202776, "request_number": 7}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11617240899067838, "request_number": 8}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11646705100429244, "request_number": 9}
+{"case_id": "easy-2-06", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11690417099453043, "request_number": 10}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.21520954801235348, "request_number": 1}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11672778500360437, "request_number": 2}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11594822800543625, "request_number": 3}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12391415500314906, "request_number": 4}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[\"2\", \"1\"]", "valid": false, "passed": false, "elapsed_seconds": 0.1319632249942515, "request_number": 5}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12304789701011032, "request_number": 6}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[\"2\", \"1\"]", "valid": false, "passed": false, "elapsed_seconds": 0.13756146300875116, "request_number": 7}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12234012100088876, "request_number": 8}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11317975999554619, "request_number": 9}
+{"case_id": "easy-2-07", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1204399319976801, "request_number": 10}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.21618992699950468, "request_number": 1}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11172981500567403, "request_number": 2}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12207184299768414, "request_number": 3}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1161355419899337, "request_number": 4}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.115775960002793, "request_number": 5}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11564865500258747, "request_number": 6}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12682072100869846, "request_number": 7}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11795439200068358, "request_number": 8}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12205864599673077, "request_number": 9}
+{"case_id": "easy-2-08", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.11187543500273023, "request_number": 10}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.2182347889902303, "request_number": 1}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.12217781200888567, "request_number": 2}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.13437825300206896, "request_number": 3}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.14896300400141627, "request_number": 4}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.1364581410016399, "request_number": 5}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[2,4]", "valid": true, "passed": false, "elapsed_seconds": 0.12656657300249208, "request_number": 6}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.1444774030096596, "request_number": 7}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[2,4]", "valid": true, "passed": false, "elapsed_seconds": 0.13362762800534256, "request_number": 8}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[2,4]", "valid": true, "passed": false, "elapsed_seconds": 0.18394016900856514, "request_number": 9}
+{"case_id": "easy-2-09", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[2,4]", "valid": true, "passed": false, "elapsed_seconds": 0.1362424000108149, "request_number": 10}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 1, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.24719552500755526, "request_number": 1}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 2, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1445346729888115, "request_number": 2}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 3, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1543856210046215, "request_number": 3}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 4, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.16498885599139612, "request_number": 4}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 5, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.17900033200567123, "request_number": 5}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 6, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.13596770600997843, "request_number": 6}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 7, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.13753555600123946, "request_number": 7}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 8, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.12084682199929375, "request_number": 8}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 9, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.15384945899131708, "request_number": 9}
+{"case_id": "easy-2-10", "missing_count": 2, "mode": "baseline", "attempt": 10, "output": "[2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.14684869300981518, "request_number": 10}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.4500526959891431, "request_number": 1}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[4,3,2]", "valid": true, "passed": false, "elapsed_seconds": 0.1765490569960093, "request_number": 2}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.16624555599992163, "request_number": 3}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.18344185600290075, "request_number": 4}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[4,3,2]", "valid": true, "passed": false, "elapsed_seconds": 0.1797897189971991, "request_number": 5}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[4, 3, 2]", "valid": true, "passed": false, "elapsed_seconds": 0.20246136300556827, "request_number": 6}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[4,3,2]", "valid": true, "passed": false, "elapsed_seconds": 0.1816805319976993, "request_number": 7}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[4,3,2]", "valid": true, "passed": false, "elapsed_seconds": 0.180770922001102, "request_number": 8}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[3,1,2]", "valid": true, "passed": false, "elapsed_seconds": 0.1758694580057636, "request_number": 9}
+{"case_id": "easy-3-01", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.1807752610038733, "request_number": 10}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[3, 1, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.3368515239999397, "request_number": 1}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19298826999147423, "request_number": 2}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[3,5,2]", "valid": false, "passed": false, "elapsed_seconds": 0.19828911501099356, "request_number": 3}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1652773240057286, "request_number": 4}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.17132502999447752, "request_number": 5}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[3,4,2]", "valid": true, "passed": true, "elapsed_seconds": 0.169963687993004, "request_number": 6}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[3,4,2]", "valid": true, "passed": true, "elapsed_seconds": 0.17940663600165863, "request_number": 7}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1875207700068131, "request_number": 8}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18032743599906098, "request_number": 9}
+{"case_id": "easy-3-02", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1776156279956922, "request_number": 10}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[2,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.3005375799984904, "request_number": 1}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[1,2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.18140141500043683, "request_number": 2}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[3, 1, 2]", "valid": true, "passed": false, "elapsed_seconds": 0.2077053800021531, "request_number": 3}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[1,2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.17678137100301683, "request_number": 4}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[3, 1, 2]", "valid": true, "passed": false, "elapsed_seconds": 0.2218487019999884, "request_number": 5}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[2,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1891782599996077, "request_number": 6}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[3, 2, 1]", "valid": true, "passed": false, "elapsed_seconds": 0.20950323999568354, "request_number": 7}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[2,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1521587690076558, "request_number": 8}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[2,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.15309067400812637, "request_number": 9}
+{"case_id": "easy-3-03", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.15275909200136084, "request_number": 10}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.28618088700750377, "request_number": 1}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.15327879101096187, "request_number": 2}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.14640642100130208, "request_number": 3}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.14911283100082073, "request_number": 4}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.14900874100567307, "request_number": 5}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[2,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.15493659299681894, "request_number": 6}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.15939218399580568, "request_number": 7}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.15185897299670614, "request_number": 8}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.15136264599277638, "request_number": 9}
+{"case_id": "easy-3-04", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.17395241399935912, "request_number": 10}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[3,5,4]", "valid": false, "passed": false, "elapsed_seconds": 0.31398453399015125, "request_number": 1}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[3, 2, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.22748014699027408, "request_number": 2}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[3, 2, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.2043531509989407, "request_number": 3}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[3,6,4]", "valid": false, "passed": false, "elapsed_seconds": 0.14628646400524303, "request_number": 4}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[1,2,4]", "valid": true, "passed": false, "elapsed_seconds": 0.1500327790126903, "request_number": 5}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[3,4,4]", "valid": true, "passed": false, "elapsed_seconds": 0.18697035999502987, "request_number": 6}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[3, 2, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.2297791960008908, "request_number": 7}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[3, 1, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.31088821099547204, "request_number": 8}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[4, 3, 2]", "valid": true, "passed": false, "elapsed_seconds": 0.27603097099927254, "request_number": 9}
+{"case_id": "easy-3-05", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[3,7,4]", "valid": false, "passed": false, "elapsed_seconds": 0.18358403100864962, "request_number": 10}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[2,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.3065612619975582, "request_number": 1}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.19220687400957104, "request_number": 2}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[2,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19921641699329484, "request_number": 3}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[2,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.20078669299255125, "request_number": 4}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[2,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.20369358100288082, "request_number": 5}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.20630693100974895, "request_number": 6}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.20544962999701966, "request_number": 7}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[2,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.2096817209967412, "request_number": 8}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[2,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18174342100974172, "request_number": 9}
+{"case_id": "easy-3-06", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[2,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1742415280023124, "request_number": 10}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[2,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.30652399999962654, "request_number": 1}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[2,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.17061178700532764, "request_number": 2}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[1,2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1652614740014542, "request_number": 3}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[2,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.16998773800150957, "request_number": 4}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[2,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.17899465700611472, "request_number": 5}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[2,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.17139345900795888, "request_number": 6}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[1,2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.18269301400869153, "request_number": 7}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[1,2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.17175503200269304, "request_number": 8}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[1,2,3]", "valid": true, "passed": false, "elapsed_seconds": 0.1730636699940078, "request_number": 9}
+{"case_id": "easy-3-07", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[2,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.16738671800703742, "request_number": 10}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[3,1,4]", "valid": true, "passed": false, "elapsed_seconds": 0.3020881789998384, "request_number": 1}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[3, 1, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.21383640699787065, "request_number": 2}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[3,1,4]", "valid": true, "passed": false, "elapsed_seconds": 0.16727053000067826, "request_number": 3}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.18047512399789412, "request_number": 4}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[3,1,4]", "valid": true, "passed": false, "elapsed_seconds": 0.20318440299888607, "request_number": 5}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[3,1,4]", "valid": true, "passed": false, "elapsed_seconds": 0.1923522309953114, "request_number": 6}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.1773109109926736, "request_number": 7}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[3, 1, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.20939898600045126, "request_number": 8}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[3,1,4]", "valid": true, "passed": false, "elapsed_seconds": 0.16888079199998174, "request_number": 9}
+{"case_id": "easy-3-08", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[3,1,4]", "valid": true, "passed": false, "elapsed_seconds": 0.17144170099345502, "request_number": 10}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.31124635599553585, "request_number": 1}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.18692697199003305, "request_number": 2}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.19041122899216134, "request_number": 3}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.20524983800714836, "request_number": 4}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.18628447801165748, "request_number": 5}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.18527175700000953, "request_number": 6}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.189909657012322, "request_number": 7}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.17276686200057156, "request_number": 8}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.20469109299301635, "request_number": 9}
+{"case_id": "easy-3-09", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.1913471389998449, "request_number": 10}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 1, "output": "[1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.2872114700003294, "request_number": 1}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 2, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.17655883799307048, "request_number": 2}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 3, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.17430802500166465, "request_number": 3}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 4, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.19483064800442662, "request_number": 4}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 5, "output": "[3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1719337320100749, "request_number": 5}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 6, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.20241832199099008, "request_number": 6}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 7, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.2118373240082292, "request_number": 7}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 8, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.1741789989901008, "request_number": 8}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 9, "output": "[2,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.21947424700192641, "request_number": 9}
+{"case_id": "easy-3-10", "missing_count": 3, "mode": "baseline", "attempt": 10, "output": "[2,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.15604466799413785, "request_number": 10}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.4629055050027091, "request_number": 1}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18752446500002407, "request_number": 2}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1929637970024487, "request_number": 3}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19141207799839322, "request_number": 4}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19090840900025796, "request_number": 5}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18959382899629418, "request_number": 6}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[\"2\", \"3\", \"4\", \"1\"]", "valid": false, "passed": false, "elapsed_seconds": 0.24572596700454596, "request_number": 7}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19137005199445412, "request_number": 8}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19006341698695906, "request_number": 9}
+{"case_id": "easy-4-01", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.188815538000199, "request_number": 10}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.34202740200271364, "request_number": 1}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.20142697599658277, "request_number": 2}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19960431799700018, "request_number": 3}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18957372699514963, "request_number": 4}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19282810000004247, "request_number": 5}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19345484899531584, "request_number": 6}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19131311199453194, "request_number": 7}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.21557381299498957, "request_number": 8}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1890078069991432, "request_number": 9}
+{"case_id": "easy-4-02", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.20345482099219225, "request_number": 10}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[\"1\", \"3\", \"4\", \"2\"]", "valid": false, "passed": false, "elapsed_seconds": 0.38407338099204935, "request_number": 1}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19310682300420012, "request_number": 2}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1986216679943027, "request_number": 3}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19498188099532854, "request_number": 4}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19191187700198498, "request_number": 5}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19304247800027952, "request_number": 6}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19787938900117297, "request_number": 7}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.20295045799866784, "request_number": 8}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.20705144600651693, "request_number": 9}
+{"case_id": "easy-4-03", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19235910699353553, "request_number": 10}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[3, 4, 2, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.37530085700564086, "request_number": 1}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[3, 4, 1, 2]", "valid": true, "passed": false, "elapsed_seconds": 0.2808287450025091, "request_number": 2}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[3, 4, 1, 2]", "valid": true, "passed": false, "elapsed_seconds": 0.2562186169961933, "request_number": 3}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[3, 2, 4, 2]", "valid": true, "passed": false, "elapsed_seconds": 0.2537956690066494, "request_number": 4}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,4,3,2]", "valid": true, "passed": false, "elapsed_seconds": 0.19676218400127254, "request_number": 5}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[1,4,3,2]", "valid": true, "passed": false, "elapsed_seconds": 0.19745259199407883, "request_number": 6}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[3, 4, 2, 4]", "valid": true, "passed": false, "elapsed_seconds": 0.24632350300089456, "request_number": 7}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[3, 2, 4, 2]", "valid": true, "passed": false, "elapsed_seconds": 0.24274211599549744, "request_number": 8}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.20865827999659814, "request_number": 9}
+{"case_id": "easy-4-04", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1882174360071076, "request_number": 10}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.344470469004591, "request_number": 1}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.18837850700947456, "request_number": 2}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.18611869899905287, "request_number": 3}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.18738644898985513, "request_number": 4}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.19161078199977055, "request_number": 5}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.19053851600619964, "request_number": 6}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.18965573199966457, "request_number": 7}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[3,4,1,2]", "valid": true, "passed": false, "elapsed_seconds": 0.18948265101062134, "request_number": 8}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.19255155199789442, "request_number": 9}
+{"case_id": "easy-4-05", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,4,1,3]", "valid": true, "passed": false, "elapsed_seconds": 0.22122100499109365, "request_number": 10}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.3250970860099187, "request_number": 1}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[2,1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.19305050700495485, "request_number": 2}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[2,1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.18841428200539667, "request_number": 3}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19326416699914262, "request_number": 4}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18693654899834655, "request_number": 5}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19335241199587472, "request_number": 6}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18896287100506015, "request_number": 7}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[2,1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.1868171489913948, "request_number": 8}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19087962500634603, "request_number": 9}
+{"case_id": "easy-4-06", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,1,3,4]", "valid": true, "passed": false, "elapsed_seconds": 0.18800845800433308, "request_number": 10}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.3275764279969735, "request_number": 1}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1940396790014347, "request_number": 2}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19286961198667996, "request_number": 3}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19175058300606906, "request_number": 4}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18964253600279335, "request_number": 5}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19323575501039159, "request_number": 6}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19147443999827374, "request_number": 7}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18908174699754454, "request_number": 8}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19002921599894762, "request_number": 9}
+{"case_id": "easy-4-07", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.194280315990909, "request_number": 10}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[2,3,4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.3280636349954875, "request_number": 1}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[2, 6, 1, 3]", "valid": false, "passed": false, "elapsed_seconds": 0.2524097239947878, "request_number": 2}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[2,7,1,3]", "valid": false, "passed": false, "elapsed_seconds": 0.19330692900985014, "request_number": 3}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[2, 4, 1, 3]", "valid": true, "passed": false, "elapsed_seconds": 0.24740662200201768, "request_number": 4}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,7,1,3]", "valid": false, "passed": false, "elapsed_seconds": 0.1898242070019478, "request_number": 5}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[2,6,1,3]", "valid": false, "passed": false, "elapsed_seconds": 0.1912922810006421, "request_number": 6}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[2,1,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.19057957900804467, "request_number": 7}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[2,3,4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.19505817600293085, "request_number": 8}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,3,4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.2133847780060023, "request_number": 9}
+{"case_id": "easy-4-08", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,3,1,4]", "valid": true, "passed": false, "elapsed_seconds": 0.1910255670081824, "request_number": 10}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.32862695401126985, "request_number": 1}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1925091680022888, "request_number": 2}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[1,3,4,2]", "valid": true, "passed": false, "elapsed_seconds": 0.19000279299507383, "request_number": 3}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.2007663539989153, "request_number": 4}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19161748299666215, "request_number": 5}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19136689699371345, "request_number": 6}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19906968300347216, "request_number": 7}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.18959318300767336, "request_number": 8}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19168182100111153, "request_number": 9}
+{"case_id": "easy-4-09", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19264977499551605, "request_number": 10}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 1, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.3266242169920588, "request_number": 1}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 2, "output": "[2,1,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.18966453499160707, "request_number": 2}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 3, "output": "[3, 2, 4, 1]", "valid": true, "passed": false, "elapsed_seconds": 0.2599539829971036, "request_number": 3}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 4, "output": "[4, 2, 3, 1]", "valid": true, "passed": false, "elapsed_seconds": 0.24716134800110012, "request_number": 4}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 5, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1937221599946497, "request_number": 5}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 6, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19008012500125915, "request_number": 6}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 7, "output": "[2,1,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.18799787999887485, "request_number": 7}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 8, "output": "[2,4,3,1]", "valid": true, "passed": false, "elapsed_seconds": 0.19025860000692774, "request_number": 8}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 9, "output": "[2,3,4,1]", "valid": true, "passed": false, "elapsed_seconds": 0.1894607299909694, "request_number": 9}
+{"case_id": "easy-4-10", "missing_count": 4, "mode": "baseline", "attempt": 10, "output": "[2,1,4,3]", "valid": true, "passed": false, "elapsed_seconds": 0.18964211699494626, "request_number": 10}

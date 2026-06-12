@@ -22,7 +22,7 @@ from common import (
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
-    parser.add_argument("--missing", type=int, choices=(3, 4, 5))
+    parser.add_argument("--missing", type=int, choices=(2, 3, 4))
     parser.add_argument("--index", type=int)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--attempts", type=int, default=10)

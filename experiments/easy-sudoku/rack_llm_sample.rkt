@@ -19,7 +19,7 @@
 
 (define answer
   (append
-   (list (lit " ["))
+   (list (lit "["))
    (apply append
           (for/list ([index (in-range answer-length)])
             (if (zero? index)
@@ -27,11 +27,26 @@
                 (list (lit ",") digit))))
    (list (lit "]"))))
 
+(define (qwen-prompt transcript prefix)
+  (define messages
+    (apply
+     string-append
+     (for/list ([msg transcript])
+       (format "<|im_start|>~a\n~a<|im_end|>\n"
+               (message-role msg)
+               (if (eq? (message-role msg) 'user)
+                   (string-append (message->string msg) "\n/no_think")
+                   (message->string msg))))))
+  (string-append messages
+                 "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+                 prefix))
+
 (define base-oracle
   (make-llama-cpp-llm
    #:server-url (hash-ref request 'server_url)
    #:n-probs (hash-ref request 'n_probs)
-   #:temperature (hash-ref request 'temperature)))
+   #:temperature (hash-ref request 'temperature)
+   #:render-prompt qwen-prompt))
 
 (define oracle-calls 0)
 

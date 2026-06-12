@@ -12,9 +12,9 @@ move validation, and puzzle execution use `ppbench==0.1.0`.
 From the repository root:
 
 ```bash
-python -m venv venv
-venv/bin/pip install ppbench==0.1.0 requests
+pip install ppbench==0.1.0 requests
 
+make deps
 make model
 
 .deps/llama.cpp/build/bin/llama-server \
@@ -30,29 +30,16 @@ make model
 
 ## Run
 
-One puzzle:
-
-```bash
-venv/bin/python experiments/ppbench/run_baseline.py \
-  --index 0 --attempts 10 --show-output
-
-venv/bin/python experiments/ppbench/run_rack_llm.py \
-  --index 0 --show-output
-```
-
 All 30 puzzles:
 
 ```bash
-venv/bin/python experiments/ppbench/run_baseline.py \
+python -u experiments/ppbench/run_baseline.py \
   --attempts 10 2>&1 | tee ppbench-baseline.log
 
-venv/bin/python experiments/ppbench/run_rack_llm.py \
+python -u experiments/ppbench/run_rack_llm.py \
   2>&1 | tee ppbench-rack-llm.log
 ```
 
-Use `--timeout SECONDS` for a per-puzzle rack-llm timeout. Without it, the
-search is allowed to run until ten complete outputs are found or the stream
-ends.
 
 ## Grammar
 

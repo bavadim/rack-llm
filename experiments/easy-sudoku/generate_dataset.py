@@ -115,7 +115,7 @@ def generate(seed=20260612, cases_per_level=10):
     rng = random.Random(seed)
     return [
         make_case(rng, missing_count, case_number)
-        for missing_count in (3, 4, 5)
+        for missing_count in (2, 3, 4)
         for case_number in range(1, cases_per_level + 1)
     ]
 
