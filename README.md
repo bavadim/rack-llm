@@ -62,6 +62,35 @@ Output: a JSON string with `status` and `retry`.
 (message->string (last result))
 ```
 
+## Repetition
+
+`at-least-once` accepts a grammar and matches one or more repetitions of it.
+The grammar may contain multiple expressions, including separators:
+
+```racket
+(define item
+  (select (list (lit "\"red\""))
+          (list (list (lit "\"blue\"")))))
+
+(define tail
+  (select
+   '()
+   (list
+    (list
+     (at-least-once
+      (list (lit ", ") item))))))
+
+(define result
+  (stream-first
+   (llm-eval complete
+             (list
+              (assistant (lit "[") item tail (lit "]"))))))
+
+(message->string (last result))
+```
+
+The evaluated `repeated` value stores the matched text in `repeated-text`.
+
 ## Calculator
 
 Task: solve a tiny arithmetic problem.

@@ -10,6 +10,23 @@
 (provide decode-body)
 
 (define-type GumbelScore Flonum)
+(define-type SeenTexts (Immutable-HashTable String True))
+
+(: rendered-value-text (-> value String))
+(define (rendered-value-text v)
+  (cond
+    [(lit? v) (lit-value v)]
+    [(generated? v) (generated-text v)]
+    [(selected? v) (rendered-body-text (selected-choice v))]
+    [(repeated? v) (repeated-text v)]
+    [else (error 'decode-body "unsupported evaluated value: ~e" v)]))
+
+(: rendered-body-text (-> EvaluatedBody String))
+(define (rendered-body-text body)
+  (apply string-append (map rendered-value-text body)))
+
+;; Repetition is unbounded in the AST, so decoding still needs an operational cap.
+(define repeating-search-budget : TokenBudget 256)
 
 (struct frontier-node
   ([depth : TokenBudget]
@@ -39,19 +56,41 @@
 
 (: gumbel-stream (-> (-> FrontierNode (Listof FrontierNode)) FrontierNode EvaluatedBodyStream))
 (define (gumbel-stream expand root)
-  (: step (-> FrontierAgenda EvaluatedBodyStream))
-  (define (step queue)
+  (: emit-unique
+     (-> (Listof EvaluatedBody)
+         SeenTexts
+         (-> SeenTexts EvaluatedBodyStream)
+         EvaluatedBodyStream))
+  (define (emit-unique bodies seen continue)
+    (cond
+      [(null? bodies) (continue seen)]
+      [else
+       (define body (car bodies))
+       (define text (rendered-body-text body))
+       (cond
+         [(hash-has-key? seen text)
+          (emit-unique (cdr bodies) seen continue)]
+         [else
+          (define next-seen (hash-set seen text #t))
+          (stream-cons body
+                       (emit-unique (cdr bodies) next-seen continue))])]))
+
+  (: step (-> FrontierAgenda SeenTexts EvaluatedBodyStream))
+  (define (step queue seen)
     (define next (agenda-pop queue))
     (cond
       [(not next) empty-stream]
       [else
        (define current (agenda-view-item next))
        (define rest (agenda-view-rest next))
-       (stream-append-lazy
+       (emit-unique
         (frontier-yields current)
-        (lambda ()
-          (step (agenda-push* rest (frontier-successors expand current)))))]))
-  (step (agenda-singleton frontier-better? root)))
+        seen
+        (lambda (next-seen)
+          (step (agenda-push* rest (frontier-successors expand current))
+                next-seen)))]))
+  (step (agenda-singleton frontier-better? root)
+        (ann (hash) SeenTexts)))
 
 (: frontier-expander (-> TokenOracle EvaluatedProgram TokenBudget (-> FrontierNode (Listof FrontierNode))))
 (define (frontier-expander oracle transcript max-depth)
@@ -124,7 +163,26 @@
 
 (: search-budget (-> Grammar TokenBudget))
 (define (search-budget target)
-  (max 8 (+ 16 (target-token-budget target))))
+  (max 8
+       (+ 16 (target-token-budget target))
+       (if (grammar-repeats? target)
+           repeating-search-budget
+           0)))
+
+(: grammar-repeats? (-> Grammar Boolean))
+(define (grammar-repeats? grammar)
+  (ormap expr-repeats? grammar))
+
+(: expr-repeats? (-> expr Boolean))
+(define (expr-repeats? e)
+  (cond
+    [(at-least-once? e) #t]
+    [(select? e)
+     (ormap grammar-repeats?
+            (cons (select-first e) (select-rest e)))]
+    [(selected? e)
+     (grammar-repeats? (selected-choice e))]
+    [else #f]))
 
 ;; Agenda
 

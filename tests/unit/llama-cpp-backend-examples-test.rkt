@@ -60,7 +60,61 @@
                      (list (selected choice (list (lit "ab")))
                            (lit "c")))))
      (check-equal? (selected-choice (first (message-body (first result))))
-                   (list (lit "ab"))))))
+                   (list (lit "ab"))))
+
+   (test-case "backend accepts a custom prompt renderer"
+     (define captured-prompts (box '()))
+     (define (render-prompt transcript prefix)
+       (format "messages=~a; assistant=~a"
+               (length transcript)
+               prefix))
+     (define complete
+       (make-llama-cpp-llm
+        #:render-prompt render-prompt
+        #:generate
+        (lambda (prompt)
+          (set-box! captured-prompts (cons prompt (unbox captured-prompts)))
+          (list (token-candidate "a" 0.0)))))
+     (define choice
+       (select (list (lit "a"))
+               (list (list (lit "b")))))
+
+     (stream-first
+      (eval complete
+            (list
+             (user (lit "Return a."))
+             (assistant choice))))
+
+     (check-equal? (last (unbox captured-prompts))
+                   "messages=1; assistant="))
+
+   (test-case "evaluated repetitions render into later prompts"
+     (define captured-prompts (box '()))
+     (define repeated-as
+       (at-least-once (list (lit "a"))))
+     (define complete
+       (make-llama-cpp-llm
+        #:generate
+        (lambda (prompt)
+          (set-box! captured-prompts (cons prompt (unbox captured-prompts)))
+          (if (string=? prompt "")
+              (list (token-candidate "aa" 0.0))
+              (list (token-candidate "ok" 0.0))))))
+
+     (define result
+       (stream-first
+        (eval complete
+              (list
+               (assistant repeated-as)
+               (assistant (gen 2))))))
+
+     (check-equal?
+      result
+      (list
+       (message 'assistant (list (repeated repeated-as "aa")))
+       (message 'assistant (list (generated (gen 2) "ok")))))
+     (check-not-false
+      (member "assistant: aa" (unbox captured-prompts))))))
 
 (module+ test
   (require rackunit/text-ui)
