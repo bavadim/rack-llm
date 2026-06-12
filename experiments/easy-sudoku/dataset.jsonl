@@ -1,0 +1,30 @@
+{"id": "easy-3-01", "missing_count": 3, "puzzle": ["431.", "2134", "1.4.", "3421"], "cells": ["r1c4", "r3c2", "r3c4"], "answer": [2, 2, 3]}
+{"id": "easy-3-02", "missing_count": 3, "puzzle": ["..12", "1234", "4321", "21.3"], "cells": ["r1c1", "r1c2", "r4c3"], "answer": [3, 4, 4]}
+{"id": "easy-3-03", "missing_count": 3, "puzzle": ["2314", "4132", "32..", "14.3"], "cells": ["r3c3", "r3c4", "r4c3"], "answer": [4, 1, 2]}
+{"id": "easy-3-04", "missing_count": 3, "puzzle": ["1342", "2.31", "4.13", "312."], "cells": ["r2c2", "r3c2", "r4c4"], "answer": [4, 2, 4]}
+{"id": "easy-3-05", "missing_count": 3, "puzzle": ["324.", "1423", "4.3.", "2314"], "cells": ["r1c4", "r3c2", "r3c4"], "answer": [1, 1, 2]}
+{"id": "easy-3-06", "missing_count": 3, "puzzle": ["1423", "32..", "2314", "413."], "cells": ["r2c3", "r2c4", "r4c4"], "answer": [4, 1, 2]}
+{"id": "easy-3-07", "missing_count": 3, "puzzle": ["321.", ".432", "23.1", "4123"], "cells": ["r1c4", "r2c1", "r3c3"], "answer": [4, 1, 4]}
+{"id": "easy-3-08", "missing_count": 3, "puzzle": [".3.2", "2134", "1243", "342."], "cells": ["r1c1", "r1c3", "r4c4"], "answer": [4, 1, 1]}
+{"id": "easy-3-09", "missing_count": 3, "puzzle": ["4213", "3..4", "1.42", "2431"], "cells": ["r2c2", "r2c3", "r3c2"], "answer": [1, 2, 3]}
+{"id": "easy-3-10", "missing_count": 3, "puzzle": ["314.", "4231", "13.4", "241."], "cells": ["r1c4", "r3c3", "r4c4"], "answer": [2, 2, 3]}
+{"id": "easy-4-01", "missing_count": 4, "puzzle": [".1.4", ".312", "3421", "1.43"], "cells": ["r1c1", "r1c3", "r2c1", "r4c2"], "answer": [2, 3, 4, 2]}
+{"id": "easy-4-02", "missing_count": 4, "puzzle": [".243", "..12", "2.34", "3421"], "cells": ["r1c1", "r2c1", "r2c2", "r3c2"], "answer": [1, 4, 3, 1]}
+{"id": "easy-4-03", "missing_count": 4, "puzzle": ["4..2", "2314", "3241", "..23"], "cells": ["r1c2", "r1c3", "r4c1", "r4c2"], "answer": [1, 3, 1, 4]}
+{"id": "easy-4-04", "missing_count": 4, "puzzle": ["1.32", "2341", ".214", ".12."], "cells": ["r1c2", "r3c1", "r4c1", "r4c4"], "answer": [4, 3, 4, 3]}
+{"id": "easy-4-05", "missing_count": 4, "puzzle": ["4..1", "1234", ".1.3", "3412"], "cells": ["r1c2", "r1c3", "r3c1", "r3c3"], "answer": [3, 2, 2, 4]}
+{"id": "easy-4-06", "missing_count": 4, "puzzle": ["4213", ".342", "243.", "3.2."], "cells": ["r2c1", "r3c4", "r4c2", "r4c4"], "answer": [1, 1, 1, 4]}
+{"id": "easy-4-07", "missing_count": 4, "puzzle": ["2134", "34..", "1..3", "4312"], "cells": ["r2c3", "r2c4", "r3c2", "r3c3"], "answer": [2, 1, 2, 4]}
+{"id": "easy-4-08", "missing_count": 4, "puzzle": ["431.", "2134", "124.", ".4.1"], "cells": ["r1c4", "r3c4", "r4c1", "r4c3"], "answer": [2, 3, 3, 2]}
+{"id": "easy-4-09", "missing_count": 4, "puzzle": ["42..", "1.4.", "2431", "3124"], "cells": ["r1c3", "r1c4", "r2c2", "r2c4"], "answer": [1, 3, 3, 2]}
+{"id": "easy-4-10", "missing_count": 4, "puzzle": ["1324", ".2..", ".142", "2413"], "cells": ["r2c1", "r2c3", "r2c4", "r3c1"], "answer": [4, 3, 1, 3]}
+{"id": "easy-5-01", "missing_count": 5, "puzzle": ["4312", ".1..", "1.43", "34.1"], "cells": ["r2c1", "r2c3", "r2c4", "r3c2", "r4c3"], "answer": [2, 3, 4, 2, 2]}
+{"id": "easy-5-02", "missing_count": 5, "puzzle": ["24.1", ".34.", "312.", "421."], "cells": ["r1c3", "r2c1", "r2c4", "r3c4", "r4c4"], "answer": [3, 1, 2, 4, 3]}
+{"id": "easy-5-03", "missing_count": 5, "puzzle": ["2.3.", "4312", "..2.", "1243"], "cells": ["r1c2", "r1c4", "r3c1", "r3c2", "r3c4"], "answer": [1, 4, 3, 4, 1]}
+{"id": "easy-5-04", "missing_count": 5, "puzzle": ["123.", ".41.", "214.", ".321"], "cells": ["r1c4", "r2c1", "r2c4", "r3c4", "r4c1"], "answer": [4, 3, 2, 3, 4]}
+{"id": "easy-5-05", "missing_count": 5, "puzzle": ["42..", "13.2", "31..", "2431"], "cells": ["r1c3", "r1c4", "r2c3", "r3c3", "r3c4"], "answer": [1, 3, 4, 2, 4]}
+{"id": "easy-5-06", "missing_count": 5, "puzzle": ["3.24", "243.", ".342", "42.."], "cells": ["r1c2", "r2c4", "r3c1", "r4c3", "r4c4"], "answer": [1, 1, 1, 1, 3]}
+{"id": "easy-5-07", "missing_count": 5, "puzzle": ["3214", ".432", ".34.", ".1.3"], "cells": ["r2c1", "r3c1", "r3c4", "r4c1", "r4c3"], "answer": [1, 2, 1, 4, 2]}
+{"id": "easy-5-08", "missing_count": 5, "puzzle": ["..24", "4.13", "2.31", "1.42"], "cells": ["r1c1", "r1c2", "r2c2", "r3c2", "r4c2"], "answer": [3, 1, 2, 4, 3]}
+{"id": "easy-5-09", "missing_count": 5, "puzzle": ["4312", "2..4", ".4..", "1243"], "cells": ["r2c2", "r2c3", "r3c1", "r3c3", "r3c4"], "answer": [1, 3, 3, 2, 1]}
+{"id": "easy-5-10", "missing_count": 5, "puzzle": ["3241", ".1.2", "..23", ".314"], "cells": ["r2c1", "r2c3", "r3c1", "r3c2", "r4c1"], "answer": [4, 3, 1, 4, 2]}
