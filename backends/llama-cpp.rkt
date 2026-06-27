@@ -1,9 +1,9 @@
 #lang typed/racket/base
 
 (require racket/port
-         racket/string
          typed/json
          typed/net/url
+         "../providers/prompt-rendering.rkt"
          "../main.rkt")
 
 (provide make-llama-cpp-llm)
@@ -103,23 +103,7 @@
 
 (: oracle-prompt (-> EvaluatedProgram String Prompt))
 (define (oracle-prompt transcript prefix)
-  (prompt+prefix (render-transcript transcript) prefix))
-
-(: prompt+prefix (-> Prompt String Prompt))
-(define (prompt+prefix prompt prefix)
-  (cond
-    [(string=? prompt "") prefix]
-    [(string=? prefix "") prompt]
-    [else (string-append prompt "\n" prefix)]))
-
-(: render-transcript (-> EvaluatedProgram Prompt))
-(define (render-transcript messages)
-  (string-join
-   (for/list : (Listof String) ([msg (in-list messages)])
-     (format "~a: ~a"
-             (symbol->string (message-role msg))
-             (message->string msg)))
-   "\n"))
+  (plain-renderer transcript prefix))
 
 ;; Response decoding
 

@@ -1,114 +1,141 @@
 # rack-llm
 
-`rack-llm` is a small Racket library for writing LLM programs and reading a
-lazy stream of valid results.
+`rack-llm` is a small Racket library for grammar-constrained LLM generation,
+weak-rule acceptance, and reproducible local experiment traces.
+
+The release core is:
+
+```text
+grammar -> Gumbel stream -> weak rules -> thresholded acceptance -> traces/metrics
+```
 
 ## Install
 
 ```bash
 raco pkg install --auto
-raco test tests/unit
+make ci
 ```
 
-For the bundled llama.cpp backend:
+For a local llama.cpp backend:
 
 ```bash
 make env
 make server
 ```
 
+## Minimal Pipeline
+
 ```racket
 #lang racket
 
-(require racket/stream
-         racket/match
-         (rename-in rack-llm [eval llm-eval])
-         rack-llm/backends/llama-cpp)
+(require json
+         racket/stream
+         rack-llm
+         rack-llm/providers/mock
+         rack-llm/providers/provider-v2
+         rack-llm/grammar
+         rack-llm/sampling
+         rack-llm/rules)
 
-(define complete
-  (make-llama-cpp-llm #:server-url "http://127.0.0.1:8080"))
-```
+(random-seed 7)
 
-For OpenAI Responses API:
+(define provider
+  (make-mock-provider
+   #:vocab '("{\"status\":\"ok\"}")
+   #:default-logits '#(0.0)))
 
-```racket
-(require rack-llm/backends/openai-responses)
+(define generated-program
+  (stream-first
+   (eval (provider->token-oracle provider)
+         (list (assistant (gen 1))))))
 
-(define complete
-  (make-openai-responses-llm
-   #:model "gpt-5.4-nano"))
-```
+(define candidate-text
+  (message->string (car generated-program)))
 
-Use `message->string` to read an evaluated assistant message as a plain string.
+(define json-rule
+  (rule 'json-object
+        "candidate must be parseable JSON"
+        'candidate
+        (lambda (candidate)
+          (with-handlers ([exn:fail?
+                           (lambda (_exn)
+                             (reject #:message "invalid JSON"))])
+            (define parsed (string->jsexpr candidate))
+            (if (hash? parsed)
+                (accept)
+                (reject #:message "not a JSON object"))))))
 
-## JSON
+(define report
+  (run-rules
+   (acceptance-input candidate-text
+                     (list (hard json-rule)))))
 
-Task: choose a deployment decision.
-Input: a short deployment report.
-Output: a JSON string with `status` and `retry`.
-
-```racket
 (define decision
-  (select (list (lit "{\"status\":\"ok\",\"retry\":false}"))
-          (list (list (lit "{\"status\":\"warning\",\"retry\":true}"))
-                (list (lit "{\"status\":\"error\",\"retry\":true}")))))
+  (accept-posteriors
+   (acceptance-config 'all-constraints 0.5 (hash) (hash))
+   report
+   (hash 'json 1.0)))
 
-(define result
-  (stream-first
-   (llm-eval complete
-             (list (user (lit "Deploy report: tests passed, latency is high. Return JSON."))
-                   (assistant decision)))))
+(unless (acceptance-decision-accepted? decision)
+  (error 'readme-example
+         "candidate rejected: ~a"
+         (acceptance-decision-diagnostics decision)))
 
-(message->string (last result))
+(displayln candidate-text)
 ```
 
-## Calculator
+Run the README smoke test:
 
-Task: solve a tiny arithmetic problem.
-Input: `Use 2, 3, 4 with + and *`.
-Output: a generated expression, evaluated by Racket code.
-
-```racket
-(define result
-  (stream-first
-   (llm-eval complete
-             (list (user (lit "Generate one Racket expression using 2, 3, 4, +, *."))
-                   (assistant (gen 12))))))
-
-(define (calc x)
-  (match x
-    [(? number?) x]
-    [`(+ ,a ,b) (+ (calc a) (calc b))]
-    [`(* ,a ,b) (* (calc a) (calc b))]))
-
-(calc (read (open-input-string (message->string (last result)))))
+```bash
+make test-readme
 ```
 
-## Tic-Tac-Toe Search
+More runnable examples:
 
-Task: find a winning move for `X`.
-Input board: `X X . / O O . / . . .`
-Output: the accepted move index.
-
-```racket
-(define board '#("X" "X" "" "O" "O" "" "" "" ""))
-(define wins '((0 1 2) (3 4 5) (6 7 8) (0 3 6) (1 4 7) (2 5 8) (0 4 8) (2 4 6)))
-(define (win? i) (define b (vector-copy board)) (vector-set! b i "X")
-  (for/or ([w wins]) (for/and ([j w]) (string=? "X" (vector-ref b j)))))
-
-(define move
-  (select (list (lit "0"))
-          (map (lambda (i) (list (lit (number->string i)))) '(1 2 3 4 5 6 7 8))))
-
-(define accepted
-  (stream-filter
-   (lambda (r) (win? (string->number (message->string (last r)))))
-   (llm-eval complete
-             (list (user (lit "Choose the winning tic-tac-toe move for X."))
-                   (assistant move)))))
-
-(message->string (last (stream-first accepted)))
+```bash
+make test-examples
 ```
 
-`llm-eval` returns a lazy stream. Limits, filters, and stopping policy belong to
-client code.
+- `examples/01-json-grammar.rkt`
+- `examples/02-rule-resampling.rkt`
+- `examples/03-weak-constraint-mini.rkt`
+
+## Provider Modes
+
+Provider v2 records the mode in metadata:
+
+- `exact-full-vocab`: full logits are available and exact distribution tests are
+  allowed.
+- `truncated-top-k`: logits are masked to a top-k set; discarded probability
+  mass is recorded when known.
+- `compat-no-logits`: compatibility path for legacy token or hosted APIs that
+  do not expose full logits.
+
+The OpenAI Responses adapter is a compatibility/truncated backend for ordinary
+generation workflows. Do not use it for exact full-vocabulary distribution
+claims or Gumbel exactness tests.
+
+## Rules And Acceptance
+
+Rules return `accept`, `reject`, or `abstain`. Hard rules gate candidates.
+Soft/weak rules can be aggregated by majority, equal weights, or Dawid-Skene
+posteriors, then passed through `accept-posteriors` or `accept-candidate`.
+
+Useful modules:
+
+- `rack-llm/rules`
+- `rack-llm/rules/dawid-skene`
+- `rack-llm/rules/threshold-acceptance`
+- `rack-llm/traces/trace`
+- `rack-llm/experiments/metrics`
+- `rack-llm/experiments/weak-ifbench/runner`
+
+## Documentation
+
+- `docs/provider-v2.md`
+- `docs/grammar-and-rules.md`
+- `docs/dawid-skene.md`
+- `docs/acceptance.md`
+- `docs/complexity.md`
+- `docs/weak-ifbench.md`
+- `docs/migration-token-oracle-to-provider-v2.md`

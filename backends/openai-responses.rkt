@@ -1,12 +1,14 @@
 #lang typed/racket/base
 
 (require racket/port
-         racket/string
          typed/json
          typed/net/url
+         "../providers/prompt-rendering.rkt"
+         "../providers/provider-v2.rkt"
          "../main.rkt")
 
-(provide make-openai-responses-llm)
+(provide make-openai-responses-llm
+         make-openai-compat-provider)
 
 (define-type Prompt String)
 (define-type TokenDistribution (Listof token-candidate))
@@ -47,6 +49,35 @@
     (or client (http-response-client base-url api-key)))
   (token-oracle response-client (response-params model top-logprobs max-output-tokens)))
 
+(: make-openai-compat-provider (->* () (#:api-key String
+                                        #:base-url String
+                                        #:model String
+                                        #:top-logprobs Natural
+                                        #:max-output-tokens Natural
+                                        #:client (Option ResponseClient)
+                                        #:vocab (Listof String))
+                                     Provider))
+(define (make-openai-compat-provider
+         #:api-key [api-key (or (getenv "OPENAI_API_KEY") "")]
+         #:base-url [base-url "https://api.openai.com/v1"]
+         #:model [model "gpt-5.4-nano"]
+         #:top-logprobs [top-logprobs 20]
+         #:max-output-tokens [max-output-tokens 16]
+         #:client [client #f]
+         #:vocab [vocab '()])
+  (token-oracle->provider
+   (make-openai-responses-llm
+    #:api-key api-key
+    #:base-url base-url
+    #:model model
+    #:top-logprobs top-logprobs
+    #:max-output-tokens max-output-tokens
+    #:client client)
+   #:name 'openai-responses
+   #:model-id model
+   #:vocab vocab
+   #:mode 'truncated-top-k))
+
 (: token-oracle (-> ResponseClient ResponseParams TokenOracle))
 (define (token-oracle client params)
   (lambda ([transcript : EvaluatedProgram] [prefix : String])
@@ -86,23 +117,7 @@
 
 (: oracle-prompt (-> EvaluatedProgram String Prompt))
 (define (oracle-prompt transcript prefix)
-  (prompt+prefix (render-transcript transcript) prefix))
-
-(: prompt+prefix (-> Prompt String Prompt))
-(define (prompt+prefix prompt prefix)
-  (cond
-    [(string=? prompt "") prefix]
-    [(string=? prefix "") prompt]
-    [else (string-append prompt "\n" prefix)]))
-
-(: render-transcript (-> EvaluatedProgram Prompt))
-(define (render-transcript messages)
-  (string-join
-   (for/list : (Listof String) ([msg (in-list messages)])
-     (format "~a: ~a"
-             (symbol->string (message-role msg))
-             (message->string msg)))
-   "\n"))
+  (plain-renderer transcript prefix))
 
 (: response-token-distribution (-> ResponseJSON TokenDistribution))
 (define (response-token-distribution js)

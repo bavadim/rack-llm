@@ -8,6 +8,16 @@
 (define-runtime-path common-source "../../common-combinators.rkt")
 (define-runtime-path grammar-source "../../grammar.rkt")
 (define-runtime-path sampler-source "../../sampler.rkt")
+(define-runtime-path agenda-source "../../sampling/agenda.rkt")
+(define-runtime-path binary-heap-agenda-source "../../sampling/binary-heap-agenda.rkt")
+(define-runtime-path grammar-combinators-source "../../grammar/combinators.rkt")
+(define-runtime-path rule-source "../../rules/rule.rkt")
+(define-runtime-path rule-combinators-source "../../rules/combinators.rkt")
+(define-runtime-path acceptance-source "../../rules/acceptance.rkt")
+(define-runtime-path provider-v2-source "../../providers/provider-v2.rkt")
+(define-runtime-path mock-provider-source "../../providers/mock-provider.rkt")
+(define-runtime-path mock-source "../../providers/mock.rkt")
+(define-runtime-path prompt-rendering-source "../../providers/prompt-rendering.rkt")
 (define-runtime-path llama-cpp-source "../../backends/llama-cpp.rkt")
 (define-runtime-path openai-responses-source "../../backends/openai-responses.rkt")
 
@@ -16,6 +26,16 @@
         common-source
   grammar-source
   sampler-source
+  agenda-source
+  binary-heap-agenda-source
+  grammar-combinators-source
+  rule-source
+  rule-combinators-source
+  acceptance-source
+  provider-v2-source
+  mock-provider-source
+  mock-source
+  prompt-rendering-source
   llama-cpp-source
   openai-responses-source))
 

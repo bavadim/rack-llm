@@ -2,7 +2,8 @@
 
 (require typed/racket/stream
          "common-combinators.rkt"
-         "grammar.rkt")
+         "grammar.rkt"
+         "sampling/agenda.rkt")
 
 (require/typed racket/list
   [filter-map (All (A B) (-> (-> A (U B False)) (Listof A) (Listof B)))])
@@ -18,17 +19,7 @@
    [state : MatcherState])
   #:transparent)
 (define-type FrontierNode frontier-node)
-(define-type FrontierAgenda (agenda FrontierNode))
-
-(struct: (A) agenda
-  ([better? : (-> A A Boolean)]
-   [items : (Listof A)])
-  #:transparent)
-
-(struct: (A) agenda-view
-  ([item : A]
-   [rest : (agenda A)])
-  #:transparent)
+(define-type FrontierAgenda Agenda)
 
 (: decode-body (-> TokenOracle EvaluatedProgram Grammar EvaluatedBodyStream))
 (define (decode-body oracle transcript target)
@@ -41,17 +32,17 @@
 (define (gumbel-stream expand root)
   (: step (-> FrontierAgenda EvaluatedBodyStream))
   (define (step queue)
-    (define next (agenda-pop queue))
+    (define next (frontier-agenda-pop queue))
     (cond
       [(not next) empty-stream]
       [else
-       (define current (agenda-view-item next))
-       (define rest (agenda-view-rest next))
+       (define current (frontier-agenda-view-item next))
+       (define rest (frontier-agenda-view-rest next))
        (stream-append-lazy
         (frontier-yields current)
         (lambda ()
-          (step (agenda-push* rest (frontier-successors expand current)))))]))
-  (step (agenda-singleton frontier-better? root)))
+          (step (frontier-agenda-push* rest (frontier-successors expand current)))))]))
+  (step (frontier-agenda-singleton root)))
 
 (: frontier-expander (-> TokenOracle EvaluatedProgram TokenBudget (-> FrontierNode (Listof FrontierNode))))
 (define (frontier-expander oracle transcript max-depth)
@@ -114,10 +105,6 @@
 (define (frontier-viable? n)
   (matcher-viable? (frontier-node-state n)))
 
-(: frontier-better? (-> FrontierNode FrontierNode Boolean))
-(define (frontier-better? left right)
-  (> (frontier-node-g left) (frontier-node-g right)))
-
 (: valid-candidate? (-> token-candidate Boolean))
 (define (valid-candidate? candidate)
   (> (token-candidate-logp candidate) -1e300))
@@ -126,34 +113,37 @@
 (define (search-budget target)
   (max 8 (+ 16 (target-token-budget target))))
 
-;; Agenda
+;; Frontier agenda adapter
 
-(: agenda-singleton (All (A) (-> (-> A A Boolean) A (agenda A))))
-(define (agenda-singleton better? item)
-  (agenda better? (list item)))
+(struct frontier-agenda-view
+  ([item : FrontierNode]
+   [rest : FrontierAgenda])
+  #:transparent)
 
-(: agenda-pop (All (A) (-> (agenda A) (U False (agenda-view A)))))
-(define (agenda-pop q)
-  (define items (agenda-items q))
-  (if (null? items)
-      #f
-      (agenda-view (car items)
-                   (agenda (agenda-better? q) (cdr items)))))
+(: frontier-agenda-singleton (-> FrontierNode FrontierAgenda))
+(define (frontier-agenda-singleton item)
+  (agenda-push (agenda-empty 'binary-heap) (frontier->agenda-item item)))
 
-(: agenda-push* (All (A) (-> (agenda A) (Listof A) (agenda A))))
-(define (agenda-push* q items)
-  (agenda (agenda-better? q)
-          (foldl (lambda ([item : A] [queue : (Listof A)])
-                   (agenda-insert (agenda-better? q) item queue))
-                 (agenda-items q)
-                 items)))
-
-(: agenda-insert (All (A) (-> (-> A A Boolean) A (Listof A) (Listof A))))
-(define (agenda-insert better? item queue)
+(: frontier-agenda-pop (-> FrontierAgenda (U False frontier-agenda-view)))
+(define (frontier-agenda-pop queue)
   (cond
-    [(null? queue) (list item)]
-    [(better? item (car queue)) (cons item queue)]
-    [else (cons (car queue) (agenda-insert better? item (cdr queue)))]))
+    [(agenda-empty? queue) #f]
+    [else
+     (define-values (item rest) (agenda-pop-max queue))
+     (frontier-agenda-view
+      (assert (agenda-item-payload item) frontier-node?)
+      rest)]))
+
+(: frontier-agenda-push* (-> FrontierAgenda (Listof FrontierNode) FrontierAgenda))
+(define (frontier-agenda-push* queue items)
+  (foldl (lambda ([item : FrontierNode] [acc : FrontierAgenda])
+           (agenda-push acc (frontier->agenda-item item)))
+         queue
+         items))
+
+(: frontier->agenda-item (-> FrontierNode agenda-item))
+(define (frontier->agenda-item n)
+  (agenda-item (frontier-node-g n) n))
 
 ;; Gumbel noise
 

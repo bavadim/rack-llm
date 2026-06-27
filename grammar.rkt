@@ -24,6 +24,14 @@
          (struct-out lit)
          (struct-out gen)
          (struct-out select)
+         (struct-out seq-expr)
+         (struct-out choice-expr)
+         (struct-out optional-expr)
+         (struct-out repeat-expr)
+         (struct-out sep-by-expr)
+         (struct-out regex-expr)
+         (struct-out capture-expr)
+         (struct-out capture-value)
          (struct-out generated)
          (struct-out selected)
          (struct-out token-candidate)
@@ -39,6 +47,8 @@
          matcher-yields
          matcher-text
          matcher-viable?
+         matcher-accepting?
+         matcher-captures
          target-token-budget)
 
 (define-type Role (U 'system 'user 'assistant))
@@ -88,6 +98,40 @@
    [rest : (Listof Choice)])
   #:transparent)
 
+(struct seq-expr expr
+  ([items : Grammar])
+  #:transparent)
+
+(struct choice-expr expr
+  ([options : (Listof expr)])
+  #:transparent)
+
+(struct optional-expr expr
+  ([item : expr])
+  #:transparent)
+
+(struct repeat-expr expr
+  ([item : expr]
+   [min : Natural]
+   [max : Natural])
+  #:transparent)
+
+(struct sep-by-expr expr
+  ([item : expr]
+   [separator : expr]
+   [min : Natural]
+   [max : Natural])
+  #:transparent)
+
+(struct regex-expr expr
+  ([pattern : String])
+  #:transparent)
+
+(struct capture-expr expr
+  ([name : Symbol]
+   [item : expr])
+  #:transparent)
+
 (struct generated value
   ([source : gen]
    [text : String])
@@ -96,6 +140,11 @@
 (struct selected value
   ([source : select]
    [choice : EvaluatedBody])
+  #:transparent)
+
+(struct capture-value value
+  ([name : Symbol]
+   [text : String])
   #:transparent)
 
 (: system (expr * -> (message expr)))
@@ -114,9 +163,14 @@
 
 ;; Matcher
 
+(struct parse-out
+  ([body : EvaluatedBody]
+   [captures : (HashTable Symbol String)])
+  #:transparent)
+
 (struct parse-result
   ([live? : Boolean]
-   [bodies : (Listof EvaluatedBody)])
+   [outs : (Listof parse-out)])
   #:transparent)
 (define-type ParseResult parse-result)
 
@@ -130,45 +184,98 @@
 (define-type Parser (-> ParseInput ParsePosition ParseResult))
 
 (struct matcher
-  ([parser : Parser])
+  ([id : Symbol]
+   [parser : Parser])
   #:transparent)
 (define-type Matcher matcher)
 
-(struct replay-matcher-state
+(struct matcher-position
   ([matcher : Matcher]
    [pieces : TokenPieces]
-   [text : String]
    [result : ParseResult])
   #:transparent)
-(define-type MatcherState replay-matcher-state)
 
-(: compile-matcher (-> Grammar Matcher))
+(struct matcher-state
+  ([grammar-id : Symbol]
+   [position : Any]
+   [captures : (HashTable Symbol String)]
+   [text : String]
+   [viable? : Boolean]
+   [accepting? : Boolean])
+  #:transparent)
+(define-type MatcherState matcher-state)
+
+(define matcher-counter : Natural 0)
+
+(: compile-matcher (-> (U Grammar expr) Matcher))
 (define (compile-matcher target)
-  (matcher (parse-seq target final-parser #f)))
+  (define grammar (target->grammar target))
+  (set! matcher-counter (add1 matcher-counter))
+  (matcher (string->symbol (format "grammar~a" matcher-counter))
+           (parse-seq grammar final-parser #f)))
 
 (: matcher-start (-> Matcher MatcherState))
 (define (matcher-start m)
-  (replay-matcher-state m '() "" (replay-matcher-run m '())))
+  (make-matcher-state m '() "" (replay-matcher-run m '())))
 
-(: matcher-advance (-> MatcherState String MatcherState))
-(define (matcher-advance state piece)
-  (define pieces (append (replay-matcher-state-pieces state) (list piece)))
-  (replay-matcher-state (replay-matcher-state-matcher state)
-                        pieces
-                        (string-append (replay-matcher-state-text state) piece)
-                        (replay-matcher-run (replay-matcher-state-matcher state) pieces)))
+(: matcher-advance
+   (case->
+    (-> MatcherState String MatcherState)
+    (-> Matcher MatcherState String MatcherState)))
+(define matcher-advance
+  (case-lambda
+    [([state : MatcherState] [piece : String])
+     (define pos (matcher-position-from-state state))
+     (advance-with-matcher (matcher-position-matcher pos) state piece)]
+    [([m : Matcher] [state : MatcherState] [piece : String])
+     (advance-with-matcher m state piece)]))
 
 (: matcher-yields (-> MatcherState (Listof EvaluatedBody)))
 (define (matcher-yields state)
-  (parse-result-bodies (replay-matcher-state-result state)))
+  (map parse-out-body
+       (parse-result-outs
+        (matcher-position-result (matcher-position-from-state state)))))
 
 (: matcher-text (-> MatcherState String))
 (define (matcher-text state)
-  (replay-matcher-state-text state))
+  (matcher-state-text state))
 
 (: matcher-viable? (-> MatcherState Boolean))
 (define (matcher-viable? state)
-  (result-viable? (replay-matcher-state-result state)))
+  (matcher-state-viable? state))
+
+(: matcher-accepting? (-> MatcherState Boolean))
+(define (matcher-accepting? state)
+  (matcher-state-accepting? state))
+
+(: matcher-captures (-> MatcherState (HashTable Symbol String)))
+(define (matcher-captures state)
+  (matcher-state-captures state))
+
+(: target->grammar (-> (U Grammar expr) Grammar))
+(define (target->grammar target)
+  (if (list? target) target (list target)))
+
+(: make-matcher-state (-> Matcher TokenPieces String ParseResult MatcherState))
+(define (make-matcher-state m pieces text result)
+  (matcher-state
+   (matcher-id m)
+   (matcher-position m pieces result)
+   (first-captures result)
+   text
+   (result-viable? result)
+   (not (null? (parse-result-outs result)))))
+
+(: matcher-position-from-state (-> MatcherState matcher-position))
+(define (matcher-position-from-state state)
+  (assert (matcher-state-position state) matcher-position?))
+
+(: advance-with-matcher (-> Matcher MatcherState String MatcherState))
+(define (advance-with-matcher m state piece)
+  (define pos (matcher-position-from-state state))
+  (define pieces (append (matcher-position-pieces pos) (list piece)))
+  (define text (string-append (matcher-state-text state) piece))
+  (make-matcher-state m pieces text (replay-matcher-run m pieces)))
 
 (: replay-matcher-run (-> Matcher TokenPieces ParseResult))
 (define (replay-matcher-run m pieces)
@@ -209,6 +316,42 @@
       (select-choices e)
       (lambda ([choice : Choice])
         (parse-choice e choice k follows? source pos)))]
+    [(seq-expr? e)
+     ((parse-seq (seq-expr-items e) k follows?) source pos)]
+    [(choice-expr? e)
+     (result-choose
+      (choice-expr-options e)
+      (lambda ([option : expr])
+        (parse-expr option k follows? source pos)))]
+    [(optional-expr? e)
+     (result-union (k source pos)
+                   (parse-expr (optional-expr-item e) k follows? source pos))]
+    [(repeat-expr? e)
+     (parse-repeat (repeat-expr-item e)
+                   (repeat-expr-min e)
+                   (repeat-expr-max e)
+                   k
+                   follows?
+                   source
+                   pos)]
+    [(sep-by-expr? e)
+     (parse-sep-by (sep-by-expr-item e)
+                   (sep-by-expr-separator e)
+                   (sep-by-expr-min e)
+                   (sep-by-expr-max e)
+                   k
+                   follows?
+                   source
+                   pos)]
+    [(regex-expr? e)
+     (parse-regex (regex-expr-pattern e) k source pos)]
+    [(capture-expr? e)
+     (parse-capture (capture-expr-name e)
+                    (capture-expr-item e)
+                    k
+                    follows?
+                    source
+                    pos)]
     [(gen? e)
      (parse-gen e k follows? source pos)]
     [else result-empty]))
@@ -257,6 +400,100 @@
       (result-union result-live closed)
       closed))
 
+(: parse-repeat (-> expr Natural Natural Parser Boolean ParseInput ParsePosition ParseResult))
+(define (parse-repeat item min-count max-count k follows? source pos)
+  (let loop ([count : Natural 0]
+             [current-pos : ParsePosition pos])
+    (define closed
+      (if (>= count min-count)
+          (k source current-pos)
+          result-empty))
+    (cond
+      [(>= count max-count) closed]
+      [else
+       (result-union
+        closed
+        (parse-expr
+         item
+         (lambda ([next-source : ParseInput] [next-pos : ParsePosition])
+           (if (= next-pos current-pos)
+               result-empty
+               (loop (add1 count) next-pos)))
+         follows?
+         source
+         current-pos))])))
+
+(: parse-sep-by (-> expr expr Natural Natural Parser Boolean ParseInput ParsePosition ParseResult))
+(define (parse-sep-by item separator min-count max-count k follows? source pos)
+  (let loop ([count : Natural 0]
+             [current-pos : ParsePosition pos])
+    (define closed
+      (if (>= count min-count)
+          (k source current-pos)
+          result-empty))
+    (cond
+      [(>= count max-count) closed]
+      [(zero? count)
+       (result-union
+        closed
+        (parse-expr
+         item
+         (lambda ([next-source : ParseInput] [next-pos : ParsePosition])
+           (if (= next-pos current-pos)
+               result-empty
+               (loop (add1 count) next-pos)))
+         follows?
+         source
+         current-pos))]
+      [else
+       (result-union
+        closed
+        (parse-expr
+         separator
+         (lambda ([next-source : ParseInput] [sep-pos : ParsePosition])
+           (parse-expr
+            item
+            (lambda ([item-source : ParseInput] [item-pos : ParsePosition])
+              (if (= item-pos sep-pos)
+                  result-empty
+                  (loop (add1 count) item-pos)))
+            follows?
+            next-source
+            sep-pos))
+         follows?
+         source
+         current-pos))])))
+
+(: parse-regex (-> String Parser ParseInput ParsePosition ParseResult))
+(define (parse-regex pattern k source pos)
+  (define text (parse-input-text source))
+  (define end (parse-input-end source))
+  (define closed
+    (for/fold ([acc : ParseResult result-empty])
+              ([next-pos (in-range pos (add1 end))])
+      (define next-position (assert next-pos exact-nonnegative-integer?))
+      (define piece (substring text pos next-position))
+      (if (regex-full-match? pattern piece)
+          (result-union acc (k source next-position))
+          acc)))
+  (define available (substring text pos end))
+  (if (regex-prefix-possible? pattern available)
+      (result-union result-live closed)
+      closed))
+
+(: parse-capture (-> Symbol expr Parser Boolean ParseInput ParsePosition ParseResult))
+(define (parse-capture name item k follows? source pos)
+  (parse-expr
+   item
+   (lambda ([next-source : ParseInput] [next-pos : ParsePosition])
+     (result-add-capture
+      name
+      (substring (parse-input-text source) pos next-pos)
+      (k next-source next-pos)))
+   follows?
+   source
+   pos))
+
 ;; Parse result algebra
 
 (define result-empty (parse-result #f '()))
@@ -264,17 +501,17 @@
 
 (: result-done (-> EvaluatedBody ParseResult))
 (define (result-done body)
-  (parse-result #f (list body)))
+  (parse-result #f (list (parse-out body (ann (hash) (HashTable Symbol String))))))
 
 (: result-dedupe (-> ParseResult ParseResult))
 (define (result-dedupe m)
   (parse-result (parse-result-live? m)
-                (remove-duplicates (parse-result-bodies m))))
+                (remove-duplicates (parse-result-outs m))))
 
 (: result-union (-> ParseResult ParseResult ParseResult))
 (define (result-union left right)
   (parse-result (or (parse-result-live? left) (parse-result-live? right))
-                (append (parse-result-bodies left) (parse-result-bodies right))))
+                (append (parse-result-outs left) (parse-result-outs right))))
 
 (: result-choose (All (A) (-> (Listof A) (-> A ParseResult) ParseResult)))
 (define (result-choose xs f)
@@ -286,12 +523,30 @@
 (: result-map (-> (-> EvaluatedBody EvaluatedBody) ParseResult ParseResult))
 (define (result-map f m)
   (parse-result (parse-result-live? m)
-                (map f (parse-result-bodies m))))
+                (map (lambda ([out : parse-out])
+                       (parse-out (f (parse-out-body out))
+                                  (parse-out-captures out)))
+                     (parse-result-outs m))))
+
+(: result-add-capture (-> Symbol String ParseResult ParseResult))
+(define (result-add-capture name text m)
+  (parse-result
+   (parse-result-live? m)
+   (map (lambda ([out : parse-out])
+          (parse-out (parse-out-body out)
+                     (hash-set (parse-out-captures out) name text)))
+        (parse-result-outs m))))
 
 (: result-viable? (-> ParseResult Boolean))
 (define (result-viable? result)
   (or (parse-result-live? result)
-      (not (null? (parse-result-bodies result)))))
+      (not (null? (parse-result-outs result)))))
+
+(: first-captures (-> ParseResult (HashTable Symbol String)))
+(define (first-captures result)
+  (cond
+    [(null? (parse-result-outs result)) (ann (hash) (HashTable Symbol String))]
+    [else (parse-out-captures (car (parse-result-outs result)))]))
 
 (: prepend-value (-> value ParseResult ParseResult))
 (define (prepend-value value results)
@@ -355,8 +610,65 @@
     [(gen? e) (gen-max-tokens e)]
     [(select? e) (apply max (map target-token-budget (select-choices e)))]
     [(selected? e) (target-token-budget (selected-choice e))]
+    [(seq-expr? e) (target-token-budget (seq-expr-items e))]
+    [(choice-expr? e)
+     (if (null? (choice-expr-options e))
+         0
+         (apply max (map expr-token-budget (choice-expr-options e))))]
+    [(optional-expr? e) (expr-token-budget (optional-expr-item e))]
+    [(repeat-expr? e) (* (repeat-expr-max e) (expr-token-budget (repeat-expr-item e)))]
+    [(sep-by-expr? e)
+     (+ (* (sep-by-expr-max e) (expr-token-budget (sep-by-expr-item e)))
+        (if (zero? (sep-by-expr-max e))
+            0
+            (* (sub1 (sep-by-expr-max e))
+               (expr-token-budget (sep-by-expr-separator e)))))]
+    [(capture-expr? e) (expr-token-budget (capture-expr-item e))]
     [else 1]))
 
 (: select-choices (-> select (Listof Choice)))
 (define (select-choices e)
   (cons (select-first e) (select-rest e)))
+
+;; Regex support is intentionally conservative. Full acceptance is exact for
+;; Racket regexps; prefix viability handles the common regular fragments used
+;; by the built-in JSON helpers and benchmark grammars.
+
+(: regex-full-match? (-> String String Boolean))
+(define (regex-full-match? pattern text)
+  (regexp-match? (pregexp (string-append "^(?:" pattern ")$")) text))
+
+(: regex-prefix-possible? (-> String String Boolean))
+(define (regex-prefix-possible? pattern text)
+  (cond
+    [(string=? text "") #t]
+    [(string=? pattern "[0-9]") (and (<= (string-length text) 1)
+                                     (all-chars-match? char-numeric? text))]
+    [(string=? pattern "[0-9]+") (all-chars-match? char-numeric? text)]
+    [(string=? pattern "[a-z]+") (all-chars-match? lower-alpha? text)]
+    [(string=? pattern "[A-Za-z]+") (all-chars-match? ascii-alpha? text)]
+    [(string=? pattern "[A-Za-z0-9_ -]*") (all-chars-match? json-simple-char? text)]
+    [else (or (regex-full-match? pattern text)
+              (not (regexp-match? #px"[\r\n]" text)))]))
+
+(: all-chars-match? (-> (-> Char Boolean) String Boolean))
+(define (all-chars-match? pred text)
+  (for/and : Boolean ([ch (in-string text)])
+    (pred ch)))
+
+(: lower-alpha? (-> Char Boolean))
+(define (lower-alpha? ch)
+  (and (char>=? ch #\a) (char<=? ch #\z)))
+
+(: ascii-alpha? (-> Char Boolean))
+(define (ascii-alpha? ch)
+  (or (and (char>=? ch #\a) (char<=? ch #\z))
+      (and (char>=? ch #\A) (char<=? ch #\Z))))
+
+(: json-simple-char? (-> Char Boolean))
+(define (json-simple-char? ch)
+  (or (ascii-alpha? ch)
+      (char-numeric? ch)
+      (char=? ch #\_)
+      (char=? ch #\space)
+      (char=? ch #\-)))

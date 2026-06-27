@@ -10,8 +10,8 @@ racket_files=$(
     | sort
 )
 
-printf 'Compiling package modules...\n'
-"$RACO" make main.rkt grammar.rkt sampler.rkt common-combinators.rkt backends/llama-cpp.rkt backends/openai-responses.rkt
+printf 'Compiling Racket files...\n'
+"$RACO" make $racket_files
 
 printf 'Checking requires...\n'
 check_output=$("$RACO" check-requires $racket_files 2>&1 || true)

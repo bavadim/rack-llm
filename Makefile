@@ -9,7 +9,7 @@ RACK_LLM_TEST_PORT ?= 18080
 
 WATCH_TARGET ?= test
 
-.PHONY: help install env watch-deps deps model server lint ci test test-all test-acceptance test-acceptance-local watch clean-deps
+.PHONY: help install env watch-deps deps model server lint ci test test-integration test-all test-readme test-examples test-weak-ifbench-fixture test-llama-local test-synthetic-small paper-small paper-full test-paper-full-missing test-acceptance test-acceptance-local watch clean-deps
 
 help:
 	@printf '%s\n' \
@@ -22,7 +22,16 @@ help:
 	  '  make lint                    Run compile, require, dependency, and architecture checks.' \
 	  '  make ci                      Run lint plus all non-environment-gated tests.' \
 	  '  make test                    Run unit tests through raco.' \
+	  '  make test-integration        Run local integration tests without network or models.' \
 	  '  make test-all                Run all tests through raco; acceptance skips unless enabled.' \
+	  '  make test-readme             Extract and run the README minimal pipeline.' \
+	  '  make test-examples           Run runnable examples.' \
+	  '  make test-weak-ifbench-fixture Run Weak-IFBench fixture tests only.' \
+	  '  make test-llama-local        Run optional local GGUF sidecar provider test.' \
+	  '  make test-synthetic-small    Run small Gumbel correctness benchmark.' \
+	  '  make paper-small             Run small no-network paper reproducibility pipeline.' \
+	  '  make paper-full              Prepare full local-model experiment skeleton.' \
+	  '  make test-paper-full-missing Verify paper-full fails clearly without model env.' \
 	  '  make test-acceptance         Run acceptance tests against an already running server.' \
 	  '  make test-acceptance-local   Start a local llama-server, run acceptance tests, stop it.' \
 	  '  make watch                   Re-run tests on source changes and send desktop notifications.' \
@@ -57,13 +66,47 @@ lint:
 	RACO="$(RACO)" scripts/lint.sh
 	$(RACO) test tests/unit/public-api-contract-test.rkt tests/unit/source-policy-test.rkt
 
-ci: lint test-all
+ci: lint test test-integration test-readme test-examples test-synthetic-small paper-small test-paper-full-missing
 
 test:
 	$(RACO) test tests/unit
 
+test-integration:
+	$(RACO) test tests/integration
+
 test-all:
 	$(RACO) test tests
+
+test-readme:
+	RACO="$(RACO)" sh scripts/test-readme.sh
+
+test-examples:
+	sh scripts/test-examples.sh
+
+test-weak-ifbench-fixture:
+	$(RACO) test tests/unit/weak-ifbench-dataset-test.rkt
+
+test-llama-local:
+	$(RACO) test tests/integration/llama-local-provider-test.rkt
+
+test-synthetic-small:
+	sh scripts/test-synthetic-small.sh
+
+paper-small:
+	racket experiments/paper-small.rkt
+
+paper-full:
+	sh scripts/paper-full.sh
+
+test-paper-full-missing:
+	@if RACK_LLM_MODEL= sh scripts/paper-full.sh >/tmp/rack-llm-paper-full.out 2>/tmp/rack-llm-paper-full.err; then \
+	  cat /tmp/rack-llm-paper-full.out; \
+	  cat /tmp/rack-llm-paper-full.err >&2; \
+	  printf '%s\n' 'paper-full unexpectedly succeeded without RACK_LLM_MODEL' >&2; \
+	  exit 1; \
+	else \
+	  grep -q 'paper-full requires RACK_LLM_MODEL=' /tmp/rack-llm-paper-full.err; \
+	fi
 
 test-acceptance:
 	RACK_LLM_ACCEPTANCE=1 \

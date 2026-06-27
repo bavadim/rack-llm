@@ -69,7 +69,8 @@
   '(make-llama-cpp-llm))
 
 (define expected-openai-responses-exports
-  '(make-openai-responses-llm))
+  '(make-openai-compat-provider
+    make-openai-responses-llm))
 
 (define public-api-contract
   (test-suite

@@ -3,6 +3,7 @@
 (require racket/stream
          rackunit
          rack-llm
+         rack-llm/providers/provider-v2
          rack-llm/backends/openai-responses)
 
 (define openai-responses-backend-examples
@@ -34,6 +35,7 @@
         #:model "test-model"
         #:top-logprobs 2
         #:client fake-client))
+     (check-true (procedure? complete))
 
      (define result
        (stream-first
@@ -47,7 +49,17 @@
       (list (message 'system (list (lit "You are concise.")))
             (message 'assistant
                      (list (selected choice (list (lit "ab")))))))
-     (check-equal? (length (unbox captured-requests)) 1))))
+     (check-equal? (length (unbox captured-requests)) 1))
+
+   (test-case "compat provider is explicitly truncated"
+     (define p
+       (make-openai-compat-provider
+        #:model "test-model"
+        #:top-logprobs 2
+        #:client (lambda (_request) (hash 'output '()))))
+     (check-equal? (provider-info-mode (provider-info p)) 'truncated-top-k)
+     (check-exn #rx"truncated-top-k cannot be used for exact distribution tests"
+                (lambda () (require-exact-provider p))))))
 
 (module+ test
   (require rackunit/text-ui)
