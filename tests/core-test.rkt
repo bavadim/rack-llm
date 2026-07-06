@@ -87,6 +87,7 @@
     guide?
     hard-failure?
     lit
+    low-score?
     log-score-add
     log-score-dead?
     log-score>?
@@ -96,12 +97,21 @@
     min-guide-score
     min-total-score
     not-found?
+    provider-commit-token!
     provider-detokenize
+    provider-end-session!
     provider-metadata
     provider-mode
     provider-next-logits
+    provider-next-logits/session
+    provider-error?
+    provider-session-supported?
+    provider-start-session
+    provider-token-ref
     provider-tokenize
     provider-vocab
+    provider-vocab-size
+    provider-vocab-vector
     provider?
     pure
     rank
@@ -389,6 +399,16 @@
              (* 2 (- (log 2.0)))
              1e-10))
 
+  (test-case "provider exposes vector-backed vocab accessors"
+    (define p
+      (make-mock-provider
+       #:vocab '("yes" "no" "maybe")
+       #:default-logits (vec 0.0 0.0 0.0)))
+    (check-equal? (provider-vocab-size p) 3)
+    (check-equal? (provider-token-ref p 0) "yes")
+    (check-equal? (vector-ref (provider-vocab-vector p) 1) "no")
+    (check-exn exn:fail? (lambda () (provider-token-ref p 10))))
+
   (test-case "sample-id is reproducible with the same seed"
     (define logits (vec 0.0 1.0 2.0))
     (check-equal? (sample-id logits (seeded-rng 123) 1.0)
@@ -443,6 +463,30 @@
     (check-equal? (generation-result-status result) 'found)
     (check-equal? (generation-result-text result) "ab")
     (check-equal? (generation-result-generated-tokens result) 2))
+
+  (test-case "text max-tokens counts tokens, not characters"
+    (define p
+      (make-mock-provider
+       #:vocab '("loooooong" "tiny" "!")
+       #:default-logits (vec 10.0 9.0 0.0)
+       #:prefix-logits (hash "loooooong" (vec -10.0 10.0 0.0))))
+    (define result
+      (generate p "" (text #:max-tokens 2)
+                #:seed 1
+                #:max-tokens 2))
+    (check-equal? (generation-result-status result) 'found)
+    (check-equal? (generation-result-generated-tokens result) 2)
+    (check-equal? (generation-result-text result) "loooooongtiny"))
+
+  (test-case "text until is explicit unsupported for production sampling"
+    (define p
+      (make-mock-provider
+       #:vocab '("A" "END")
+       #:default-logits (vec 0.0 0.0)))
+    (define result
+      (generate p "" (text #:until "END") #:max-tokens 2))
+    (check-equal? (generation-result-status result) 'unsupported-guide-for-sampling)
+    (check-true (not-found? result)))
 
   (test-case "generate-stream yields lazy candidates"
     (define p
@@ -517,6 +561,7 @@
     (check-equal? (generation-result-status without-policy) 'found)
     (check-equal? (generation-result-guide-score without-policy) 0.0)
     (check-equal? (generation-result-status with-policy) 'not-found-low-score)
+    (check-true (low-score? with-policy))
     (check-true (generation-result-low-score? with-policy))
     (check-true (string-contains? (generation-result-reason with-policy) "threshold")))
 
@@ -626,6 +671,126 @@
       (check-true (real? (hash-ref (generation-result-metrics result) 'rule-time-ms)))
       (check-true (real? (hash-ref (generation-result-metrics result) 'llm-time-ms)))))
 
+  (test-case "sampling metrics expose hot-path counters without check fallback"
+    (define p
+      (make-mock-provider
+       #:vocab '("TODO" "ok")
+       #:default-logits (vec 10.0 0.0)))
+    (define result
+      (generate p "" (text #:max-tokens 1 (ban "TODO"))
+                #:candidate-policy 'full-vocab
+                #:max-tokens 1))
+    (define metrics (generation-result-metrics result))
+    (check-equal? (hash-ref metrics 'check-calls-in-sampling) 0)
+    (check-equal? (hash-ref metrics 'parse-guide-calls-in-sampling) 0)
+    (check-true (> (hash-ref metrics 'runtime-step-calls) 0))
+    (check-equal? (hash-ref metrics 'vocab-size) 2)
+    (check-equal? (hash-ref metrics 'candidate-policy) 'full-vocab)
+    (check-equal? (hash-ref metrics 'candidate-count-total) 2))
+
+  (test-case "allowed-only candidate policy uses select trie children"
+    (define vocab
+      (append '("" "yes" "no" "maybe")
+              (for/list ([i (in-range 100)]) (format "junk~a" i))))
+    (define p
+      (make-mock-provider
+       #:vocab vocab
+       #:default-logits
+       (list->vector (append '(0.0 0.0 0.0 100.0)
+                             (make-list 100 50.0)))))
+    (define result
+      (generate p "" (seq "" (select "yes" "no"))
+                #:candidate-policy 'allowed-only
+                #:seed 0
+                #:max-tokens 1))
+    (check-not-false (member (generation-result-text result) '("yes" "no")))
+    (check-equal? (hash-ref (generation-result-metrics result) 'candidate-count-total) 2)
+    (check-true (<= (first (hash-ref (generation-result-metrics result)
+                                     'candidate-count-per-step))
+                    2)))
+
+  (test-case "top-k+watch adds watched tokens outside top-k"
+    (define p
+      (make-mock-provider
+       #:vocab '("x" "patent" "z")
+       #:default-logits (vec 10.0 0.0 9.0)))
+    (define result
+      (generate p "" (text #:max-tokens 1 (rank 3 "patent"))
+                #:candidate-policy '(top-k+watch 1)
+                #:beta 10.0
+                #:seed 0
+                #:max-tokens 1))
+    (check-equal? (generation-result-text result) "patent")
+    (check-true (<= (hash-ref (generation-result-metrics result)
+                              'candidate-count-total)
+                    2)))
+
+  (test-case "rank watcher potential can shape partial completions"
+    (define s0 (guide-init (text #:max-tokens 2 (rank 3 "patent"))))
+    (define s1 (guide-step s0 "pa"))
+    (define s2 (guide-step s1 "te"))
+    (check-true (> (state-potential s1) (state-potential s0)))
+    (check-true (> (state-potential s2) (state-potential s1)))
+    (define p
+      (make-mock-provider
+       #:vocab '("x" "pa")
+       #:default-logits (vec 1.0 0.0)))
+    (define without-potential
+      (generate p "" (text #:max-tokens 1 (rank 3 "patent"))
+                #:beta 1.0
+                #:lambda 0.0
+                #:seed 0
+                #:max-tokens 1))
+    (define with-potential
+      (generate p "" (text #:max-tokens 1 (rank 3 "patent"))
+                #:beta 1.0
+                #:lambda 2.0
+                #:seed 0
+                #:max-tokens 1))
+    (check-equal? (generation-result-text without-potential) "x")
+    (check-equal? (generation-result-text with-potential) "pa"))
+
+  (test-case "finite-candidates respects max-finite-candidates limit"
+    (define huge (repeat 0 20 (select "A" "B" "C")))
+    (check-equal? (finite-candidates huge #:max-finite-candidates 50)
+                  'too-many)
+    (check-equal? (length (finite-candidates (select "A" "B")
+                                             #:max-finite-candidates 50))
+                  2))
+
+  (test-case "session provider protocol is used when available"
+    (define events '())
+    (define (record! x) (set! events (append events (list x))))
+    (define p
+      (make-provider
+       #:vocab '("a" "b")
+       #:next-logits (lambda (_prompt _prefix)
+                       (record! 'stateless)
+                       (vec 0.0 0.0))
+       #:start-session (lambda (prompt)
+                         (record! (list 'start prompt))
+                         (box 'session))
+       #:next-logits/session (lambda (_session)
+                               (record! 'next_logits)
+                               (vec 10.0 0.0))
+       #:commit-token! (lambda (_session id)
+                         (record! (list 'commit id)))
+       #:end-session! (lambda (_session)
+                        (record! 'end))))
+    (define result
+      (generate p "prompt" (text #:max-tokens 2)
+                #:seed 1
+                #:max-tokens 2))
+    (check-equal? (generation-result-status result) 'found)
+    (check-equal? events
+                  (list (list 'start "prompt")
+                        'next_logits
+                        (list 'commit 0)
+                        'next_logits
+                        (list 'commit 0)
+                        'end))
+    (check-true (hash-ref (generation-result-metrics result) 'provider-session?)))
+
   (test-case "deadline budget returns controlled error-budget result"
     (define p
       (make-mock-provider
@@ -664,7 +829,8 @@
       (check-equal? (generation-result-ok? r) (eq? status 'found))
       (check-equal? (not-found? r) (not (eq? status 'found))))
     (check-true (hard-failure? (result 'not-found-hard)))
-    (check-false (hard-failure? (result 'not-found-budget))))
+    (check-false (hard-failure? (result 'not-found-budget)))
+    (check-true (provider-error? (result 'error-approx-provider))))
 
   (test-case "impossible finite guide reports not-found-hard"
     (define p

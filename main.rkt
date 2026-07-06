@@ -1,68 +1,84 @@
-#lang typed/racket/base
+#lang racket/base
 
-(require typed/racket/stream
-         "common-combinators.rkt"
-         "grammar.rkt"
-         "sampler.rkt")
+(require "core.rkt"
+         "guides.rkt"
+         "provider.rkt"
+         "runtime.rkt"
+         "sampling.rkt"
+         "weight.rkt")
 
-(provide (struct-out expr)
-         (struct-out value)
-         (struct-out message)
-         (struct-out lit)
-         (struct-out gen)
-         (struct-out select)
-         (struct-out generated)
-         (struct-out selected)
-         (struct-out token-candidate)
-         Program
-         EvaluatedProgram
-         TokenOracle
-         system
-         user
-         assistant
-         value->string
-         body->string
-         message->string
-         (rename-out [eval-program eval]))
-
-;; Public program semantics
-
-(define empty-transcript : EvaluatedProgram '())
-
-(: eval-program (-> TokenOracle Program EvaluatedProgramStream))
-(define (eval-program oracle program)
-  (stream-foldM (lambda ([transcript : EvaluatedProgram] [msg : (message expr)])
-                  (message-step oracle transcript msg))
-                empty-transcript
-                program))
-
-(: message-step (-> TokenOracle EvaluatedProgram (message expr) EvaluatedProgramStream))
-(define (message-step oracle transcript msg)
-  (define role (message-role msg))
-  (stream-map
-   (lambda ([body : EvaluatedBody])
-     (append transcript (list (message role body))))
-   (message-bodies oracle transcript msg)))
-
-(: message-bodies (-> TokenOracle EvaluatedProgram (message expr) EvaluatedBodyStream))
-(define (message-bodies oracle transcript msg)
-  (define body (message-body msg))
-  (if (evaluated-body? body)
-      (list body)
-      (decode-body oracle transcript body)))
-
-(: value->string (-> value String))
-(define (value->string v)
-  (cond
-    [(lit? v) (lit-value v)]
-    [(generated? v) (generated-text v)]
-    [(selected? v) (body->string (selected-choice v))]
-    [else (error 'rack-llm "unsupported evaluated value: ~e" v)]))
-
-(: body->string (-> EvaluatedBody String))
-(define (body->string body)
-  (apply string-append (map value->string body)))
-
-(: message->string (-> (message value) String))
-(define (message->string msg)
-  (body->string (message-body msg)))
+(provide lit
+         rx
+         seq
+         select
+         repeat
+         text
+         rank
+         ban
+         weight
+         pure
+         bind
+         generate
+         generate-stream
+         finite-candidates
+         fast-forward-state
+         min-guide-score
+         min-total-score
+         log-softmax
+         sequence-logprob
+         sample-id
+         check
+         guide-init
+         guide-step
+         guide-finish
+         dead?
+         done?
+         state-score
+         state-potential
+         state-value
+         state-trace
+         make-provider
+         make-mock-provider
+         provider-vocab
+         provider-next-logits
+         provider-tokenize
+         provider-detokenize
+         provider-mode
+         provider-metadata
+         provider-vocab-size
+         provider-token-ref
+         provider-vocab-vector
+         provider-session-supported?
+         provider-start-session
+         provider-next-logits/session
+         provider-commit-token!
+         provider-end-session!
+         tokenize
+         detokenize
+         guide?
+         ranked?
+         banned?
+         watch?
+         provider?
+         log-score-add
+         log-score-dead?
+         log-score>?
+         found?
+         not-found?
+         hard-failure?
+         low-score?
+         provider-error?
+         generation-result-ok?
+         generation-result-lm-score
+         rt-state
+         rt-state?
+         rt-state-guide
+         rt-state-text
+         rt-state-status
+         rt-state-score
+         rt-state-potential
+         rt-state-value
+         rt-state-trace
+         struct:rt-state
+         (struct-out generation-result)
+         (struct-out check-result))

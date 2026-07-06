@@ -18,10 +18,12 @@
          sample-id)
 
 (struct score-policy (kind threshold) #:transparent)
-(struct token-selection (id token raw-logit lm-logprob adjustment dead-count)
+(struct token-selection
+  (id token raw-logit lm-logprob adjustment dead-count next-state candidate-count)
   #:transparent)
 
 (define deadline-poll-interval 1)
+(define sampling-finite-candidate-limit 10000)
 
 (define (min-guide-score threshold)
   (make-score-policy 'min-guide-score threshold))
@@ -44,6 +46,7 @@
                   #:samples [samples 1]
                   #:keep-best? [keep-best? #f]
                   #:unique [unique 'none]
+                  #:candidate-policy [candidate-policy 'full-vocab]
                   #:return-policy [return-policy 'always])
   (unless (exact-positive-integer? samples)
     (raise-argument-error 'generate "positive exact integer?" samples))
@@ -56,7 +59,8 @@
                       #:seed seed
                       #:deadline-ms deadline-ms
                       #:max-tokens max-tokens
-                      #:unique unique)
+                      #:unique unique
+                      #:candidate-policy candidate-policy)
      samples))
   (define with-attempt-count
     (for/list ([candidate (in-list candidates)])
@@ -75,7 +79,8 @@
                          #:seed [seed #f]
                          #:deadline-ms [deadline-ms #f]
                          #:max-tokens [max-tokens 128]
-                         #:unique [unique 'none])
+                         #:unique [unique 'none]
+                         #:candidate-policy [candidate-policy 'full-vocab])
   (define guide (ensure-guide 'generate-stream g))
   (let loop ([attempt 0] [cache '()])
     (define result
@@ -85,7 +90,8 @@
                     #:temperature temperature
                     #:seed (attempt-seed seed attempt)
                     #:deadline-ms deadline-ms
-                    #:max-tokens max-tokens))
+                    #:max-tokens max-tokens
+                    #:candidate-policy candidate-policy))
     (define duplicate? (cache-contains? unique cache (generation-result-text result)))
     (define next-cache (cache-add unique cache (generation-result-text result)))
     (if duplicate?
@@ -98,19 +104,57 @@
                       #:temperature temperature
                       #:seed seed
                       #:deadline-ms deadline-ms
-                      #:max-tokens max-tokens)
+                      #:max-tokens max-tokens
+                      #:candidate-policy candidate-policy)
   (define started-ms (current-inexact-milliseconds))
   (define rng (make-rng seed))
-  (define finite (finite-candidates guide))
   (cond
-    [(pair? finite) (best-finite p prompt finite beta started-ms)]
+    [(not (sampling-supported? guide))
+     (make-generation-result
+      #:status 'unsupported-guide-for-sampling
+      #:reason "guide has no production prefix-runtime for sampling"
+      #:text ""
+      #:value #f
+      #:lm-logprob neg-inf
+      #:guide-score neg-inf
+      #:beta beta
+      #:hard-ok? #f
+      #:latency-ms (elapsed-ms started-ms)
+      #:metrics (basic-metrics 0 0 started-ms
+                               #:provider-mode (provider-mode p)
+                               #:candidate-policy candidate-policy
+                               #:unsupported-reason 'unsupported-guide-for-sampling))]
+    [(eq? (guide-kind guide) 'select)
+     (define finite (finite-candidates guide
+                                       #:max-finite-candidates
+                                       sampling-finite-candidate-limit))
+     (if (list? finite)
+         (best-finite p prompt finite beta started-ms)
+         (make-generation-result
+          #:status 'unsupported-guide-for-sampling
+          #:reason "select has too many finite candidates for best-finite"
+          #:text ""
+          #:value #f
+          #:lm-logprob neg-inf
+          #:guide-score neg-inf
+          #:beta beta
+          #:hard-ok? #f
+          #:latency-ms (elapsed-ms started-ms)
+          #:metrics (basic-metrics 0 0 started-ms
+                                   #:provider-mode (provider-mode p)
+                                   #:candidate-policy candidate-policy
+                                   #:unsupported-reason 'too-many-finite-candidates)))]
     [else
-     (define vocab-vec (list->vector (provider-vocab p)))
-     (generate-text p prompt guide beta lambda-weight temperature rng deadline-ms max-tokens started-ms vocab-vec)]))
+     (generate-text p prompt guide beta lambda-weight temperature rng deadline-ms
+                    max-tokens started-ms (provider-vocab-vector p)
+                    candidate-policy)]))
 
 (define (stream-take/list s n)
-  (for/list ([item (in-stream s)] [_ (in-range n)])
-    item))
+  (let loop ([s s] [remaining n])
+    (if (zero? remaining)
+        '()
+        (cons (stream-first s)
+              (loop (stream-rest s) (sub1 remaining))))))
 
 (define (attempt-seed seed attempt)
   (and seed (+ seed attempt)))
@@ -179,15 +223,8 @@
     [(or (log-score-dead? lm-logprob) (log-score-dead? guide-score)) neg-inf]
     [else (log-score-add lm-logprob (* beta guide-score))]))
 
-(define (transition-adjustment state token last-score last-potential beta lambda-weight)
-  (define guide (rt-state-guide state))
-  (if (and (eq? (guide-kind guide) 'text)
-           (not (second (guide-data guide))))
-      (text-transition-adjustment state token last-score last-potential beta lambda-weight)
-      (slow-transition-adjustment state token last-score last-potential beta lambda-weight)))
-
-(define (slow-transition-adjustment state token last-score last-potential beta lambda-weight)
-  (define next-state (guide-step state token))
+(define (transition-adjustment state token-id token last-score last-potential beta lambda-weight)
+  (define next-state (guide-step-runtime state token-id token))
   (cond
     [(dead? next-state)
      (values next-state neg-inf #t)]
@@ -199,37 +236,6 @@
      (values next-state
              (* beta (+ delta-score (* lambda-weight delta-potential)))
              #f)]))
-
-(define (text-transition-adjustment state token last-score last-potential beta lambda-weight)
-  (define guide (rt-state-guide state))
-  (match-define (list max-tokens _until watchers) (guide-data guide))
-  (define text (string-append (rt-state-text state) token))
-  (cond
-    [(> (string-length text) max-tokens)
-     (values (rt-state guide text 'dead neg-inf 0.0 #f (list 'budget-dead))
-             neg-inf
-             #t)]
-    [else
-     (define-values (ok? guide-score) (watcher-score watchers text))
-     (if ok?
-         (let* ([potential 0.0]
-                [delta-score (- guide-score last-score)]
-                [delta-potential (- potential last-potential)]
-                [status (if (>= (string-length text) max-tokens) 'done 'live)]
-                [value (and (eq? status 'done) text)]
-                [next-state (rt-state guide
-                                      text
-                                      status
-                                      guide-score
-                                      potential
-                                      value
-                                      (watcher-trace watchers text))])
-           (values next-state
-                   (* beta (+ delta-score (* lambda-weight delta-potential)))
-                   #f))
-         (values (rt-state guide text 'dead neg-inf 0.0 #f (watcher-trace watchers text))
-                 neg-inf
-                 #t))]))
 
 (define (best-finite p prompt candidates beta started-ms)
   (define scored
@@ -298,129 +304,310 @@
                  (log-score-add score token-logprob)))])))
 
 (define (fast-forward-state state provider prompt prefix
-                            #:score? [score? #t])
-  (define guide (rt-state-guide state))
+                            #:score? [score? #t]
+                            #:allow-complete-lit? [allow-complete-lit? #t]
+                            #:return-ids? [return-ids? #f])
+  (define forced (runtime-forced-string state))
   (cond
-    [(not (eq? (guide-kind guide) 'lit))
-     (values state prefix 0.0 0)]
+    [(or (not forced) (string=? forced ""))
+     (values state prefix 0.0 (if return-ids? '() 0))]
     [else
-     (define literal (guide-data guide))
-     (define consumed (rt-state-text state))
-     (cond
-       [(not (string-prefix-of? consumed literal))
-        (values state prefix neg-inf 0)]
-       [else
-        (define remaining (substring literal (string-length consumed)))
-        (define next-state (guide-step state remaining))
-        (define next-prefix (string-append prefix remaining))
-        (define lm-logprob
-          (if score? (sequence-logprob provider prompt remaining) 0.0))
-        (define scoring-calls
-          (if score? (length (tokenize provider remaining)) 0))
-        (values next-state next-prefix lm-logprob scoring-calls)])]))
+     (with-handlers ([exn:fail? (lambda (_exn)
+                                  (values state prefix neg-inf (if return-ids? '() 0)))])
+       (define ids (tokenize provider forced))
+       (define-values (next-state next-prefix)
+         (for/fold ([st state] [out prefix])
+                   ([id (in-list ids)])
+           (define token (provider-token-ref provider id))
+           (values (guide-step-runtime st id token)
+                   (string-append out token))))
+       (if (and (done? next-state)
+                (eq? (guide-kind (rt-state-guide state)) 'lit))
+           (if allow-complete-lit?
+               (let ([lm-logprob
+                 (if score? (sequence-logprob provider prompt forced) 0.0)])
+                 (values next-state next-prefix lm-logprob
+                         (if return-ids? ids (if score? (length ids) 0))))
+               (values state prefix 0.0 (if return-ids? '() 0)))
+           (let ([lm-logprob
+                  (if score? (sequence-logprob provider prompt forced) 0.0)])
+             (values next-state next-prefix lm-logprob
+                     (if return-ids? ids (if score? (length ids) 0))))))]))
 
 (define (string-prefix-of? prefix s)
   (and (<= (string-length prefix) (string-length s))
        (string=? prefix (substring s 0 (string-length prefix)))))
 
-(define (generate-text p prompt guide beta lambda-weight temperature rng deadline-ms max-tokens started-ms vocab-vec)
+(define (generate-text p prompt guide beta lambda-weight temperature rng deadline-ms
+                       max-tokens started-ms vocab-vec candidate-policy)
+  (define session? (provider-session-supported? p))
+  (define session (and session? ((provider-start-session p) prompt)))
+  (define (next-logits prefix)
+    (if session?
+        (let ([raw ((provider-next-logits/session p) session)])
+          (case (provider-mode p)
+            [(exact-full-vocab mock)
+             (unless (and (vector? raw) (= (vector-length raw) (provider-vocab-size p)))
+               (error 'provider-next-logits/session
+                      "logits vector length must match vocabulary"))
+             raw]
+            [(top-k-approx) raw]
+            [else raw]))
+        (provider-next-logit-vector p prompt prefix)))
+  (define (commit! id)
+    (when session?
+      ((provider-commit-token! p) session id)))
+  (define (end-session!)
+    (when session?
+      ((provider-end-session! p) session)))
+  (define (finish result)
+    (end-session!)
+    result)
   (let loop ([step 0]
              [prefix ""]
-             [state (guide-init guide)]
+             [state (guide-init-runtime guide p)]
              [last-score 0.0]
              [last-potential 0.0]
              [lm-score 0.0]
              [llm-calls 0]
              [dead-prefixes 0]
+             [candidate-total 0]
+             [candidate-per-step '()]
+             [runtime-step-calls 0]
+             [allowed-token-count 0]
+             [fast-forward-tokens 0]
              [rule-time-ms 0.0]
-             [llm-time-ms 0.0])
+             [llm-time-ms 0.0]
+             [sampling-time-ms 0.0])
     (cond
       [(deadline-expired? started-ms deadline-ms)
-       (budget-error-result state prefix lm-score beta step started-ms p llm-calls
-                            dead-prefixes rule-time-ms llm-time-ms
-                            "deadline exhausted")]
-      [(>= step max-tokens) (result-from-check guide prefix lm-score 'not-found-budget
-                                               "token budget exhausted"
-                                               beta
-                                               step
-                                               started-ms
-                                               p
-                                               llm-calls
-                                               dead-prefixes
-                                               rule-time-ms
-                                               llm-time-ms)]
+       (finish
+        (budget-error-result state prefix lm-score beta step started-ms p llm-calls
+                             dead-prefixes rule-time-ms llm-time-ms
+                             "deadline exhausted"
+                             #:candidate-policy candidate-policy
+                             #:candidate-count-total candidate-total
+                             #:candidate-count-per-step (reverse candidate-per-step)
+                             #:runtime-step-calls runtime-step-calls
+                             #:allowed-token-count allowed-token-count
+                             #:fast-forward-tokens fast-forward-tokens
+                             #:sampling-time-ms sampling-time-ms
+                             #:provider-session? session?))]
+      [(done? state)
+       (finish
+        (result-from-state state lm-score beta step started-ms p
+                           llm-calls dead-prefixes rule-time-ms llm-time-ms
+                           #:candidate-policy candidate-policy
+                           #:candidate-count-total candidate-total
+                           #:candidate-count-per-step (reverse candidate-per-step)
+                           #:runtime-step-calls runtime-step-calls
+                           #:allowed-token-count allowed-token-count
+                           #:fast-forward-tokens fast-forward-tokens
+                           #:sampling-time-ms sampling-time-ms
+                           #:provider-session? session?))]
+      [(>= step max-tokens)
+       (finish
+        (if (eq? (guide-kind (rt-state-guide state)) 'text)
+            (make-generation-result
+             #:status 'found
+             #:reason #f
+             #:text prefix
+             #:value prefix
+             #:lm-logprob lm-score
+             #:guide-score (state-score state)
+             #:beta beta
+             #:hard-ok? #t
+             #:steps step
+             #:generated-tokens step
+             #:latency-ms (elapsed-ms started-ms)
+             #:trace (append (state-trace state) (list (list 'final-value prefix)))
+             #:metrics (basic-metrics step step started-ms
+                                      #:provider-mode (provider-mode p)
+                                      #:llm-calls llm-calls
+                                      #:dead-prefixes dead-prefixes
+                                      #:rule-time-ms rule-time-ms
+                                      #:llm-time-ms llm-time-ms
+                                      #:vocab-size (provider-vocab-size p)
+                                      #:candidate-policy candidate-policy
+                                      #:candidate-count-total candidate-total
+                                      #:candidate-count-per-step (reverse candidate-per-step)
+                                      #:runtime-step-calls runtime-step-calls
+                                      #:allowed-token-count allowed-token-count
+                                      #:fast-forward-tokens fast-forward-tokens
+                                      #:sampling-time-ms sampling-time-ms
+                                      #:provider-session? session?))
+            (make-generation-result
+             #:status 'not-found-budget
+             #:reason "token budget exhausted"
+             #:text prefix
+             #:value #f
+             #:lm-logprob lm-score
+             #:guide-score (state-score state)
+             #:beta beta
+             #:hard-ok? #f
+             #:steps step
+             #:generated-tokens step
+             #:latency-ms (elapsed-ms started-ms)
+             #:trace (state-trace state)
+             #:metrics (basic-metrics step step started-ms
+                                      #:provider-mode (provider-mode p)
+                                      #:llm-calls llm-calls
+                                      #:dead-prefixes dead-prefixes
+                                      #:rule-time-ms rule-time-ms
+                                      #:llm-time-ms llm-time-ms
+                                      #:vocab-size (provider-vocab-size p)
+                                      #:candidate-policy candidate-policy
+                                      #:candidate-count-total candidate-total
+                                      #:candidate-count-per-step (reverse candidate-per-step)
+                                      #:runtime-step-calls runtime-step-calls
+                                      #:allowed-token-count allowed-token-count
+                                      #:fast-forward-tokens fast-forward-tokens
+                                      #:sampling-time-ms sampling-time-ms
+                                      #:provider-session? session?))))]
       [else
-       (define llm-start (current-inexact-milliseconds))
-       (define logits (provider-next-logit-vector p prompt prefix))
-       (define next-llm-time-ms (+ llm-time-ms (- (current-inexact-milliseconds) llm-start)))
+       (define-values (ff-state ff-prefix ff-lm ff-ids)
+         (fast-forward-state state p prompt prefix
+                             #:score? #f
+                             #:allow-complete-lit? #f
+                             #:return-ids? #t))
        (cond
-         [(deadline-expired? started-ms deadline-ms)
-          (budget-error-result state prefix lm-score beta step started-ms p llm-calls
-                               dead-prefixes rule-time-ms next-llm-time-ms
-                               "deadline exhausted after provider logits")]
+         [(positive? (length ff-ids))
+          (for ([id (in-list ff-ids)]) (commit! id))
+          (loop (+ step (length ff-ids))
+                ff-prefix
+                ff-state
+                (state-score ff-state)
+                (state-potential ff-state)
+                (log-score-add lm-score ff-lm)
+                llm-calls
+                dead-prefixes
+                candidate-total
+                candidate-per-step
+                runtime-step-calls
+                allowed-token-count
+                (+ fast-forward-tokens (length ff-ids))
+                rule-time-ms
+                llm-time-ms
+                sampling-time-ms)]
          [else
+          (define llm-start (current-inexact-milliseconds))
+          (define logits (next-logits prefix))
+          (define next-llm-time-ms (+ llm-time-ms (- (current-inexact-milliseconds) llm-start)))
+          (cond
+            [(deadline-expired? started-ms deadline-ms)
+             (finish
+              (budget-error-result state prefix lm-score beta step started-ms p llm-calls
+                                   dead-prefixes rule-time-ms next-llm-time-ms
+                                   "deadline exhausted after provider logits"
+                                   #:candidate-policy candidate-policy
+                                   #:candidate-count-total candidate-total
+                                   #:candidate-count-per-step (reverse candidate-per-step)
+                                   #:runtime-step-calls runtime-step-calls
+                                   #:allowed-token-count allowed-token-count
+                                   #:fast-forward-tokens fast-forward-tokens
+                                   #:sampling-time-ms sampling-time-ms
+                                   #:provider-session? session?))]
+            [else
           (define next-llm-calls (add1 llm-calls))
-          (define rule-start (current-inexact-milliseconds))
+          (define sampling-start (current-inexact-milliseconds))
           (define selection
-            (select-token/full-vocab state
-                                     logits
-                                     vocab-vec
-                                     last-score
-                                     last-potential
-                                     beta
-                                     lambda-weight
-                                     temperature
-                                     rng
-                                     started-ms
-                                     deadline-ms))
-          (define next-rule-time-ms (+ rule-time-ms (- (current-inexact-milliseconds) rule-start)))
+            (select-token state
+                          logits
+                          vocab-vec
+                          p
+                          candidate-policy
+                          last-score
+                          last-potential
+                          beta
+                          lambda-weight
+                          temperature
+                          rng
+                          started-ms
+                          deadline-ms))
+          (define next-sampling-time-ms
+            (+ sampling-time-ms (- (current-inexact-milliseconds) sampling-start)))
+          (define considered
+            (if (token-selection? selection)
+                (token-selection-candidate-count selection)
+                0))
+          (define next-candidate-total (+ candidate-total considered))
+          (define next-candidate-per-step (cons considered candidate-per-step))
+          (define next-runtime-step-calls (+ runtime-step-calls considered))
+          (define next-allowed-count
+            (+ allowed-token-count
+               (if (runtime-allowed-next-ids state)
+                   (length (runtime-allowed-next-ids state))
+                   0)))
           (cond
             [(eq? selection 'budget)
-             (budget-error-result state prefix lm-score beta step started-ms p
-                                  next-llm-calls dead-prefixes next-rule-time-ms
-                                  next-llm-time-ms
-                                  "deadline exhausted during full-vocabulary sampling pass")]
+             (finish
+              (budget-error-result state prefix lm-score beta step started-ms p
+                                   next-llm-calls dead-prefixes rule-time-ms
+                                   next-llm-time-ms
+                                   "deadline exhausted during candidate sampling pass"
+                                   #:candidate-policy candidate-policy
+                                   #:candidate-count-total candidate-total
+                                   #:candidate-count-per-step (reverse candidate-per-step)
+                                   #:runtime-step-calls runtime-step-calls
+                                   #:allowed-token-count allowed-token-count
+                                   #:fast-forward-tokens fast-forward-tokens
+                                   #:sampling-time-ms next-sampling-time-ms
+                                   #:provider-session? session?))]
             [(not (token-selection-id selection))
-             (make-generation-result
-              #:status (if (eq? (provider-mode p) 'top-k-approx)
-                           'error-approx-provider
-                           'not-found-hard)
-              #:reason (if (eq? (provider-mode p) 'top-k-approx)
-                           "top-k provider returned no viable token for the guide"
-                           "no provider token keeps the guide valid")
-              #:text prefix
-              #:value #f
-              #:lm-logprob lm-score
-              #:guide-score neg-inf
-              #:beta beta
-              #:hard-ok? #f
-              #:steps step
-              #:generated-tokens step
-              #:latency-ms (elapsed-ms started-ms)
-              #:metrics (basic-metrics step step started-ms
-                                      #:provider-mode (provider-mode p)
-                                      #:llm-calls next-llm-calls
-                                      #:dead-prefixes (+ dead-prefixes
-                                                        (token-selection-dead-count selection))
-                                      #:rule-time-ms next-rule-time-ms
-                                      #:llm-time-ms next-llm-time-ms))]
+             (finish
+              (make-generation-result
+               #:status (if (eq? (provider-mode p) 'top-k-approx)
+                            'error-approx-provider
+                            'not-found-hard)
+               #:reason (if (eq? (provider-mode p) 'top-k-approx)
+                            "top-k provider returned no viable token for the guide"
+                            "no provider token keeps the guide valid")
+               #:text prefix
+               #:value #f
+               #:lm-logprob lm-score
+               #:guide-score neg-inf
+               #:beta beta
+               #:hard-ok? #f
+               #:steps step
+               #:generated-tokens step
+               #:latency-ms (elapsed-ms started-ms)
+               #:metrics (basic-metrics step step started-ms
+                                        #:provider-mode (provider-mode p)
+                                        #:llm-calls next-llm-calls
+                                        #:dead-prefixes (+ dead-prefixes
+                                                          (token-selection-dead-count selection))
+                                        #:rule-time-ms rule-time-ms
+                                        #:llm-time-ms next-llm-time-ms
+                                        #:vocab-size (provider-vocab-size p)
+                                        #:candidate-policy candidate-policy
+                                        #:candidate-count-total next-candidate-total
+                                        #:candidate-count-per-step (reverse next-candidate-per-step)
+                                        #:runtime-step-calls next-runtime-step-calls
+                                        #:allowed-token-count next-allowed-count
+                                        #:fast-forward-tokens fast-forward-tokens
+                                        #:sampling-time-ms next-sampling-time-ms
+                                        #:provider-session? session?)))]
             [else
-             (define-values (next-state _adjustment _dead-transition?)
-               (transition-adjustment state
-                                      (token-selection-token selection)
-                                      last-score
-                                      last-potential
-                                      beta
-                                      lambda-weight))
+             (commit! (token-selection-id selection))
+             (define next-state (token-selection-next-state selection))
              (define next-prefix (string-append prefix (token-selection-token selection)))
              (define next-lm-score
                (log-score-add lm-score (token-selection-lm-logprob selection)))
              (define next-dead-prefixes
                (+ dead-prefixes (token-selection-dead-count selection)))
              (if (done? next-state)
-                 (result-from-state next-state next-lm-score beta step started-ms p
+                 (finish
+                  (result-from-state next-state next-lm-score beta (add1 step) started-ms p
                                     next-llm-calls next-dead-prefixes
-                                    next-rule-time-ms next-llm-time-ms)
+                                    rule-time-ms next-llm-time-ms
+                                    #:candidate-policy candidate-policy
+                                    #:candidate-count-total next-candidate-total
+                                    #:candidate-count-per-step (reverse next-candidate-per-step)
+                                    #:runtime-step-calls next-runtime-step-calls
+                                    #:allowed-token-count next-allowed-count
+                                    #:fast-forward-tokens fast-forward-tokens
+                                    #:sampling-time-ms next-sampling-time-ms
+                                    #:provider-session? session?))
                  (loop (add1 step)
                        next-prefix
                        next-state
@@ -429,61 +616,70 @@
                        next-lm-score
                        next-llm-calls
                        next-dead-prefixes
-                       next-rule-time-ms
-                       next-llm-time-ms))])])])))
+                       next-candidate-total
+                       next-candidate-per-step
+                       next-runtime-step-calls
+                       next-allowed-count
+                       fast-forward-tokens
+                       rule-time-ms
+                       next-llm-time-ms
+                       next-sampling-time-ms))])])])])))
 
-(define (select-token/full-vocab state logits vocab-vec last-score last-potential beta lambda-weight temperature rng started-ms deadline-ms)
+(define (select-token state logits vocab-vec provider candidate-policy
+                      last-score last-potential beta lambda-weight temperature
+                      rng started-ms deadline-ms)
   (unless (and (real? temperature) (> temperature 0))
     (raise-argument-error 'generate "positive real temperature" temperature))
-  (define vocab-size (vector-length vocab-vec))
-  (define-values (best-id best-token best-raw-logit best-adjustment best-score dead-count max-logit exp-sum budget?)
+  (define ids (candidate-ids state logits provider candidate-policy))
+  (define-values (max-logit exp-sum)
+    (for/fold ([max-logit -inf.0] [exp-sum 0.0])
+              ([logit (in-vector logits)])
+      (logsumexp-accumulate max-logit exp-sum logit)))
+  (define-values (best-id best-token best-raw-logit best-adjustment best-score best-state dead-count budget?)
     (for/fold ([best-id #f]
                [best-token #f]
                [best-raw-logit -inf.0]
                [best-adjustment 0.0]
                [best-score -inf.0]
+               [best-state #f]
                [dead-count 0]
-               [max-logit -inf.0]
-               [exp-sum 0.0]
                [budget? #f])
-              ([id (in-range vocab-size)])
+              ([id (in-list ids)])
       (cond
         [budget?
          (values best-id best-token best-raw-logit best-adjustment best-score
-                 dead-count max-logit exp-sum budget?)]
+                 best-state dead-count budget?)]
         [(and (zero? (remainder id deadline-poll-interval))
               (deadline-expired? started-ms deadline-ms))
          (values best-id best-token best-raw-logit best-adjustment best-score
-                 dead-count max-logit exp-sum #t)]
+                 best-state dead-count #t)]
         [else
          (define noise (gumbel rng))
          (define logit (vector-ref logits id))
-         (define-values (next-max next-sum)
-           (logsumexp-accumulate max-logit exp-sum logit))
          (cond
            [(log-score-dead? logit)
             (values best-id best-token best-raw-logit best-adjustment best-score
-                    (add1 dead-count) next-max next-sum #f)]
+                    best-state (add1 dead-count) #f)]
            [else
             (define token (vector-ref vocab-vec id))
-            (define-values (_next-state adjustment dead-transition?)
-              (transition-adjustment state token last-score last-potential beta lambda-weight))
+            (define-values (next-state adjustment dead-transition?)
+              (transition-adjustment state id token last-score last-potential beta lambda-weight))
             (define adjusted
               (if dead-transition? neg-inf (+ logit adjustment)))
             (cond
               [(not (sampleable? adjusted))
                (values best-id best-token best-raw-logit best-adjustment best-score
-                       (add1 dead-count) next-max next-sum #f)]
+                       best-state (add1 dead-count) #f)]
               [else
                (define score (+ (/ adjusted temperature) noise))
                (if (or (not best-id) (> score best-score))
-                   (values id token logit adjustment score dead-count next-max next-sum #f)
+                   (values id token logit adjustment score next-state dead-count #f)
                    (values best-id best-token best-raw-logit best-adjustment best-score
-                           dead-count next-max next-sum #f))])])])))
+                           best-state dead-count #f))])])])))
   (cond
     [budget? 'budget]
     [(not best-id)
-     (token-selection #f #f -inf.0 -inf.0 0.0 dead-count)]
+     (token-selection #f #f -inf.0 -inf.0 0.0 dead-count #f (length ids))]
     [else
      (define log-z
        (if (log-score-dead? max-logit)
@@ -494,7 +690,35 @@
                       best-raw-logit
                       (- best-raw-logit log-z)
                       best-adjustment
-                      dead-count)]))
+                      dead-count
+                      best-state
+                      (length ids))]))
+
+(define (candidate-ids state logits provider policy)
+  (define vocab-size (vector-length logits))
+  (define (all) (range vocab-size))
+  (match policy
+    ['full-vocab (all)]
+    ['allowed-only
+     (or (runtime-allowed-next-ids state) (all))]
+    [(list 'top-k+watch k)
+     (unless (exact-positive-integer? k)
+       (raise-argument-error 'generate "positive K in '(top-k+watch K)" k))
+     (remove-duplicates
+      (append (top-k-ids logits k)
+              (runtime-watch-ids state provider)))]
+    [else (raise-argument-error 'generate
+                                "'full-vocab, 'allowed-only, or '(top-k+watch K)"
+                                policy)]))
+
+(define (top-k-ids logits k)
+  (define pairs
+    (sort
+     (for/list ([logit (in-vector logits)] [id (in-naturals)])
+       (cons id logit))
+     >
+     #:key cdr))
+  (map car (take pairs (min k (length pairs)))))
 
 (define (logsumexp-accumulate max-logit exp-sum logit)
   (cond
@@ -505,7 +729,15 @@
     [else
      (values max-logit (+ exp-sum (exp (- logit max-logit))))]))
 
-(define (result-from-state state lm-score beta step started-ms p llm-calls dead-prefixes rule-time-ms llm-time-ms)
+(define (result-from-state state lm-score beta step started-ms p llm-calls dead-prefixes rule-time-ms llm-time-ms
+                           #:candidate-policy [candidate-policy 'full-vocab]
+                           #:candidate-count-total [candidate-count-total 0]
+                           #:candidate-count-per-step [candidate-count-per-step '()]
+                           #:runtime-step-calls [runtime-step-calls 0]
+                           #:allowed-token-count [allowed-token-count 0]
+                           #:fast-forward-tokens [fast-forward-tokens 0]
+                           #:sampling-time-ms [sampling-time-ms 0.0]
+                           #:provider-session? [provider-session? #f])
   (make-generation-result
    #:status 'found
    #:reason #f
@@ -515,15 +747,24 @@
    #:guide-score (state-score state)
    #:beta beta
    #:hard-ok? #t
-   #:steps (add1 step)
-   #:generated-tokens (add1 step)
+   #:steps step
+   #:generated-tokens step
    #:latency-ms (elapsed-ms started-ms)
-   #:metrics (basic-metrics (add1 step) (add1 step) started-ms
+   #:metrics (basic-metrics step step started-ms
                             #:provider-mode (provider-mode p)
                             #:llm-calls llm-calls
                             #:dead-prefixes dead-prefixes
                             #:rule-time-ms rule-time-ms
-                            #:llm-time-ms llm-time-ms)
+                            #:llm-time-ms llm-time-ms
+                            #:vocab-size (provider-vocab-size p)
+                            #:candidate-policy candidate-policy
+                            #:candidate-count-total candidate-count-total
+                            #:candidate-count-per-step candidate-count-per-step
+                            #:runtime-step-calls runtime-step-calls
+                            #:allowed-token-count allowed-token-count
+                            #:fast-forward-tokens fast-forward-tokens
+                            #:sampling-time-ms sampling-time-ms
+                            #:provider-session? provider-session?)
    #:trace (append (state-trace state) (list (list 'final-value (state-value state))))))
 
 (define (result-from-check guide s lm-score failure-status failure-reason beta step started-ms p llm-calls dead-prefixes rule-time-ms llm-time-ms)
@@ -567,7 +808,15 @@
 	                                #:rule-time-ms rule-time-ms
 	                                #:llm-time-ms llm-time-ms))))
 
-(define (budget-error-result state s lm-score beta step started-ms p llm-calls dead-prefixes rule-time-ms llm-time-ms reason)
+(define (budget-error-result state s lm-score beta step started-ms p llm-calls dead-prefixes rule-time-ms llm-time-ms reason
+                             #:candidate-policy [candidate-policy 'full-vocab]
+                             #:candidate-count-total [candidate-count-total 0]
+                             #:candidate-count-per-step [candidate-count-per-step '()]
+                             #:runtime-step-calls [runtime-step-calls 0]
+                             #:allowed-token-count [allowed-token-count 0]
+                             #:fast-forward-tokens [fast-forward-tokens 0]
+                             #:sampling-time-ms [sampling-time-ms 0.0]
+                             #:provider-session? [provider-session? #f])
   (make-generation-result
    #:status 'error-budget
    #:reason reason
@@ -586,7 +835,16 @@
                             #:llm-calls llm-calls
                             #:dead-prefixes dead-prefixes
                             #:rule-time-ms rule-time-ms
-                            #:llm-time-ms llm-time-ms)))
+                            #:llm-time-ms llm-time-ms
+                            #:vocab-size (provider-vocab-size p)
+                            #:candidate-policy candidate-policy
+                            #:candidate-count-total candidate-count-total
+                            #:candidate-count-per-step candidate-count-per-step
+                            #:runtime-step-calls runtime-step-calls
+                            #:allowed-token-count allowed-token-count
+                            #:fast-forward-tokens fast-forward-tokens
+                            #:sampling-time-ms sampling-time-ms
+                            #:provider-session? provider-session?)))
 
 (define (deadline-expired? started-ms deadline-ms)
   (and deadline-ms
@@ -601,16 +859,44 @@
                        #:llm-calls [llm-calls 0]
                        #:dead-prefixes [dead-prefixes 0]
                        #:rule-time-ms [rule-time-ms 0.0]
-                       #:llm-time-ms [llm-time-ms 0.0])
+                       #:llm-time-ms [llm-time-ms 0.0]
+                       #:candidate-policy [candidate-policy 'full-vocab]
+                       #:candidate-count-total [candidate-count-total 0]
+                       #:candidate-count-per-step [candidate-count-per-step '()]
+                       #:runtime-step-calls [runtime-step-calls 0]
+                       #:check-calls-in-sampling [check-calls-in-sampling 0]
+                       #:parse-guide-calls-in-sampling [parse-guide-calls-in-sampling 0]
+                       #:regex-calls [regex-calls 0]
+                       #:vocab-size [vocab-size #f]
+                       #:allowed-token-count [allowed-token-count 0]
+                       #:fast-forward-tokens [fast-forward-tokens 0]
+                       #:sampling-time-ms [sampling-time-ms 0.0]
+                       #:provider-session? [provider-session? #f]
+                       #:unsupported-reason [unsupported-reason #f])
   (hash 'steps steps
         'generated-tokens generated-tokens
         'latency-ms (elapsed-ms started-ms)
         'attempts attempts
         'llm-calls llm-calls
+        'provider-calls llm-calls
         'dead-prefixes dead-prefixes
+        'dead-token-count dead-prefixes
         'rule-time-ms rule-time-ms
         'llm-time-ms llm-time-ms
-        'provider-mode provider-mode))
+        'sampling-time-ms sampling-time-ms
+        'provider-mode provider-mode
+        'vocab-size vocab-size
+        'provider-session? provider-session?
+        'candidate-policy candidate-policy
+        'candidate-count-total candidate-count-total
+        'candidate-count-per-step candidate-count-per-step
+        'runtime-step-calls runtime-step-calls
+        'check-calls-in-sampling check-calls-in-sampling
+        'parse-guide-calls-in-sampling parse-guide-calls-in-sampling
+        'regex-calls regex-calls
+        'allowed-token-count allowed-token-count
+        'fast-forward-tokens fast-forward-tokens
+        'unsupported-reason unsupported-reason))
 
 (define (make-generation-result #:status status
                                 #:reason reason
