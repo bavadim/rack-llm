@@ -1,0 +1,86 @@
+{
+  "backend_smoke": {
+    "python_sidecar": {
+      "load_metadata": {
+        "device": "cuda:0",
+        "dtype": "torch.bfloat16",
+        "gpu_name": "NVIDIA GeForce RTX 3090",
+        "load_seconds": 2.8275567239907105,
+        "model_path": "/mnt/storage/models/qwen/Qwen3.5-4B",
+        "torch": "2.11.0+cu128",
+        "torch_cuda": "12.8",
+        "vocab_size": 248320
+      },
+      "logits_b64_bytes": 2648748,
+      "logits_vocab_size": 248320,
+      "ok": true,
+      "roundtrip_prefix_match": true,
+      "sample_generated_tokens": 4,
+      "sample_text": " I am not going",
+      "token_count": 4
+    },
+    "racket_sidecar": {
+      "generated_text": " no",
+      "generated_tokens": 1,
+      "generation_status": "found",
+      "latency_ms": 7717.595703125,
+      "model_path": "/mnt/storage/models/qwen/Qwen3.5-4B",
+      "ok": true,
+      "roundtrip_ok": true,
+      "token_count": 4
+    }
+  },
+  "benchmark": {
+    "audited_soft_rows_min": 150,
+    "budgets": [
+      1,
+      4,
+      8,
+      16
+    ],
+    "noise_levels": [
+      "clean",
+      "noisy_20",
+      "noisy_40"
+    ],
+    "ours_generation_provider_mode": "exact-full-vocab",
+    "ours_generation_approximation": "none",
+    "ours_generation_max_tokens": 96,
+    "pilot_outputs_005_011_are_paper_grade": false,
+    "return_policies": [
+      "always",
+      "risk_target:0.05"
+    ]
+  },
+  "date_generated": "2026-07-05",
+  "experiment": "012_real_model_benchmark",
+  "git_revision": "1df7039b177fd0d06a9c02db24cb85a7da673ba3",
+  "model": {
+    "exists": true,
+    "files": {
+      "config.json": {
+        "bytes": 3161,
+        "sha256": "ddc63e1c717afa86c865bb5e01313d89d72bb53b97ad4a8a03ba8510c0621670"
+      },
+      "tokenizer.json": {
+        "bytes": 12807982,
+        "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+      },
+      "tokenizer_config.json": {
+        "bytes": 16710,
+        "sha256": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+      }
+    },
+    "path": "/mnt/storage/models/qwen/Qwen3.5-4B"
+  },
+  "packages": {
+    "accelerate": "1.14.0",
+    "numpy": "2.5.1",
+    "regex": "2026.6.28",
+    "scipy": "1.18.0",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.13.0"
+  },
+  "platform": "Linux-6.11.0-17-generic-x86_64-with-glibc2.39",
+  "python": "3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]"
+}
