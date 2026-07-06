@@ -1,0 +1,22 @@
+{
+  "model_path_env": "RACK_LLM_MODEL_PATH",
+  "sidecar_env": "RACK_LLM_LLAMA_SIDECAR",
+  "device": "cuda",
+  "seeds": [0, 1, 2, 3, 4],
+  "temperature": 0.7,
+  "top_p": 0.95,
+  "max_tokens": 128,
+  "samples_per_row": 16,
+  "soft_noise_levels": ["clean", "noisy_20", "noisy_40"],
+  "soft_return_policies": ["always", "risk_target:0.05"],
+  "hard_methods": ["ours_hard", "guidance_hard", "outlines_hard"],
+  "soft_methods": [
+    "vanilla",
+    "best_of_n_lm",
+    "weak_posthoc_rerank",
+    "weak_rejection",
+    "ours_soft_decoding",
+    "ours_hybrid_decoding",
+    "oracle_verifier_selection"
+  ]
+}

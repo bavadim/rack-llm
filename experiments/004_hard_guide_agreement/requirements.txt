@@ -1,0 +1,4 @@
+nltk==3.9.4
+emoji==2.15.0
+syllapy==0.7.2
+setuptools==80.9.0

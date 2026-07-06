@@ -1,8 +1,12 @@
 compiled/
 **/compiled/
-doc/
-native/
-models/
-.deps/
+.tmp/
 *.log
-runs/
+.agents/
+.venv*/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+bench/results/
+.DS_Store

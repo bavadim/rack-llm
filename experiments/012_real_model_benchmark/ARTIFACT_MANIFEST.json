@@ -1,0 +1,82 @@
+{
+  "artifact_count": 15,
+  "artifacts": [
+    {
+      "bytes": 37205,
+      "path": "experiments/012_real_model_benchmark/results/012_hard_runtime_failures.jsonl",
+      "sha256": "96b8e6610a45d85a5def76221b922af0458ea0bc6453f8a33c97821e5d87198d"
+    },
+    {
+      "bytes": 22190982,
+      "path": "experiments/012_real_model_benchmark/results/012_ours_soft_generation_raw.jsonl",
+      "sha256": "1972cb2fbb8634eb884e35bf1a796834182be08b8b8266d36b573e7d55f43e42"
+    },
+    {
+      "bytes": 30814560,
+      "path": "experiments/012_real_model_benchmark/results/012_soft_real_raw.jsonl",
+      "sha256": "9d358e59f8ce6b37c99ee083454e71e592b3a7ccac855c6143f65ef53fe90806"
+    },
+    {
+      "bytes": 65572,
+      "path": "experiments/012_real_model_benchmark/results/012_soft_real_summary.csv",
+      "sha256": "20b890e400679573c9bdea7004655eacc2a9961d1337529d02a5f4b2f1f2825c"
+    },
+    {
+      "bytes": 15758,
+      "path": "experiments/012_real_model_benchmark/results/012_soft_real_risk_coverage.csv",
+      "sha256": "4e485f2cb0150e8855c18fbe3da9f742f0e9e203ebcf12e5ff7e7515fc6f21db"
+    },
+    {
+      "bytes": 2,
+      "path": "experiments/012_real_model_benchmark/results/012_missing_runs.json",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "bytes": 290,
+      "path": "experiments/012_real_model_benchmark/results/012_hard_final_table.csv",
+      "sha256": "9e433771a655cfce9190629f5cf9d0286039faf248eba72c15cef7a1ee5ccaca"
+    },
+    {
+      "bytes": 11254,
+      "path": "experiments/012_real_model_benchmark/results/012_soft_final_table.csv",
+      "sha256": "ad9e98bf5898fd35cf490f14b53751ec86b4140a5252900d14e1d5d4145e4f2d"
+    },
+    {
+      "bytes": 1220,
+      "path": "experiments/012_real_model_benchmark/results/012_stat_tests.csv",
+      "sha256": "b018dcea1f661d8c491fbfc18e31d349d79722bd887df8be60c19f0b966a81ed"
+    },
+    {
+      "bytes": 439,
+      "path": "experiments/012_real_model_benchmark/results/012_claims.md",
+      "sha256": "541f37a0151194bf00a2ed420710a19b0bb22cd9afb9d83907e831545de8dd5a"
+    },
+    {
+      "bytes": 5916,
+      "path": "experiments/012_real_model_benchmark/results/019_ours_soft_smoke_raw.jsonl",
+      "sha256": "f04edd3998fe372c7607767d5df0d03e6413cda8985ceed2fad6c506faec15cf"
+    },
+    {
+      "bytes": 3003,
+      "path": "experiments/012_real_model_benchmark/figures/012_first_gold_rank.png",
+      "sha256": "5cdec5fcbb33a4a7eb52781d8767a8f248740b82492214687a0d3f8336e96474"
+    },
+    {
+      "bytes": 2583,
+      "path": "experiments/012_real_model_benchmark/figures/012_hard_solve_vs_time.png",
+      "sha256": "0c2039e55f81902b38437182c4cf3eb529a52fad4ccdd8bc52da42a821cef606"
+    },
+    {
+      "bytes": 1904,
+      "path": "experiments/012_real_model_benchmark/figures/012_noise_robustness.png",
+      "sha256": "bc5491ce02e3ba1958802b99fb0a133e062aa6e4415b1986482c6653c5bc1287"
+    },
+    {
+      "bytes": 1827,
+      "path": "experiments/012_real_model_benchmark/figures/012_soft_risk_coverage.png",
+      "sha256": "840d8314c151e0e630b48ef3def803f0397c19ada823ceb3482652ece3422be2"
+    }
+  ],
+  "experiment": "012_real_model_benchmark",
+  "pilot_outputs_005_011": "non-paper-grade; retained only as development pilots"
+}
