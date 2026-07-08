@@ -2,6 +2,19 @@
 
 Status: todo
 
+## Current status 2026-07-08
+
+Blocked. Current `012_ours_soft_generation_raw.jsonl` rows for `ours_*` were
+generated with `provider_mode=top-k-approx`, and `data/012_claims.md` explicitly
+notes that top-k was used for runtime feasibility. Regenerating artifacts before
+fixing exact soft decoding and aligning experiment Racket scripts would only
+produce fresh stale evidence.
+
+Run this after:
+
+- `032_repair_exact_full_vocab_soft_sampler.md`
+- `033_align_real_benchmark_racket_scripts_with_current_api.md`
+
 ## Problem
 
 Код изменен: open `text` больше не завершает generation после первого токена,
@@ -21,4 +34,3 @@ specs. Старые `012_*`, `010_*`, `011_*` результаты были по
   - `005/006/010/011` derived artifacts
 - `.venv-realbench/bin/python experiments/012_real_model_benchmark/code/test_real_model_benchmark.py` проходит.
 - `011_claims.md` не содержит claims, основанных на stale top-k artifacts.
-

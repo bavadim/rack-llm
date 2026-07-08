@@ -5,10 +5,10 @@
 The public model is:
 
 ```text
-Provider + prompt token ids + Filter -> generation-result
+Model + prompt text + filter builder -> generation-result
 ```
 
-Text exists at the edges. Tokenization and detokenization are supplied by a
+Tokenizer, provider, and logits state are private runtime details supplied by a
 model implementation.
 
 ## Public API
@@ -25,32 +25,29 @@ Model implementation:
 (require rack-llm/model-qwen)
 ```
 
-A model provides a tokenizer and provider together:
+A model is passed directly to `generate`:
 
 ```racket
 (define m
   (qwen-model #:model-path "/mnt/storage/models/qwen/Qwen3.5-4B"
               #:command sidecar-command))
-
-(define tok (model-tokenizer m))
-(define p (model-provider m))
 ```
 
-Filters are built as immutable builders, then compiled with the tokenizer once:
+Filters are immutable builders. `generate` compiles them with the model
+tokenizer internally:
 
 ```racket
 (define f
-  ((choice (list (lit " yes")
-                 (lit " no")))
-   tok))
+  (choice (list (lit " yes")
+                (lit " no"))))
 
 (define r
-  (generate p
-            (tokenize tok "Reply yes or no:")
+  (generate m
+            "Reply yes or no:"
             f
             #:candidate-policy 'allowed-only))
 
-(detokenize tok (generation-result-token-ids r))
+(generation-result-text r)
 ```
 
 ## Filters
@@ -91,9 +88,29 @@ lm-logit + beta * (delta-score + lambda * delta-potential)
 ## Modules
 
 ```text
-main.rkt        public core: interfaces, filters, regex, generation
-model-qwen.rkt  Qwen sidecar model implementation
+main.rkt              public facade: API types, builders, generate
+private/logits.rkt    logits view abstraction for provider/sampler boundary
+private/model.rkt     tokenizer/provider/model runtime objects
+private/filter.rkt    filter runtime state machines
+private/regex.rkt     regex parser/NFA/token transition caches
+private/sampling.rkt  default token selection algorithm
+model-qwen.rkt        Qwen sidecar model implementation
 ```
 
 There is no compatibility layer for the old guide/runtime API, no mock provider
 in the library, and no public `make-*` constructors.
+
+## E2E Scenarios
+
+Executable public API scenarios live in `tests/e2e-real-test.rkt` and run
+against the real Qwen model. They cover finite hard choices, regex hard
+constraints, soft open text, and dependent `bind` composition.
+
+## Current Repair Backlog
+
+The core API boundary is intentionally narrow, but two repair tracks remain:
+
+- exact full-vocabulary soft decoding needs a measured optimization pass or a
+  fail-closed infeasible decision for Qwen-scale vocabularies;
+- real benchmark Racket scripts still need to be aligned with the current API
+  before `012_*` artifacts can be treated as fresh evidence.

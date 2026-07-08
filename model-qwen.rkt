@@ -3,7 +3,13 @@
 (require json
          net/base64
          racket/port
-         "main.rkt")
+         (only-in "private/logits.rkt"
+                  vector->logits-view)
+         (only-in "private/model.rkt"
+                  tokenizer
+                  detokenize
+                  provider
+                  model))
 
 (provide qwen-model)
 
@@ -79,7 +85,7 @@
                 "sidecar returned ~a logits for ~a vocabulary items"
                 (vector-length logits)
                 (length vocab)))
-       logits)
+       (vector->logits-view logits))
      #:start-session
      (lambda (prompt-ids)
        (define response
@@ -102,7 +108,7 @@
                 "sidecar returned ~a session logits for ~a vocabulary items"
                 (vector-length logits)
                 (length vocab)))
-       logits)
+       (vector->logits-view logits))
      #:commit-token!
      (lambda (session token-id)
        (define response

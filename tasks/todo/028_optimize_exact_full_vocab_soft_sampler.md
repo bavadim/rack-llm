@@ -2,6 +2,18 @@
 
 Status: todo
 
+## Current status 2026-07-08
+
+Still current. The library now has `private/sampling.rkt`, but exact
+full-vocabulary soft decoding still checks `#:deadline-ms` only around the
+generation step, not inside the candidate loop. A synthetic 20k-vocab open-text
+run with `#:deadline-ms 1` returned `error-budget` only after finishing one
+full candidate pass and generating one token.
+
+This task should be implemented through `032_repair_exact_full_vocab_soft_sampler.md`.
+Do not regenerate paper artifacts until that repair either makes exact mode
+practical or marks it fail-closed infeasible.
+
 ## Problem
 
 `ours_soft_*` больше не должен использовать `top-k-approx` как paper-grade
@@ -18,4 +30,3 @@ vocabulary pass слишком медленный: основная стоимо
   - метод явно объявлен infeasible для текущего runtime с error-budget rows.
 - Нельзя возвращаться к top-k как main result.
 - `racket_ours_soft_batch.rkt` main mode остается `exact-full-vocab`.
-

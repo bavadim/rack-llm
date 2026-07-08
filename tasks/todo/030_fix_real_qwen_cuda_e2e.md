@@ -1,9 +1,28 @@
 # Task 030. Fix Real Qwen CUDA E2E
 
+Status: verification
+
+## Current status 2026-07-08
+
+The original CUDA mismatch is not present on this machine now:
+
+```text
+nvidia-smi: passes
+torch: 2.11.0+cu128
+torch.cuda.is_available(): True
+GPU: NVIDIA GeForce RTX 3090
+make realbench-check: passes
+raco test tests/e2e-real-test.rkt: 6 tests passed
+```
+
+Keep this task as a verification gate for real Qwen, not the next core repair.
+The remaining high-priority library issue is exact full-vocabulary soft
+decoding, tracked in `032_repair_exact_full_vocab_soft_sampler.md`.
+
 ## Summary
 
-Real Qwen e2e currently fails before DSL/generation assertions because the CUDA
-client stack is inconsistent on this machine.
+Original issue: Real Qwen e2e failed before DSL/generation assertions because
+the CUDA client stack was inconsistent on this machine.
 
 Observed facts:
 
@@ -16,8 +35,8 @@ loaded kernel module: 580.167.08
 userspace NVML library: 580.173.02
 ```
 
-The task is to fix the CUDA path, not to replace real e2e with mocks or CPU
-fallback.
+If this regresses, the task is to fix the CUDA path, not to replace real e2e
+with mocks or CPU fallback.
 
 ## Plan
 

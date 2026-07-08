@@ -20,50 +20,11 @@
 Returns a `Model`.
 
 ```racket
-(model-tokenizer model) ; -> Tokenizer
-(model-provider model)  ; -> Provider
-(model-close! model)    ; -> (-> Void)
 (model-metadata model)  ; -> hash
+(model-close! model)    ; -> (-> Void)
 ```
 
-## Tokenizer Interface
-
-Model implementations construct tokenizers with:
-
-```racket
-(tokenizer #:tokenize proc
-           #:detokenize proc
-           #:token-ref proc
-           #:vocab-size n
-           #:fingerprint fp)
-```
-
-Users normally call interface operations:
-
-```racket
-(tokenize tok text)      ; -> TokenIds
-(detokenize tok ids)     ; -> String
-(token-ref tok id)       ; -> String
-(vocab-size tok)         ; -> Natural
-(fingerprint tok)        ; -> String
-```
-
-## Provider Interface
-
-Model implementations construct providers with:
-
-```racket
-(provider #:vocab-size n
-          #:next-logits proc
-          #:mode 'exact-full-vocab
-          #:metadata metadata
-          #:start-session start
-          #:next-logits/session next
-          #:commit-token! commit
-          #:end-session! end)
-```
-
-No mock provider is exported by the library.
+Tokenizer, provider, and logits interfaces are private runtime details.
 
 ## Filters
 
@@ -83,14 +44,13 @@ No mock provider is exported by the library.
 (weight samples specs)
 ```
 
-These functions return immutable builders. Apply a builder to a tokenizer to
-compile a token-native `Filter` before calling `generate`:
+These functions return immutable builders. `generate` compiles a builder with
+the model tokenizer internally:
 
 ```racket
 (define filter
-  ((choice (list (lit " yes")
-                 (lit " no")))
-   tok))
+  (choice (list (lit " yes")
+                (lit " no"))))
 ```
 
 `seq` and `choice` take lists of filter builders.
@@ -98,7 +58,7 @@ compile a token-native `Filter` before calling `generate`:
 ## Generate
 
 ```racket
-(generate provider prompt-ids filter
+(generate model prompt filter-builder
           #:beta 1.0
           #:lambda 0.5
           #:temperature 0.7
@@ -116,8 +76,19 @@ Candidate policies:
 '(top-k K)
 ```
 
-The result contains generated token ids. Detokenize explicitly:
+`'full-vocab` is exact over the model vocabulary. For large vocabularies and
+open text watchers this can be expensive; use `#:deadline-ms` to fail closed
+instead of relying on an external timeout.
+
+The result contains generated text and token ids:
 
 ```racket
-(detokenize tok (generation-result-token-ids result))
+(generation-result-text result)
+(generation-result-token-ids result)
 ```
+
+## Private Runtime
+
+Tokenizer/provider state, logits views, filter state, regex machines, and
+sampling selection helpers are private implementation details. User code should
+choose a model, define a filter builder, and call `generate`.

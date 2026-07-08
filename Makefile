@@ -8,13 +8,16 @@ REALBENCH_SIDECAR ?= $(REALBENCH_PYTHON) experiments/012_real_model_benchmark/co
 REALBENCH_HARD_PILOT_TIMEOUT ?= 600s
 REALBENCH_HARD_SAMPLE_TIMEOUT_SEC ?= 60
 
-.PHONY: help install lint ci test realbench-env realbench-check realbench-test realbench-sidecar-smoke realbench-hard-pilot
+.PHONY: help install lint compile arch-lint dep-lint ci test realbench-env realbench-check realbench-test realbench-sidecar-smoke realbench-hard-pilot
 
 help:
 	@printf '%s\n' \
 	  'Targets:' \
 	  '  make install       Install the Racket package with raco.' \
-	  '  make lint          Compile the library and tests.' \
+	  '  make compile       Compile the library and tests.' \
+	  '  make arch-lint     Report module size/surface and check architecture rules.' \
+	  '  make dep-lint      Check architecture and actionable unused requires.' \
+	  '  make lint          Run compile and dependency lint.' \
 	  '  make test          Run contract and real sidecar e2e tests.' \
 	  '  make realbench-env        Create/check real benchmark venv, download model, smoke CUDA.' \
 	  '  make realbench-check      Check existing real benchmark backend without install/download.' \
@@ -26,8 +29,15 @@ help:
 install:
 	$(RACO) pkg install --auto
 
-lint:
-	$(RACO) make main.rkt model-qwen.rkt tests/contract-test.rkt tests/e2e-real-test.rkt
+compile:
+	$(RACO) make main.rkt model-qwen.rkt tests/contract-test.rkt tests/e2e-real-test.rkt tests/e2e-sampler-test.rkt tests/private/sampling-test.rkt tests/private/runtime-test.rkt
+
+arch-lint:
+	RACO="$(RACO)" racket tools/arch-lint.rkt
+
+dep-lint: arch-lint
+
+lint: compile dep-lint
 
 ci: lint test
 
