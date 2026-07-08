@@ -68,22 +68,32 @@ No mock provider is exported by the library.
 ## Filters
 
 ```racket
-(lit tok text)
-(rx tok pattern)
+(lit text)
+(rx pattern)
 (pure value)
-(seq filters)
-(choice filters)
-(repeat min-count max-count filter)
-(bind filter continue)
-(score score filter ban?)
-(text max-tokens watchers)
+(seq filter-builders)
+(choice filter-builders)
+(repeat min-count max-count filter-builder)
+(bind filter-builder continue)
+(score score filter-builder ban?)
+(text max-tokens watcher-builders)
 
-(rank tok score text)
-(ban tok text)
-(weight tok samples specs)
+(rank score text)
+(ban text)
+(weight samples specs)
 ```
 
-`seq` and `choice` take lists of filters.
+These functions return immutable builders. Apply a builder to a tokenizer to
+compile a token-native `Filter` before calling `generate`:
+
+```racket
+(define filter
+  ((choice (list (lit " yes")
+                 (lit " no")))
+   tok))
+```
+
+`seq` and `choice` take lists of filter builders.
 
 ## Generate
 

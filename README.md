@@ -36,12 +36,13 @@ A model provides a tokenizer and provider together:
 (define p (model-provider m))
 ```
 
-Filters are built with explicit tokenizers:
+Filters are built as immutable builders, then compiled with the tokenizer once:
 
 ```racket
 (define f
-  (choice (list (lit tok " yes")
-                (lit tok " no"))))
+  ((choice (list (lit " yes")
+                 (lit " no")))
+   tok))
 
 (define r
   (generate p

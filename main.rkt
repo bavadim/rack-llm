@@ -1,7 +1,8 @@
 #lang typed/racket/base
 
 (require racket/list
-         racket/string)
+         racket/string
+         "private/regex.rkt")
 
 (provide TokenId
          TokenIds
@@ -15,6 +16,8 @@
          Filter
          FilterState
          Watcher
+         FilterBuilder
+         WatcherBuilder
          CandidatePolicy
          tokenizer
          provider
@@ -209,443 +212,15 @@
   #:transparent)
 (define-type Model model)
 
-;; Regex implementation
+;; Regex internals live in private/regex.rkt. main.rkt keeps the public
+;; builder facade and tokenizer-specific wiring.
 
-
-
-(struct r-empty () #:transparent)
-(struct r-eps () #:transparent)
-(struct r-class ([ranges : (Listof (Pairof Char Char))]
-                 [negated? : Boolean])
-  #:transparent)
-(struct r-alt ([left : RegexAst] [right : RegexAst]) #:transparent)
-(struct r-cat ([left : RegexAst] [right : RegexAst]) #:transparent)
-(struct r-star ([body : RegexAst]) #:transparent)
-
-(define-type RegexAst (U r-empty r-eps r-class r-alt r-cat r-star))
-(define-type RegexState (Listof Natural))
-
-(struct raw-edge ([from : Natural] [label : (Option r-class)] [to : Natural]) #:transparent)
-(struct nfa-edge ([label : (Option r-class)] [to : Natural]) #:transparent)
-(struct nfa ([start : Natural] [accept : Natural] [adj : (Vectorof (Listof nfa-edge))]) #:transparent)
-(struct fragment
-  ([start : Natural]
-   [accept : Natural]
-   [edges : (Listof raw-edge)]
-   [next-id : Natural])
-  #:transparent)
-
-(struct %rx-machine
-  ([source : String]
-   [ast : RegexAst]
-   [nfa : nfa]
-   [token-texts : (Vectorof String)]
-   [transition-cache : (Mutable-HashTable (Pairof RegexState TokenId) (Option RegexState))]
-   [allowed-cache : (Mutable-HashTable RegexState TokenIds)])
-  #:transparent)
-
-(: %compile-regex-machine (-> String Tokenizer %rx-machine))
-(define (%compile-regex-machine source tok)
-  (define ast (parse-regex source))
+(: instantiate-regex-for-tokenizer (-> RegexProgram Tokenizer RegexMachine))
+(define (instantiate-regex-for-tokenizer program tok)
   (define token-texts
     (for/vector : (Vectorof String) ([id : Natural (in-range (vocab-size tok))])
       (token-ref tok id)))
-  (%rx-machine source
-              ast
-              (ast->nfa ast)
-              token-texts
-              (ann (make-hash) (Mutable-HashTable (Pairof RegexState TokenId) (Option RegexState)))
-              (ann (make-hash) (Mutable-HashTable RegexState TokenIds))))
-
-(: regex-initial (-> %rx-machine RegexState))
-(define (regex-initial machine)
-  (epsilon-closure (%rx-machine-nfa machine) (list (nfa-start (%rx-machine-nfa machine)))))
-
-(: regex-step (-> %rx-machine RegexState TokenId (Option RegexState)))
-(define (regex-step machine state id)
-  (define key (cons state id))
-  (define cache (%rx-machine-transition-cache machine))
-  (cond
-    [(hash-has-key? cache key) (hash-ref cache key)]
-    [else
-     (define token (vector-ref (%rx-machine-token-texts machine) id))
-     (define next
-       (for/fold ([current : (Option RegexState) state])
-                 ([ch (in-string token)])
-         (and current
-              (let ([moved (move-char (%rx-machine-nfa machine) current ch)])
-                (and (pair? moved) moved)))))
-     (hash-set! cache key next)
-     next]))
-
-(: regex-dead? (-> RegexState Boolean))
-(define (regex-dead? state) (null? state))
-
-(: regex-accepting? (-> %rx-machine RegexState Boolean))
-(define (regex-accepting? machine state)
-  (and (member (nfa-accept (%rx-machine-nfa machine)) state) #t))
-
-(: regex-terminal? (-> %rx-machine RegexState Boolean))
-(define (regex-terminal? machine state)
-  (and (regex-accepting? machine state)
-       (null? (regex-allowed-ids machine state))))
-
-(: regex-allowed-ids (-> %rx-machine RegexState TokenIds))
-(define (regex-allowed-ids machine state)
-  (define cache (%rx-machine-allowed-cache machine))
-  (cond
-    [(hash-has-key? cache state) (hash-ref cache state)]
-    [else
-     (define vocab (%rx-machine-token-texts machine))
-     (define allowed
-       (for/list : TokenIds
-                 ([id : Natural (in-range (vector-length vocab))]
-                  #:when (regex-step machine state id))
-         id))
-     (hash-set! cache state allowed)
-     allowed]))
-
-(: ast->nfa (-> RegexAst nfa))
-(define (ast->nfa ast)
-  (define frag (compile-fragment ast 0))
-  (define size (fragment-next-id frag))
-  (define adj : (Vectorof (Listof nfa-edge))
-    (make-vector size (ann '() (Listof nfa-edge))))
-  (for ([edge (in-list (fragment-edges frag))])
-    (define from (raw-edge-from edge))
-    (vector-set! adj from
-                 (cons (nfa-edge (raw-edge-label edge) (raw-edge-to edge))
-                       (vector-ref adj from))))
-  (nfa (fragment-start frag) (fragment-accept frag) adj))
-
-(: compile-fragment (-> RegexAst Natural fragment))
-(define (compile-fragment ast next-id)
-  (cond
-    [(r-empty? ast)
-     (fragment next-id (add1 next-id) '() (+ next-id 2))]
-    [(r-eps? ast)
-     (define s next-id)
-     (define a (add1 s))
-     (fragment s a (list (raw-edge s #f a)) (+ next-id 2))]
-    [(r-class? ast)
-     (define s next-id)
-     (define a (add1 s))
-     (fragment s a (list (raw-edge s ast a)) (+ next-id 2))]
-    [(r-cat? ast)
-     (define left (compile-fragment (r-cat-left ast) next-id))
-     (define right (compile-fragment (r-cat-right ast) (fragment-next-id left)))
-     (fragment (fragment-start left)
-               (fragment-accept right)
-               (append (fragment-edges left)
-                       (fragment-edges right)
-                       (list (raw-edge (fragment-accept left) #f (fragment-start right))))
-               (fragment-next-id right))]
-    [(r-alt? ast)
-     (define left (compile-fragment (r-alt-left ast) (+ next-id 2)))
-     (define right (compile-fragment (r-alt-right ast) (fragment-next-id left)))
-     (define s next-id)
-     (define a (add1 next-id))
-     (fragment s a
-               (append (fragment-edges left)
-                       (fragment-edges right)
-                       (list (raw-edge s #f (fragment-start left))
-                             (raw-edge s #f (fragment-start right))
-                             (raw-edge (fragment-accept left) #f a)
-                             (raw-edge (fragment-accept right) #f a)))
-               (fragment-next-id right))]
-    [(r-star? ast)
-     (define body (compile-fragment (r-star-body ast) (+ next-id 2)))
-     (define s next-id)
-     (define a (add1 next-id))
-     (fragment s a
-               (append (fragment-edges body)
-                       (list (raw-edge s #f a)
-                             (raw-edge s #f (fragment-start body))
-                             (raw-edge (fragment-accept body) #f (fragment-start body))
-                             (raw-edge (fragment-accept body) #f a)))
-               (fragment-next-id body))]))
-
-(: epsilon-closure (-> nfa RegexState RegexState))
-(define (epsilon-closure graph states)
-  (let loop ([pending : RegexState states] [seen : RegexState '()])
-    (cond
-      [(null? pending) (normalize-state seen)]
-      [(member (car pending) seen) (loop (cdr pending) seen)]
-      [else
-       (define current (car pending))
-       (define eps-targets
-         (for/list : RegexState
-                   ([edge (in-list (vector-ref (nfa-adj graph) current))]
-                    #:when (not (nfa-edge-label edge)))
-           (nfa-edge-to edge)))
-       (loop (append eps-targets (cdr pending)) (cons current seen))])))
-
-(: move-char (-> nfa RegexState Char RegexState))
-(define (move-char graph states ch)
-  (define direct
-    (for/fold ([targets : RegexState '()])
-              ([state (in-list states)])
-      (append targets
-              (for/list : RegexState
-                        ([edge (in-list (vector-ref (nfa-adj graph) state))]
-                         #:when (let ([label (nfa-edge-label edge)])
-                                  (and label (class-contains? label ch))))
-                (nfa-edge-to edge)))))
-  (if (null? direct) '() (epsilon-closure graph direct)))
-
-(: normalize-state (-> RegexState RegexState))
-(define (normalize-state state)
-  (sort (remove-duplicates state) <))
-
-(: class-contains? (-> r-class Char Boolean))
-(define (class-contains? c ch)
-  (define inside?
-    (for/or : Boolean ([range (in-list (r-class-ranges c))])
-      (and (char<=? (car range) ch)
-           (char<=? ch (cdr range)))))
-  (if (r-class-negated? c) (not inside?) inside?))
-
-(: alt (-> RegexAst RegexAst RegexAst))
-(define (alt a b)
-  (cond
-    [(r-empty? a) b]
-    [(r-empty? b) a]
-    [(equal? a b) a]
-    [else (r-alt a b)]))
-
-(: cat (-> RegexAst RegexAst RegexAst))
-(define (cat a b)
-  (cond
-    [(or (r-empty? a) (r-empty? b)) (r-empty)]
-    [(r-eps? a) b]
-    [(r-eps? b) a]
-    [else (r-cat a b)]))
-
-(: star (-> RegexAst RegexAst))
-(define (star r)
-  (cond
-    [(or (r-empty? r) (r-eps? r)) (r-eps)]
-    [(r-star? r) r]
-    [else (r-star r)]))
-
-(: optional (-> RegexAst RegexAst))
-(define (optional r) (alt (r-eps) r))
-
-(: repeat-range (-> RegexAst Natural (Option Natural) RegexAst))
-(define (repeat-range r min-count max-count)
-  (define required
-    (for/fold ([acc : RegexAst (r-eps)])
-              ([_ (in-range min-count)])
-      (cat acc r)))
-  (cond
-    [(not max-count) (cat required (star r))]
-    [else
-     (define extra (- max-count min-count))
-     (for/fold ([acc : RegexAst required])
-               ([_ (in-range extra)])
-       (cat acc (optional r)))]))
-
-(struct parser ([source : String] [pos : Natural]) #:transparent)
-
-(: parse-regex (-> String RegexAst))
-(define (parse-regex source)
-  (define-values (ast p) (parse-alt (parser source 0)))
-  (unless (= (parser-pos p) (string-length source))
-    (error 'rx "unexpected regex input at offset ~a in ~s" (parser-pos p) source))
-  ast)
-
-(: parse-alt (-> parser (Values RegexAst parser)))
-(define (parse-alt p0)
-  (define-values (first p1) (parse-concat p0))
-  (let loop : (Values RegexAst parser) ([acc : RegexAst first] [p : parser p1])
-    (if (peek-char=? p #\|)
-        (let-values ([(rhs p2) (parse-concat (advance p))])
-          (loop (alt acc rhs) p2))
-        (values acc p))))
-
-(: parse-concat (-> parser (Values RegexAst parser)))
-(define (parse-concat p0)
-  (let loop : (Values RegexAst parser) ([parts : (Listof RegexAst) '()] [p : parser p0])
-    (cond
-      [(or (at-end? p) (peek-char=? p #\)) (peek-char=? p #\|))
-       (values (foldl (lambda ([part : RegexAst] [acc : RegexAst]) (cat acc part))
-                      (r-eps)
-                      (reverse parts))
-               p)]
-      [else
-       (define-values (piece p1) (parse-repeat p))
-       (loop (cons piece parts) p1)])))
-
-(: parse-repeat (-> parser (Values RegexAst parser)))
-(define (parse-repeat p0)
-  (define-values (atom p1) (parse-atom p0))
-  (cond
-    [(peek-char=? p1 #\?) (values (optional atom) (advance p1))]
-    [(peek-char=? p1 #\*) (values (star atom) (advance p1))]
-    [(peek-char=? p1 #\+) (values (cat atom (star atom)) (advance p1))]
-    [(peek-char=? p1 #\{)
-     (define-values (min-count max-count p2) (parse-braces (advance p1)))
-     (values (repeat-range atom min-count max-count) p2)]
-    [else (values atom p1)]))
-
-(: parse-atom (-> parser (Values RegexAst parser)))
-(define (parse-atom p)
-  (cond
-    [(at-end? p) (error 'rx "unexpected end of regex")]
-    [(peek-char=? p #\()
-     (define after-open (advance p))
-     (when (peek-char=? after-open #\?)
-       (error 'rx "unsupported regex group syntax near offset ~a in ~s"
-              (parser-pos p)
-              (parser-source p)))
-     (define-values (body p1) (parse-alt after-open))
-     (unless (peek-char=? p1 #\))
-       (error 'rx "unclosed group in ~s" (parser-source p)))
-     (values body (advance p1))]
-    [(peek-char=? p #\[) (parse-class (advance p))]
-    [(peek-char=? p #\.) (values (r-class '() #t) (advance p))]
-    [(peek-char=? p #\\) (parse-escape (advance p))]
-    [else
-     (define ch (current-char p))
-     (cond
-       [(or (char=? ch #\^) (char=? ch #\$))
-        (error 'rx "unsupported regex anchor ~a in ~s" ch (parser-source p))]
-       [(member ch '(#\) #\] #\{ #\} #\? #\* #\+ #\|))
-        (error 'rx "unexpected metacharacter ~a in ~s" ch (parser-source p))]
-       [else (values (literal-char ch) (advance p))])]))
-
-(: parse-escape (-> parser (Values RegexAst parser)))
-(define (parse-escape p)
-  (when (at-end? p)
-    (error 'rx "dangling escape"))
-  (define ch (current-char p))
-  (cond
-    [(char-numeric? ch) (error 'rx "unsupported backreference \\~a" ch)]
-    [(char=? ch #\d) (values digit-class (advance p))]
-    [(char=? ch #\s) (values space-class (advance p))]
-    [(char=? ch #\S) (values (negate-class space-class) (advance p))]
-    [(char=? ch #\w) (values word-class (advance p))]
-    [(char-alphabetic? ch) (error 'rx "unsupported regex escape \\~a" ch)]
-    [else (values (literal-char ch) (advance p))]))
-
-(: parse-class (-> parser (Values RegexAst parser)))
-(define (parse-class p0)
-  (define negated? (peek-char=? p0 #\^))
-  (define p-start (if negated? (advance p0) p0))
-  (let loop : (Values RegexAst parser) ([ranges : (Listof (Pairof Char Char)) '()]
-                                        [p : parser p-start])
-    (cond
-      [(at-end? p) (error 'rx "unclosed character class in ~s" (parser-source p0))]
-      [(peek-char=? p #\])
-       (when (null? ranges)
-         (error 'rx "empty character class in ~s" (parser-source p0)))
-       (values (r-class (reverse ranges) negated?) (advance p))]
-      [else
-       (define-values (ranges1 p1) (class-item p))
-       (loop (append (reverse ranges1) ranges) p1)])))
-
-(: class-item (-> parser (Values (Listof (Pairof Char Char)) parser)))
-(define (class-item p)
-  (cond
-    [(peek-char=? p #\\)
-     (define p1 (advance p))
-     (when (at-end? p1) (error 'rx "dangling escape in class"))
-     (define ch (current-char p1))
-     (cond
-       [(char=? ch #\d) (values digit-ranges (advance p1))]
-       [(char=? ch #\s) (values space-ranges (advance p1))]
-       [(char=? ch #\w) (values word-ranges (advance p1))]
-       [(char=? ch #\S) (error 'rx "\\S inside character classes is unsupported")]
-       [(char-alphabetic? ch) (error 'rx "unsupported regex escape \\~a in class" ch)]
-       [else (maybe-range ch (advance p1))])]
-    [else (maybe-range (current-char p) (advance p))]))
-
-(: maybe-range (-> Char parser (Values (Listof (Pairof Char Char)) parser)))
-(define (maybe-range start p)
-  (cond
-    [(and (peek-char=? p #\-)
-          (not (at-end? (advance p)))
-          (not (peek-char=? (advance p) #\])))
-     (define end (current-char (advance p)))
-     (when (char<? end start)
-       (error 'rx "descending character range ~a-~a" start end))
-     (values (list (cons start end)) (advance (advance p)))]
-    [else (values (list (cons start start)) p)]))
-
-(: parse-braces (-> parser (Values Natural (Option Natural) parser)))
-(define (parse-braces p0)
-  (define-values (min-count p1) (parse-natural p0))
-  (cond
-    [(peek-char=? p1 #\}) (values min-count min-count (advance p1))]
-    [(peek-char=? p1 #\,)
-     (define p2 (advance p1))
-     (if (peek-char=? p2 #\})
-         (values min-count #f (advance p2))
-         (let-values ([(max-count p3) (parse-natural p2)])
-           (unless (peek-char=? p3 #\})
-             (error 'rx "unclosed repetition in ~s" (parser-source p0)))
-           (when (< max-count min-count)
-             (error 'rx "repetition maximum is smaller than minimum"))
-           (values min-count max-count (advance p3))))]
-    [else (error 'rx "expected } or , in repetition in ~s" (parser-source p0))]))
-
-(: parse-natural (-> parser (Values Natural parser)))
-(define (parse-natural p0)
-  (let loop : (Values Natural parser) ([n : Natural 0] [seen? : Boolean #f] [p : parser p0])
-    (if (and (not (at-end? p)) (char-numeric? (current-char p)))
-        (loop (assert (+ (* n 10)
-                         (- (char->integer (current-char p)) (char->integer #\0)))
-                      exact-nonnegative-integer?)
-              #t
-              (advance p))
-        (begin
-          (unless seen?
-            (error 'rx "expected integer repetition count in ~s" (parser-source p0)))
-          (values n p)))))
-
-(: digit-ranges (Listof (Pairof Char Char)))
-(define digit-ranges (list (cons #\0 #\9)))
-(: space-ranges (Listof (Pairof Char Char)))
-(define space-ranges (list (cons #\space #\space)
-                           (cons #\tab #\tab)
-                           (cons #\newline #\newline)
-                           (cons #\return #\return)))
-(: word-ranges (Listof (Pairof Char Char)))
-(define word-ranges (list (cons #\A #\Z) (cons #\a #\z)
-                          (cons #\0 #\9) (cons #\_ #\_)))
-(: digit-class RegexAst)
-(define digit-class (r-class digit-ranges #f))
-(: space-class RegexAst)
-(define space-class (r-class space-ranges #f))
-(: word-class RegexAst)
-(define word-class (r-class word-ranges #f))
-
-(: literal-char (-> Char RegexAst))
-(define (literal-char ch)
-  (r-class (list (cons ch ch)) #f))
-
-(: negate-class (-> RegexAst RegexAst))
-(define (negate-class r)
-  (cond
-    [(r-class? r) (r-class (r-class-ranges r) (not (r-class-negated? r)))]
-    [else (error 'rx "cannot negate non-class")]))
-
-(: at-end? (-> parser Boolean))
-(define (at-end? p)
-  (>= (parser-pos p) (string-length (parser-source p))))
-
-(: current-char (-> parser Char))
-(define (current-char p)
-  (string-ref (parser-source p) (parser-pos p)))
-
-(: peek-char=? (-> parser Char Boolean))
-(define (peek-char=? p ch)
-  (and (not (at-end? p))
-       (char=? (current-char p) ch)))
-
-(: advance (-> parser parser))
-(define (advance p)
-  (parser (parser-source p) (add1 (parser-pos p))))
+  (instantiate-regex-machine program token-texts))
 
 ;; Filter implementation
 
@@ -655,21 +230,14 @@
 (define neg-inf : Real -inf.0)
 
 (struct %lit-filter ([ids : TokenIds]) #:transparent)
-(struct %rx-filter ([machine : %rx-machine]) #:transparent)
-(struct %pure-filter ([value : Any]) #:transparent
-  #:constructor-name pure)
-(struct (A) %choice-filter ([options : (Listof A)]) #:transparent
-  #:constructor-name choice)
-(struct (A) %seq-filter ([children : (Listof A)]) #:transparent
-  #:constructor-name seq)
-(struct (A) %repeat-filter ([min-count : Natural] [max-count : Natural] [item : A]) #:transparent
-  #:constructor-name repeat)
-(struct (A) %bind-filter ([first : A] [continue : (-> Any A)]) #:transparent
-  #:constructor-name bind)
-(struct (A) %score-filter ([score : Real] [child : A] [ban? : Boolean]) #:transparent
-  #:constructor-name score)
-(struct %text-filter ([max-tokens : Natural] [watchers : (Listof Watcher)]) #:transparent
-  #:constructor-name text)
+(struct %rx-filter ([machine : RegexMachine]) #:transparent)
+(struct %pure-filter ([value : Any]) #:transparent)
+(struct (A) %choice-filter ([options : (Listof A)]) #:transparent)
+(struct (A) %seq-filter ([children : (Listof A)]) #:transparent)
+(struct (A) %repeat-filter ([min-count : Natural] [max-count : Natural] [item : A]) #:transparent)
+(struct (A) %bind-filter ([first : A] [continue : (-> Any A)]) #:transparent)
+(struct (A) %score-filter ([score : Real] [child : A] [ban? : Boolean]) #:transparent)
+(struct %text-filter ([max-tokens : Natural] [watchers : (Listof Watcher)]) #:transparent)
 
 (define-type Filter
   (Rec F (U %lit-filter
@@ -687,6 +255,9 @@
 (struct weighted-rule ([score : Real] [ids : TokenIds] [source : String]) #:transparent)
 (struct weighted-watcher ([rules : (Listof weighted-rule)]) #:transparent)
 (define-type Watcher (U rank-watcher ban-watcher weighted-watcher))
+
+(define-type FilterBuilder (-> Tokenizer Filter))
+(define-type WatcherBuilder (-> Tokenizer Watcher))
 
 (struct lit-state ([pos : Natural] [len : Natural]) #:transparent)
 (struct rx-state ([state : RegexState] [accepting? : Boolean] [terminal? : Boolean]) #:transparent)
@@ -1234,42 +805,94 @@
 (: assert-text-state (-> FilterState text-state))
 (define (assert-text-state v) (assert v text-state?))
 
-;; Public filter builders that compile text through a tokenizer.
+;; Public filter builders. They are immutable descriptions that compile to
+;; token-native filters only when the caller applies them to a tokenizer.
 
 
-(: lit (-> Tokenizer String Filter))
-(define (lit tok source)
-  (%lit-filter (tokenize tok source)))
+(: lit (-> String FilterBuilder))
+(define (lit source)
+  (lambda ([tok : Tokenizer])
+    (%lit-filter (tokenize tok source))))
 
-(: rx (-> Tokenizer String Filter))
-(define (rx tok pattern)
-  (%rx-filter (%compile-regex-machine pattern tok)))
+(: rx (-> String FilterBuilder))
+(define (rx pattern)
+  (define program (parse-regex-program pattern))
+  (lambda ([tok : Tokenizer])
+    (%rx-filter (instantiate-regex-for-tokenizer program tok))))
 
-(: rank (-> Tokenizer Real String Watcher))
-(define (rank tok score source)
-  (rank-watcher score (tokenize tok source)))
+(: pure (-> Any FilterBuilder))
+(define (pure value)
+  (lambda ([_tok : Tokenizer])
+    (%pure-filter value)))
 
-(: ban (-> Tokenizer String Watcher))
-(define (ban tok source)
-  (ban-watcher (tokenize tok source)))
+(: choice (-> (Listof FilterBuilder) FilterBuilder))
+(define (choice options)
+  (lambda ([tok : Tokenizer])
+    (%choice-filter
+     (for/list : (Listof Filter) ([option (in-list options)])
+       (option tok)))))
 
-(: weight (-> Tokenizer (Listof String) (Listof (Pairof Real String)) Watcher))
-(define (weight tok samples specs)
+(: seq (-> (Listof FilterBuilder) FilterBuilder))
+(define (seq children)
+  (lambda ([tok : Tokenizer])
+    (%seq-filter
+     (for/list : (Listof Filter) ([child (in-list children)])
+       (child tok)))))
+
+(: repeat (-> Natural Natural FilterBuilder FilterBuilder))
+(define (repeat min-count max-count item)
+  (lambda ([tok : Tokenizer])
+    (%repeat-filter min-count max-count (item tok))))
+
+(: bind (-> FilterBuilder (-> Any FilterBuilder) FilterBuilder))
+(define (bind first continue)
+  (lambda ([tok : Tokenizer])
+    (%bind-filter
+     (first tok)
+     (lambda ([value : Any])
+       ((continue value) tok)))))
+
+(: score (-> Real FilterBuilder Boolean FilterBuilder))
+(define (score amount child ban?)
+  (lambda ([tok : Tokenizer])
+    (%score-filter amount (child tok) ban?)))
+
+(: text (-> Natural (Listof WatcherBuilder) FilterBuilder))
+(define (text max-tokens watchers)
+  (lambda ([tok : Tokenizer])
+    (%text-filter
+     max-tokens
+     (for/list : (Listof Watcher) ([watcher (in-list watchers)])
+       (watcher tok)))))
+
+(: rank (-> Real String WatcherBuilder))
+(define (rank amount source)
+  (lambda ([tok : Tokenizer])
+    (rank-watcher amount (tokenize tok source))))
+
+(: ban (-> String WatcherBuilder))
+(define (ban source)
+  (lambda ([tok : Tokenizer])
+    (ban-watcher (tokenize tok source))))
+
+(: weight (-> (Listof String) (Listof (Pairof Real String)) WatcherBuilder))
+(define (weight samples specs)
   (when (null? samples)
     (raise-argument-error 'weight "non-empty list of strings" samples))
   (when (null? specs)
     (raise-argument-error 'weight "non-empty watcher spec list" specs))
-  (weighted-watcher
-   (for/list : (Listof weighted-rule) ([spec (in-list specs)])
-     (define source (cdr spec))
-     (define pos (add1 (count (lambda ([sample : String])
-                                (string-contains? sample source))
-                              samples)))
-     (define neg (add1 (- (length samples) (sub1 pos))))
-     (define raw : Real (assert (log (/ pos neg)) real?))
-     (define oriented
-       (if (negative? (car spec)) (- (abs raw)) (abs raw)))
-     (weighted-rule oriented (tokenize tok source) source))))
+  (lambda ([tok : Tokenizer])
+    (weighted-watcher
+     (for/list : (Listof weighted-rule) ([spec (in-list specs)])
+       (define source (cdr spec))
+       (define pos (add1 (count (lambda ([sample : String])
+                                  (string-contains? sample source))
+                                samples)))
+       (define neg (add1 (- (length samples) (sub1 pos))))
+       (define raw : Real (assert (log (/ pos neg)) real?))
+       (define oriented
+         (if (negative? (car spec)) (- (abs raw)) (abs raw)))
+       (weighted-rule oriented (tokenize tok source) source)))))
 
 
 ;; Generation

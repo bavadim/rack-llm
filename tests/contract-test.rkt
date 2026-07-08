@@ -46,7 +46,7 @@
      (apply string-append (map (lambda (id) (vector-ref vocab-vector id)) ids)))))
 
 (module+ test
-  (test-case "public API exports the new token-native surface only"
+  (test-case "public API exports the builder-based filter surface"
     (for ([name (in-list '(tokenizer
                            provider
                            model
@@ -124,11 +124,22 @@
     (check-equal? (exported-value qwen-module 'make-llama-cpp-backend)
                   'missing))
 
-  (test-case "unsupported regex constructs fail at filter construction"
+  (test-case "filter builders compile with an explicit tokenizer"
+    (define tok (simple-tokenizer '(" yes" " no" "TODO" "a" "1")))
+    (define filter
+      ((choice (list (lit " yes")
+                     (lit " no")))
+       tok))
+    (define watcher ((ban "TODO") tok))
+    (check-not-equal? (filter-initial filter) #f)
+    (check-not-equal? watcher #f))
+
+  (test-case "unsupported regex constructs fail at builder construction"
     (define tok (simple-tokenizer '("a" "1")))
     (check-exn #rx"unsupported backreference"
-               (lambda () (rx tok "(a)\\1")))
+               (lambda () (rx "(a)\\1")))
     (check-exn #rx"unsupported regex group"
-               (lambda () (rx tok "(?=a)a")))
+               (lambda () (rx "(?=a)a")))
     (check-exn #rx"unsupported regex anchor"
-               (lambda () (rx tok "^a")))))
+               (lambda () (rx "^a")))
+    (check-not-equal? ((rx "a") tok) #f)))

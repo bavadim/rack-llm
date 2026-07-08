@@ -2,6 +2,7 @@ compiled/
 **/compiled/
 .tmp/
 *.log
+*.bak
 .agents/
 .venv/
 .venv-realbench/

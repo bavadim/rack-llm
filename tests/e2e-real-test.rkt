@@ -103,9 +103,10 @@
 
       (test-case "hard finite choice returns only an allowed answer"
         (define filter
-          (choice
-           (list (lit tok " yes")
-                 (lit tok " no"))))
+          ((choice
+            (list (lit " yes")
+                  (lit " no")))
+           tok))
         (define-values (result text)
           (generate-text provider tok
                          "Answer yes or no. Reply with one word:"
@@ -115,7 +116,7 @@
         (check-true (and (member text '(" yes" " no")) #t)))
 
       (test-case "hard regex generates a compact incident id"
-        (define filter (rx tok " INC-[0-9]{3}"))
+        (define filter ((rx " INC-[0-9]{3}") tok))
         (define-values (result text)
           (generate-text provider tok
                          "Create one incident id in the form INC-123:"
@@ -129,9 +130,10 @@
         (define short (car pair))
         (define long (cadr pair))
         (define filter
-          (choice
-           (list (lit tok short)
-                 (lit tok long))))
+          ((choice
+            (list (lit short)
+                  (lit long)))
+           tok))
         (define-values (result text)
           (generate-text provider tok
                          (string-append "Reply exactly:" long)
@@ -142,9 +144,10 @@
 
       (test-case "soft ranked choice can overcome the model-preferred branch"
         (define filter
-          (choice
-           (list (score 20.0 (lit tok " approve") #f)
-                 (lit tok " reject"))))
+          ((choice
+            (list (score 20.0 (lit " approve") #f)
+                  (lit " reject")))
+           tok))
         (define-values (result text)
           (generate-text provider tok
                          "The request is risky. Reply approve or reject:"
@@ -157,27 +160,29 @@
 
       (test-case "soft open text veto rejects TODO even when prompted"
         (define filter
-          (text
-           3
-           (list (ban tok " TODO")
-                 (ban tok "TODO"))))
-        (define-values (result text)
+          ((text
+            3
+            (list (ban " TODO")
+                  (ban "TODO")))
+           tok))
+        (define-values (result generated)
           (generate-text provider tok
                          "Reply with TODO:"
                          filter
                          #:candidate-policy 'full-vocab
                          #:max-tokens 3))
         (check-found result)
-        (check-false (string-contains? text "TODO")))
+        (check-false (string-contains? generated "TODO")))
 
       (test-case "soft open text rank rewards a practical domain term"
         (define preferred " patent")
         (define preferred-token-count (length (tokenize tok preferred)))
         (define filter
-          (text
-           preferred-token-count
-           (list (rank tok 30.0 preferred))))
-        (define-values (result text)
+          ((text
+            preferred-token-count
+            (list (rank 30.0 preferred)))
+           tok))
+        (define-values (result generated)
           (generate-text provider tok
                          "Write one legal invention keyword:"
                          filter
@@ -186,7 +191,7 @@
                          #:lambda 10.0
                          #:max-tokens preferred-token-count))
         (check-found result)
-        (check-true (string-contains? (string-downcase text) "patent"))
+        (check-true (string-contains? (string-downcase generated) "patent"))
         (check-true (> (generation-result-filter-score result) 0.0))))
     (lambda ()
       (when backend

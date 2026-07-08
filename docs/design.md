@@ -28,10 +28,12 @@ This keeps hard and soft behavior in one scoring path.
 
 ## Regex
 
-Regex filters are compiled when a tokenizer is applied:
+Regex internals live in `private/regex.rkt`. Patterns are parsed and compiled
+to tokenizer-independent NFAs when `rx` is constructed; token-specific
+transition caches are created when a tokenizer is applied:
 
 ```text
-regex source -> regex AST -> NFA -> lazy DFA -> token transition cache
+regex source -> regex AST -> NFA -> token texts -> lazy DFA cache
 ```
 
 The generation hot path is token based. `filter-allowed-ids` asks the compiled
