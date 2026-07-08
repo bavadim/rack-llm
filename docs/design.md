@@ -1,56 +1,44 @@
 # Design
 
-`rack-llm` is built around one abstraction:
+The core is typed and token-native:
 
 ```text
-Guide[A] = weighted set of (string, value, log-score)
+tokenizer : text <-> token ids
+provider  : prompt ids + prefix ids -> logits
+filter    : state + token id -> next state
+generate  : provider + prompt ids + filter -> token ids
 ```
 
-Closed guides define hard languages. A string outside the language has score
-`-inf.0`; a valid neutral string has score `0.0`.
+Text appears at the edges: builders use a tokenizer to compile literals,
+watchers, and regex patterns into token-aware filters; generation itself uses
+token ids only.
 
-```racket
-(seq "Answer: " (select "yes" "no"))
-```
+## Filters
 
-`text` is the only open-world segment. It accepts arbitrary generated text
-within a budget, then observers adjust score or veto text:
+Filters are small state machines with common protocol functions. Hard
+constraints kill transitions. Soft constraints contribute score and potential.
 
-```racket
-(text (rank 3 "patent")
-      (ban "TODO"))
-```
-
-`rank` is contextual. In a closed context it scores a closed branch:
-
-```racket
-(select (rank 2 "approve") "reject")
-```
-
-Inside `text`, the same `rank` becomes a watcher:
-
-```racket
-(text (rank 2 "approve"))
-```
-
-`bind` passes a generated value to ordinary Racket code and continues with the
-returned guide:
-
-```racket
-(bind (rx #px"[0-9]")
-      (lambda (n)
-        (lit (number->string (+ 1 (string->number n))))))
-```
-
-Generation uses provider logits plus local guide deltas:
+The sampler uses:
 
 ```text
-adjusted(v) = logit(v) + guide_adjustment(v)
-
-guide_adjustment(v) =
-  -inf                                      if the guide transition is dead
-  beta * (Delta score + lambda * Delta potential) otherwise
+lm_logit + beta * (delta_score + lambda * delta_potential)
 ```
 
-The public API is intentionally small. Providers supply vocabularies and logits;
-the llama.cpp bridge is a separate sidecar adapter for full-vocabulary logits.
+This keeps hard and soft behavior in one scoring path.
+
+## Regex
+
+Regex filters are compiled when a tokenizer is applied:
+
+```text
+regex source -> regex AST -> NFA -> lazy DFA -> token transition cache
+```
+
+The generation hot path is token based. `filter-allowed-ids` asks the compiled
+machine which token ids can leave the current DFA state alive.
+
+## Public Boundary
+
+`rack-llm` exports DSL constructors and protocol functions, not the raw
+implementation structs behind them. This keeps user code from depending on
+internal state layout while still allowing direct protocol tests.
