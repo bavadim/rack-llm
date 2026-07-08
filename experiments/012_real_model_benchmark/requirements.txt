@@ -1,4 +1,5 @@
 guidance
+numpy
 outlines
 torch
 transformers

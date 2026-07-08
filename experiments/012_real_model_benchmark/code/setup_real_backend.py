@@ -31,6 +31,7 @@ DEFAULT_MODEL_DIR = Path("/mnt/storage/models/qwen/Qwen3.5-4B")
 PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 
 BASE_PACKAGES = [
+    "numpy",
     "transformers",
     "accelerate",
     "huggingface_hub",
@@ -88,7 +89,7 @@ snapshot_download(repo_id=sys.argv[1], local_dir=sys.argv[2], local_dir_use_syml
 def collect_package_versions(py: Path) -> dict[str, str | None]:
     code = """
 import importlib.metadata as md, json
-pkgs = ["torch", "transformers", "accelerate", "huggingface_hub", "guidance", "outlines", "scipy", "pandas", "nltk", "emoji", "syllapy"]
+pkgs = ["numpy", "torch", "transformers", "accelerate", "huggingface_hub", "guidance", "outlines", "scipy", "pandas", "nltk", "emoji", "syllapy"]
 out = {}
 for pkg in pkgs:
     try:
@@ -241,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--download", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--experiment-only", action="store_true")
+    parser.add_argument("--no-write", action="store_true", help="check only; do not write metadata or MISSING_BACKEND artifacts")
     args = parser.parse_args(argv)
 
     if args.install or args.download:
@@ -251,10 +253,11 @@ def main(argv: list[str] | None = None) -> int:
         download_model(args.venv, args.model_id, args.model_dir)
 
     result = check_backend(args.venv, args.model_dir, run_smoke=args.smoke)
-    output_dirs = [RESULTS_DIR]
-    if not args.experiment_only:
-        output_dirs.append(ROOT_DATA_DIR)
-    write_outputs(result, output_dirs)
+    if not args.no_write:
+        output_dirs = [RESULTS_DIR]
+        if not args.experiment_only:
+            output_dirs.append(ROOT_DATA_DIR)
+        write_outputs(result, output_dirs)
     print(json.dumps({"ok": result.ok, "missing": result.missing, "metadata": result.metadata}, sort_keys=True))
     return 0 if result.ok else 2
 

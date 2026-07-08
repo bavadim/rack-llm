@@ -13,8 +13,18 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+
+
+def require_torch_transformers():
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "hf_logits_sidecar requires torch and transformers; run `make realbench-env` "
+            "or install experiments/012_real_model_benchmark/requirements.txt"
+        ) from error
+    return torch, AutoModelForCausalLM, AutoTokenizer
 
 
 @dataclass
@@ -25,8 +35,11 @@ class Backend:
     tokenizer: Any | None = None
     model: Any | None = None
     vocab: list[str] | None = None
+    sessions: dict[int, dict[str, Any]] | None = None
+    next_session_id: int = 1
 
     def load(self) -> dict[str, Any]:
+        torch, AutoModelForCausalLM, AutoTokenizer = require_torch_transformers()
         started = time.perf_counter()
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -41,6 +54,8 @@ class Backend:
             self.tokenizer.decode([token_id], clean_up_tokenization_spaces=False)
             for token_id in range(vocab_size)
         ]
+        self.sessions = {}
+        self.next_session_id = 1
         return {
             "ok": True,
             "vocab": self.vocab,
@@ -78,6 +93,7 @@ class Backend:
 
     def next_logits(self, prompt: str, prefix: str) -> dict[str, Any]:
         self.require_loaded()
+        torch, _AutoModelForCausalLM, _AutoTokenizer = require_torch_transformers()
         text = prompt + prefix
         input_ids = self.tokenizer.encode(text, return_tensors="pt", add_special_tokens=False).to(self.model.device)
         if input_ids.numel() == 0:
@@ -93,6 +109,7 @@ class Backend:
 
     def next_topk(self, prompt: str, prefix: str, k: int) -> dict[str, Any]:
         self.require_loaded()
+        torch, _AutoModelForCausalLM, _AutoTokenizer = require_torch_transformers()
         text = prompt + prefix
         input_ids = self.tokenizer.encode(text, return_tensors="pt", add_special_tokens=False).to(self.model.device)
         if input_ids.numel() == 0:
@@ -118,6 +135,7 @@ class Backend:
 
     def generate_unconstrained(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.require_loaded()
+        torch, _AutoModelForCausalLM, _AutoTokenizer = require_torch_transformers()
         samples = int(payload.get("num_return_sequences", payload.get("samples", 1)))
         if samples > 1:
             generated = self.generate_unconstrained_batch(payload)
@@ -164,6 +182,7 @@ class Backend:
 
     def generate_unconstrained_batch(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.require_loaded()
+        torch, _AutoModelForCausalLM, _AutoTokenizer = require_torch_transformers()
         prompt = str(payload.get("prompt", ""))
         seed = int(payload.get("seed", 0))
         samples = int(payload.get("num_return_sequences", payload.get("samples", 1)))
@@ -215,6 +234,58 @@ class Backend:
             )
         return {"ok": True, "samples": output}
 
+    def start_session(self, prompt: str) -> dict[str, Any]:
+        self.require_loaded()
+        if self.sessions is None:
+            self.sessions = {}
+        session_id = self.next_session_id
+        self.next_session_id += 1
+        self.sessions[session_id] = {"prompt": prompt, "ids": []}
+        return {"ok": True, "session_id": session_id}
+
+    def require_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session_id = int(payload.get("session_id", 0))
+        if self.sessions is None or session_id not in self.sessions:
+            raise RuntimeError(f"unknown sidecar session_id: {session_id}")
+        return self.sessions[session_id]
+
+    def session_text(self, session: dict[str, Any]) -> str:
+        self.require_loaded()
+        prefix = self.tokenizer.decode(
+            session["ids"],
+            clean_up_tokenization_spaces=False,
+        )
+        return str(session["prompt"]) + prefix
+
+    def next_logits_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.require_loaded()
+        torch, _AutoModelForCausalLM, _AutoTokenizer = require_torch_transformers()
+        session = self.require_session(payload)
+        text = self.session_text(session)
+        input_ids = self.tokenizer.encode(text, return_tensors="pt", add_special_tokens=False).to(self.model.device)
+        if input_ids.numel() == 0:
+            raise ValueError("next_logits session requires non-empty prompt+prefix")
+        with torch.no_grad():
+            logits = self.model(input_ids=input_ids).logits[0, -1].detach().float().cpu().numpy()
+        return {
+            "ok": True,
+            "logits_b64": encode_float64_b64(logits),
+            "logits_dtype": "float64be",
+            "vocab_size": int(logits.shape[0]),
+        }
+
+    def commit_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session = self.require_session(payload)
+        token_id = int(payload["token_id"])
+        session["ids"].append(token_id)
+        return {"ok": True, "session_id": int(payload["session_id"])}
+
+    def end_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session_id = int(payload.get("session_id", 0))
+        if self.sessions is not None:
+            self.sessions.pop(session_id, None)
+        return {"ok": True, "session_id": session_id}
+
 
 def encode_float64_b64(values: np.ndarray) -> str:
     be = np.asarray(values, dtype=">f8")
@@ -233,7 +304,15 @@ def handle(backend: Backend, payload: dict[str, Any]) -> dict[str, Any]:
     if op == "detokenize":
         return backend.detokenize([int(x) for x in payload.get("ids", [])])
     if op == "next_logits":
+        if "session_id" in payload:
+            return backend.next_logits_session(payload)
         return backend.next_logits(str(payload.get("prompt", "")), str(payload.get("prefix", "")))
+    if op == "start":
+        return backend.start_session(str(payload.get("prompt", "")))
+    if op == "commit":
+        return backend.commit_session(payload)
+    if op == "end":
+        return backend.end_session(payload)
     if op == "next_topk":
         return backend.next_topk(
             str(payload.get("prompt", "")),

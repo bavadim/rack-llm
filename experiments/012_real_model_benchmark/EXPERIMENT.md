@@ -25,6 +25,20 @@ required for real BPE/SentencePiece models.
 Soft `ours_*` main results must use `exact-full-vocab`. Top-k shortlist runs are
 debug/pilot artifacts only and are not paper-grade evidence.
 
+Guidance regex support is not disabled globally. The hard runtime runner excludes
+only unbounded/open Guidance regex rows from paired comparisons, for example
+patterns with `.*`, `.+`, `\S+`, unbounded character classes, or `{n,}`. Guidance
+documents that regex `max_tokens` is "not exact" and that variable-length regex
+generation may continue after a complete match, so `guidance.gen(regex=...,
+max_tokens=...)` is not paper-grade evidence for hard `fullmatch` constraints:
+https://guidance.readthedocs.io/en/latest/generated/guidance.gen.html. Guidance
+maintainers also discuss regex complexity as a practical limitation:
+https://github.com/guidance-ai/guidance/discussions/1108. Bounded/structured
+Guidance regex rows remain enabled. Outlines remains enabled for regex rows; its
+regex generator documents a validity guarantee while noting that index
+construction can take time:
+https://dottxt-ai.github.io/outlines/reference/generation/regex/.
+
 Reproduce preflight:
 
 ```bash

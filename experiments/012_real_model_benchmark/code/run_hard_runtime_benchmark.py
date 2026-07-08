@@ -10,11 +10,14 @@ import importlib
 import json
 import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -36,9 +39,34 @@ DEFAULT_SIDECAR = os.environ.get(
 METHODS = ["ours_hard", "guidance_hard", "outlines_hard"]
 PILOT_ROWS = 5
 FULL_SEEDS = [0, 1, 2, 3, 4]
+DEFAULT_PER_SAMPLE_TIMEOUT_SEC = 60.0
 
 sys.path.insert(0, str(HARD_GUIDES_DIR))
 from hard_guides import GuideSpec, Unsupported, build_guidance_hard_grammar, build_ours_hard_guide, build_outlines_hard_grammar, check_spec  # noqa: E402
+
+
+class SampleTimeoutError(TimeoutError):
+    """Raised when one benchmark sample exceeds its configured wall-clock budget."""
+
+
+@contextmanager
+def sample_deadline(seconds: float):
+    if seconds <= 0:
+        yield
+        return
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def raise_timeout(_signum: int, _frame: Any) -> None:
+        raise SampleTimeoutError(f"sample exceeded {seconds:.1f}s deadline")
+
+    signal.signal(signal.SIGALRM, raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -72,12 +100,43 @@ def runtime_supported(spec: GuideSpec | Unsupported) -> tuple[bool, str]:
     return False, "UNSUPPORTED_CONSTRAINT: guide spec has neither choices nor regex"
 
 
-def supported_choice_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def guidance_regex_is_unbounded(regex: str) -> bool:
+    return any(
+        re.search(pattern, regex) is not None
+        for pattern in [
+            r"(?<!\\)\.[*+]",
+            r"\\S\+",
+            r"\[[^\]]+\][*+]",
+            r"\{\d+,\}",
+        ]
+    )
+
+
+def method_runtime_supported(method: str, spec: GuideSpec | Unsupported) -> tuple[bool, str]:
+    supported, reason = runtime_supported(spec)
+    if not supported:
+        return supported, reason
+    if (
+        method == "guidance_hard"
+        and isinstance(spec, GuideSpec)
+        and spec.regex
+        and not spec.choices
+        and guidance_regex_is_unbounded(spec.regex)
+    ):
+        return (
+            False,
+            "UNSUPPORTED_RUNTIME_UNBOUNDED_REGEX: guidance regex disabled "
+            "for unbounded/open regex under hard fullmatch benchmark",
+        )
+    return True, ""
+
+
+def supported_paired_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     selected = []
     for row in rows:
         ok = True
         for method in METHODS:
-            supported, _reason = runtime_supported(method_spec(row, method))
+            supported, _reason = method_runtime_supported(method, method_spec(row, method))
             ok = ok and supported
         if ok:
             selected.append(row)
@@ -91,7 +150,7 @@ def unsupported_rows(rows: list[dict[str, Any]], selected_keys: set[str]) -> lis
             continue
         for method in METHODS:
             spec = method_spec(row, method)
-            supported, reason = runtime_supported(spec)
+            supported, reason = method_runtime_supported(method, spec)
             if not supported:
                 failures.append(
                     {
@@ -107,7 +166,13 @@ def unsupported_rows(rows: list[dict[str, Any]], selected_keys: set[str]) -> lis
     return failures
 
 
-def run_ours(rows: list[dict[str, Any]], seeds: list[int], model_path: Path, sidecar_command: str) -> list[dict[str, Any]]:
+def run_ours(
+    rows: list[dict[str, Any]],
+    seeds: list[int],
+    model_path: Path,
+    sidecar_command: str,
+    scratch_dir: Path,
+) -> list[dict[str, Any]]:
     requests = []
     for row in rows:
         spec = method_spec(row, "ours_hard")
@@ -124,8 +189,9 @@ def run_ours(rows: list[dict[str, Any]], seeds: list[int], model_path: Path, sid
                     "seed": seed,
                 }
             )
-    request_path = RESULTS_DIR / "ours_choice_requests.json"
-    output_path = RESULTS_DIR / "ours_choice_raw.jsonl"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    request_path = scratch_dir / "ours_choice_requests.json"
+    output_path = scratch_dir / "ours_choice_raw.jsonl"
     request_path.write_text(json.dumps(requests, ensure_ascii=False, indent=2), encoding="utf-8")
     subprocess.run(
         [
@@ -147,7 +213,12 @@ def run_ours(rows: list[dict[str, Any]], seeds: list[int], model_path: Path, sid
     return [attach_common_fields(row, "ours_hard") for row in rows_out]
 
 
-def run_guidance(rows: list[dict[str, Any]], seeds: list[int], model_path: Path) -> list[dict[str, Any]]:
+def run_guidance(
+    rows: list[dict[str, Any]],
+    seeds: list[int],
+    model_path: Path,
+    per_sample_timeout_sec: float,
+) -> list[dict[str, Any]]:
     import guidance
     from transformers import AutoTokenizer
 
@@ -167,10 +238,11 @@ def run_guidance(rows: list[dict[str, Any]], seeds: list[int], model_path: Path)
             for seed in seeds:
                 started = time.perf_counter()
                 try:
-                    if spec.choices:
-                        generated = lm + row["prompt"] + guidance.select(spec.choices, name="answer")
-                    else:
-                        generated = lm + row["prompt"] + guidance.regex(spec.regex, name="answer")
+                    with sample_deadline(per_sample_timeout_sec):
+                        if spec.choices:
+                            generated = lm + row["prompt"] + guidance.select(spec.choices, name="answer")
+                        else:
+                            generated = lm + row["prompt"] + guidance.regex(spec.regex, name="answer")
                     text = str(generated["answer"])
                     output.append(
                         generated_row(row, "guidance_hard", seed, text, started, tokenizer, "GENERATED", "")
@@ -184,7 +256,12 @@ def run_guidance(rows: list[dict[str, Any]], seeds: list[int], model_path: Path)
     return output
 
 
-def run_outlines(rows: list[dict[str, Any]], seeds: list[int], model_path: Path) -> list[dict[str, Any]]:
+def run_outlines(
+    rows: list[dict[str, Any]],
+    seeds: list[int],
+    model_path: Path,
+    per_sample_timeout_sec: float,
+) -> list[dict[str, Any]]:
     import outlines
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -214,13 +291,14 @@ def run_outlines(rows: list[dict[str, Any]], seeds: list[int], model_path: Path)
                     torch.manual_seed(seed)
                     if torch.cuda.is_available():
                         torch.cuda.manual_seed_all(seed)
-                    text = str(
-                        outlines_model(
-                            row["prompt"],
-                            output_type=outlines.regex(pattern),
-                            max_new_tokens=max_tokens,
+                    with sample_deadline(per_sample_timeout_sec):
+                        text = str(
+                            outlines_model(
+                                row["prompt"],
+                                output_type=outlines.regex(pattern),
+                                max_new_tokens=max_tokens,
+                            )
                         )
-                    )
                     output.append(generated_row(row, "outlines_hard", seed, text, started, tokenizer, "GENERATED", ""))
                 except Exception as error:  # noqa: BLE001 - benchmark rows must serialize failures.
                     output.append(generated_row(row, "outlines_hard", seed, "", started, tokenizer, "ERROR", str(error)))
@@ -382,14 +460,25 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def run(rows: list[dict[str, Any]], seeds: list[int], model_path: Path, sidecar_command: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    selected = supported_choice_rows(rows)
+def run(
+    rows: list[dict[str, Any]],
+    seeds: list[int],
+    model_path: Path,
+    sidecar_command: str,
+    per_sample_timeout_sec: float,
+    max_selected_rows: int | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    selected = supported_paired_rows(rows)
+    if max_selected_rows is not None:
+        selected = selected[:max_selected_rows]
     selected_keys = {row["key"] for row in selected}
     failures = unsupported_rows(rows, selected_keys)
     raw = []
-    raw.extend(run_ours(selected, seeds, model_path, sidecar_command))
-    raw.extend(run_guidance(selected, seeds, model_path))
-    raw.extend(run_outlines(selected, seeds, model_path))
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".scratch-hard-", dir=RESULTS_DIR) as scratch:
+        raw.extend(run_ours(selected, seeds, model_path, sidecar_command, Path(scratch)))
+    raw.extend(run_guidance(selected, seeds, model_path, per_sample_timeout_sec))
+    raw.extend(run_outlines(selected, seeds, model_path, per_sample_timeout_sec))
     return evaluate_official(raw, selected), failures
 
 
@@ -405,11 +494,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", choices=["pilot", "full"], required=True)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH)
     parser.add_argument("--sidecar-command", default=DEFAULT_SIDECAR)
+    parser.add_argument("--per-sample-timeout-sec", type=float, default=DEFAULT_PER_SAMPLE_TIMEOUT_SEC)
     args = parser.parse_args(argv)
 
     rows = read_jsonl(ROOT_DATA_DIR / "hard_ifbench_subset.jsonl")
+    max_selected_rows = None
     if args.mode == "pilot":
-        rows = supported_choice_rows(rows)[:PILOT_ROWS]
+        max_selected_rows = PILOT_ROWS
         seeds = [0]
         raw_name = "014_hard_runtime_pilot_raw.jsonl"
         summary_name = "014_hard_runtime_pilot_summary.csv"
@@ -421,7 +512,14 @@ def main(argv: list[str] | None = None) -> int:
         summary_name = "012_hard_real_summary.csv"
         failures_name = "012_hard_runtime_failures.jsonl"
 
-    raw, failures = run(rows, seeds, args.model_path, args.sidecar_command)
+    raw, failures = run(
+        rows,
+        seeds,
+        args.model_path,
+        args.sidecar_command,
+        args.per_sample_timeout_sec,
+        max_selected_rows,
+    )
     write_jsonl(RESULTS_DIR / raw_name, raw)
     write_jsonl(RESULTS_DIR / failures_name, failures)
     write_csv(RESULTS_DIR / summary_name, summarize(raw))

@@ -3,7 +3,14 @@ compiled/
 .tmp/
 *.log
 .agents/
+.venv/
+.venv-realbench/
 .venv*/
+models/
+.models/
+.hf-cache/
+.cache/huggingface/
+huggingface/
 __pycache__/
 **/__pycache__/
 *.pyc

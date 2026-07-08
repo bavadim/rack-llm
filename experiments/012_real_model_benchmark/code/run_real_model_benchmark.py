@@ -29,7 +29,7 @@ REQUIRED_DATA = [
     ROOT_DATA_DIR / "hard_ifbench_subset.jsonl",
     ROOT_DATA_DIR / "soft_ifbench_rules_audited.jsonl",
 ]
-REQUIRED_PYTHON_MODULES = ["guidance", "outlines"]
+REQUIRED_PYTHON_MODULES = ["guidance", "numpy", "outlines", "torch", "transformers"]
 MISSING_NAME = "MISSING_BACKEND.md"
 
 
@@ -134,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment-only", action="store_true")
     parser.add_argument("--allow-missing", action="store_true", help="return success when backend is missing")
+    parser.add_argument("--no-write", action="store_true", help="do not remove or write benchmark artifacts")
     args = parser.parse_args(argv)
     output_dirs = [RESULTS_DIR]
     if not args.experiment_only:
@@ -141,8 +142,9 @@ def main(argv: list[str] | None = None) -> int:
 
     result = preflight()
     if not result.ok:
-        remove_stale_outputs(output_dirs)
-        write_missing(result, output_dirs)
+        if not args.no_write:
+            remove_stale_outputs(output_dirs)
+            write_missing(result, output_dirs)
         print(json.dumps({"status": "MISSING_BACKEND", **asdict(result)}, sort_keys=True))
         return 0 if args.allow_missing else 2
 

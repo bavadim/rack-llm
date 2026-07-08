@@ -9,6 +9,7 @@ import base64
 import csv
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from hf_logits_sidecar import encode_float64_b64
 from run_real_model_benchmark import EXPERIMENT_DIR, REQUIRED_DATA, preflight
-from run_hard_runtime_benchmark import RESULTS_DIR, runtime_supported, summarize
+from run_hard_runtime_benchmark import (
+    RESULTS_DIR,
+    SampleTimeoutError,
+    method_runtime_supported,
+    method_spec,
+    read_jsonl,
+    runtime_supported,
+    sample_deadline,
+    summarize,
+    supported_paired_rows,
+    unsupported_rows,
+)
 from setup_real_backend import CheckResult, missing_markdown
 
 
@@ -27,6 +39,7 @@ ROOT_BACKEND_METADATA = REPO_ROOT / "data" / "012_backend_metadata.json"
 ROOT_SIDECAR_SMOKE = REPO_ROOT / "data" / "012_sidecar_smoke.json"
 ROOT_RACKET_SIDECAR_SMOKE = REPO_ROOT / "data" / "012_racket_sidecar_smoke.json"
 HARD_RUNNER = EXPERIMENT_DIR / "code" / "run_hard_runtime_benchmark.py"
+HARD_SUBSET = REPO_ROOT / "data" / "hard_ifbench_subset.jsonl"
 SOFT_RULE_BUILDER = EXPERIMENT_DIR / "code" / "build_soft_rules_012.py"
 SOFT_POOL = REPO_ROOT / "data" / "012_soft_candidate_pool.jsonl"
 SOFT_AUDIT_FAILURES = REPO_ROOT / "data" / "012_soft_rule_audit_failures.md"
@@ -59,7 +72,7 @@ def test_preflight_reports_missing_backend_without_synthetic_results() -> None:
     env.pop("RACK_LLM_MODEL_PATH", None)
     env.pop("RACK_LLM_LLAMA_SIDECAR", None)
     completed = subprocess.run(
-        [sys.executable, str(RUNNER), "--allow-missing", "--experiment-only"],
+        [sys.executable, str(RUNNER), "--allow-missing", "--experiment-only", "--no-write"],
         cwd=REPO_ROOT,
         env=env,
         text=True,
@@ -68,9 +81,7 @@ def test_preflight_reports_missing_backend_without_synthetic_results() -> None:
     )
     payload = json.loads(completed.stdout)
     assert payload["status"] == "MISSING_BACKEND"
-    missing = EXPERIMENT_DIR / "results" / "MISSING_BACKEND.md"
-    assert missing.exists()
-    text = missing.read_text(encoding="utf-8")
+    text = "\n".join(payload["missing"])
     assert "RACK_LLM_MODEL_PATH" in text
     assert "synthetic" not in text.lower()
     existing_soft = EXPERIMENT_DIR / "results" / "012_soft_real_raw.jsonl"
@@ -156,6 +167,7 @@ def test_guidance_outlines_are_real_imports() -> None:
     source = HARD_RUNNER.read_text(encoding="utf-8")
     assert "import guidance" in source
     assert "guidance.select" in source
+    assert "guidance.regex" in source
     assert "import outlines" in source
     assert "outlines.regex" in source
     assert "outlines_model(" in source
@@ -177,6 +189,71 @@ def test_unsupported_is_explicit() -> None:
     supported, reason = runtime_supported(EmptySpec())  # type: ignore[arg-type]
     assert supported is False
     assert reason.startswith("UNSUPPORTED_CONSTRAINT")
+
+
+def test_guidance_unbounded_regex_rows_are_runtime_unsupported() -> None:
+    rows = read_jsonl(HARD_SUBSET)
+    row = next(row for row in rows if row["key"] == "60")
+    guidance_spec = method_spec(row, "guidance_hard")
+    assert runtime_supported(guidance_spec) == (True, "")
+    supported, reason = method_runtime_supported("guidance_hard", guidance_spec)
+    assert supported is False
+    assert reason.startswith("UNSUPPORTED_RUNTIME_UNBOUNDED_REGEX")
+
+    for method in ["ours_hard", "outlines_hard"]:
+        supported, reason = method_runtime_supported(method, method_spec(row, method))
+        assert supported is True
+        assert reason == ""
+
+
+def test_guidance_bounded_regex_rows_are_runtime_supported() -> None:
+    rows = read_jsonl(HARD_SUBSET)
+    for key in ["296", "274", "277"]:
+        row = next(row for row in rows if row["key"] == key)
+        supported, reason = method_runtime_supported("guidance_hard", method_spec(row, "guidance_hard"))
+        assert supported is True
+        assert reason == ""
+
+
+def test_guidance_unbounded_regex_classifier_covers_open_classes() -> None:
+    rows = read_jsonl(HARD_SUBSET)
+    row = next(row for row in rows if row["key"] == "276")
+    supported, reason = method_runtime_supported("guidance_hard", method_spec(row, "guidance_hard"))
+    assert supported is False
+    assert reason.startswith("UNSUPPORTED_RUNTIME_UNBOUNDED_REGEX")
+
+
+def test_guidance_unbounded_regex_rows_are_excluded_from_paired_selection() -> None:
+    rows = read_jsonl(HARD_SUBSET)
+    regex_row = next(row for row in rows if row["key"] == "60")
+    choice_row = next(row for row in rows if row["key"] == "63")
+    bounded_regex_row = next(row for row in rows if row["key"] == "296")
+    selected = supported_paired_rows([regex_row, choice_row, bounded_regex_row])
+    assert [row["key"] for row in selected] == ["63", "296"]
+    failures = unsupported_rows([regex_row, choice_row], {row["key"] for row in selected})
+    assert failures == [
+        {
+            "key": "60",
+            "method": "guidance_hard",
+            "seed": None,
+            "outcome": "UNSUPPORTED_CONSTRAINT",
+            "failure_reason": (
+                "UNSUPPORTED_RUNTIME_UNBOUNDED_REGEX: guidance regex disabled "
+                "for unbounded/open regex under hard fullmatch benchmark"
+            ),
+            "instruction_id_list": ["repeat:repeat_change"],
+            "source": "real_runtime",
+        }
+    ]
+
+
+def test_sample_deadline_raises_timeout() -> None:
+    try:
+        with sample_deadline(0.01):
+            time.sleep(1.0)
+    except SampleTimeoutError:
+        return
+    raise AssertionError("sample_deadline did not raise SampleTimeoutError")
 
 
 def test_hard_raw_has_no_synthetic_source() -> None:
@@ -489,6 +566,11 @@ def main() -> int:
         test_verifier_not_used_during_generation,
         test_guidance_outlines_are_real_imports,
         test_unsupported_is_explicit,
+        test_guidance_unbounded_regex_rows_are_runtime_unsupported,
+        test_guidance_bounded_regex_rows_are_runtime_supported,
+        test_guidance_unbounded_regex_classifier_covers_open_classes,
+        test_guidance_unbounded_regex_rows_are_excluded_from_paired_selection,
+        test_sample_deadline_raises_timeout,
         test_hard_raw_has_no_synthetic_source,
         test_hard_summary_matches_raw_counts,
         test_official_verifier_column_present,

@@ -19,7 +19,7 @@ provider-calls
 llm-time-ms
 rule-time-ms
 sampling-time-ms
-runtime-step-calls
+filter-step-calls
 check-calls-in-sampling
 parse-guide-calls-in-sampling
 regex-calls
@@ -43,7 +43,7 @@ fast-forward-tokens
 
 * `provider-calls` ожидаемое число;
 * `check-calls-in-sampling = 0`;
-* `runtime-step-calls > 0`;
+* `filter-step-calls > 0`;
 * `candidate-count-total` соответствует candidate-policy.
 
 ## DoD
