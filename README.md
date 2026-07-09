@@ -22,15 +22,15 @@ Core API:
 Model implementation:
 
 ```racket
-(require rack-llm/model-qwen)
+(require rack-llm/model-llama-cpp)
 ```
 
 A model is passed directly to `generate`:
 
 ```racket
 (define m
-  (qwen-model #:model-path "/mnt/storage/models/qwen/Qwen3.5-4B"
-              #:command sidecar-command))
+  (llama-cpp-model
+   #:model-path "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf"))
 ```
 
 Filters are immutable builders. `generate` compiles them with the model
@@ -94,7 +94,7 @@ private/model.rkt     tokenizer/provider/model runtime objects
 private/filter.rkt    filter runtime state machines
 private/regex.rkt     regex parser/NFA/token transition caches
 private/sampling.rkt  default token selection algorithm
-model-qwen.rkt        Qwen sidecar model implementation
+model-llama-cpp.rkt   Qwen GGUF model implementation through llama.cpp
 ```
 
 There is no compatibility layer for the old guide/runtime API, no mock provider
@@ -108,9 +108,5 @@ constraints, soft open text, and dependent `bind` composition.
 
 ## Current Repair Backlog
 
-The core API boundary is intentionally narrow, but two repair tracks remain:
-
-- exact full-vocabulary soft decoding needs a measured optimization pass or a
-  fail-closed infeasible decision for Qwen-scale vocabularies;
-- real benchmark Racket scripts still need to be aligned with the current API
-  before `012_*` artifacts can be treated as fresh evidence.
+The core API boundary is intentionally narrow. Exact full-vocabulary soft
+decoding is measured against the native Qwen GGUF backend.

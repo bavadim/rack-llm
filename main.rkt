@@ -356,6 +356,22 @@
                          (filter-score state) beta #f step started
                          p session? candidate-policy llm-calls dead-count candidate-total candidate-counts
                          #:trace (filter-trace state))))]
+      [(deterministic-allowed-step candidate-policy f state)
+       =>
+       (lambda ([forced : (Pairof TokenId FilterState)])
+         (define id (car forced))
+         (define next-state (cdr forced))
+         (commit! id)
+         (loop (add1 step)
+               (append prefix-ids (list id))
+               next-state
+               (filter-score next-state)
+               (filter-potential next-state)
+               lm-score
+               llm-calls
+               dead-count
+               (add1 candidate-total)
+               (cons 1 candidate-counts)))]
       [else
        (define logits (next-logits prefix-ids))
        (define selection
@@ -427,6 +443,23 @@
    (generation-result-latency-ms result)
    (generation-result-trace result)
    (generation-result-metrics result)))
+
+(: deterministic-allowed-step (-> CandidatePolicy Filter FilterState (Option (Pairof TokenId FilterState))))
+(define (deterministic-allowed-step candidate-policy f state)
+  (cond
+    [(not (eq? candidate-policy 'allowed-only)) #f]
+    [else
+     (define allowed (filter-allowed-ids f state))
+     (cond
+       [(and allowed
+             (pair? allowed)
+             (null? (cdr allowed)))
+        (define id (car allowed))
+        (define next-state (filter-step f state id))
+        (if (filter-dead? next-state)
+            #f
+            (cons id next-state))]
+       [else #f])]))
 
 (: combined-score (-> Real Real Real Real))
 (define (combined-score lm local beta)

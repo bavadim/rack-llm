@@ -81,3 +81,44 @@
      (<= (generation-result-latency-ms result) 100.0)
      (format "allowed-only single-token literal took ~a ms"
              (generation-result-latency-ms result)))))
+
+  (test-case "deterministic literal fast-forwards without logits calls"
+    (define tok
+      (simple-tokenizer '("" " A" " B" " C" " D")))
+    (define logits-calls 0)
+    (define commits '())
+    (define p
+      (provider
+       #:vocab-size 5
+       #:next-logits
+       (lambda (_prompt-ids _prefix-ids)
+         (set! logits-calls (add1 logits-calls))
+         (error 'runtime-test "non-session logits should not be requested"))
+       #:start-session
+       (lambda (_prompt-ids) 'session)
+       #:next-logits/session
+       (lambda (_session)
+         (set! logits-calls (add1 logits-calls))
+         (error 'runtime-test "session logits should not be requested"))
+       #:commit-token!
+       (lambda (_session token-id)
+         (set! commits (append commits (list token-id))))
+       #:end-session!
+       void))
+    (define m (model tok p (hash 'name 'forced-literal) void))
+    (define result
+      (generate m
+                ""
+                (lit " A B C D")
+                #:candidate-policy 'allowed-only
+                #:max-tokens 8
+                #:seed 0))
+    (check-equal? (generation-result-status result) 'found)
+    (check-equal? (generation-result-text result) " A B C D")
+    (check-equal? logits-calls 0)
+    (check-equal? commits '(1 2 3 4))
+    (check-equal? (generation-result-lm-logprob result) 0.0)
+    (check-equal? (generation-metrics-llm-calls (generation-result-metrics result)) 0)
+    (check-equal?
+     (generation-metrics-candidate-count-per-step (generation-result-metrics result))
+     '(1 1 1 1)))

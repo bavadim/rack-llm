@@ -4,29 +4,50 @@
 
 (provide LogitsView
          vector->logits-view
+         function->logits-view
          logits-length
          logits-ref
          logits->vector
          check-logits-view)
 
 (struct vector-logits-view ([values : (Vectorof Real)]) #:transparent)
-(define-type LogitsView vector-logits-view)
+(struct function-logits-view ([length : Natural]
+                              [ref : (-> Natural Real)])
+  #:transparent)
+(define-type LogitsView (U vector-logits-view function-logits-view))
 
 (: vector->logits-view (-> (Vectorof Real) LogitsView))
 (define (vector->logits-view values)
   (vector-logits-view values))
 
+(: function->logits-view (-> Natural (-> Natural Real) LogitsView))
+(define (function->logits-view length ref)
+  (function-logits-view length ref))
+
 (: logits-length (-> LogitsView Natural))
 (define (logits-length logits)
-  (vector-length (vector-logits-view-values logits)))
+  (cond
+    [(vector-logits-view? logits)
+     (vector-length (vector-logits-view-values logits))]
+    [else
+     (function-logits-view-length logits)]))
 
 (: logits-ref (-> LogitsView Natural Real))
 (define (logits-ref logits id)
-  (vector-ref (vector-logits-view-values logits) id))
+  (cond
+    [(vector-logits-view? logits)
+     (vector-ref (vector-logits-view-values logits) id)]
+    [else
+     ((function-logits-view-ref logits) id)]))
 
 (: logits->vector (-> LogitsView (Vectorof Real)))
 (define (logits->vector logits)
-  (vector-copy (vector-logits-view-values logits)))
+  (cond
+    [(vector-logits-view? logits)
+     (vector-copy (vector-logits-view-values logits))]
+    [else
+     (for/vector : (Vectorof Real) ([id : Natural (in-range (logits-length logits))])
+       (logits-ref logits id))]))
 
 (: check-logits-view (-> Symbol LogitsView Natural Void))
 (define (check-logits-view who logits expected-size)

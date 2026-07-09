@@ -8,7 +8,7 @@
 
 (define repo-root (current-directory))
 
-(define core-roots '("main.rkt" "model-qwen.rkt"))
+(define core-roots '("main.rkt" "model-llama-cpp.rkt"))
 (define deny-exports
   '(neg-inf
     log-score-add
@@ -56,7 +56,7 @@
 
 (define size-budgets
   (hash "main.rkt" 650
-        "model-qwen.rkt" 300
+        "model-llama-cpp.rkt" 275
         "private/filter.rkt" 750
         "private/logits.rkt" 100
         "private/model.rkt" 250
@@ -237,7 +237,7 @@
                      (not (string=? to "private/logits.rkt"))) #t]
                [(and (string=? from "private/sampling.rkt")
                      (not (member to '("private/filter.rkt" "private/logits.rkt")))) #t]
-               [(and (string=? from "model-qwen.rkt")
+               [(and (string=? from "model-llama-cpp.rkt")
                      (private-file? to)
                      (not (member to '("private/model.rkt" "private/logits.rkt")))) #t]
                [(and (test-file? from) (private-file? to) (not (private-test-file? from))) #t]

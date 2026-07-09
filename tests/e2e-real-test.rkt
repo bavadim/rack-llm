@@ -1,44 +1,28 @@
 #lang racket/base
 
 (require racket/list
-         racket/runtime-path
          racket/string
          rackunit
          "../main.rkt"
-         "../model-qwen.rkt")
+         "../model-llama-cpp.rkt")
 
-(define-runtime-path repo-root "..")
+(define default-gguf-model-path
+  "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf")
 
-(define default-model-path "/mnt/storage/models/qwen/Qwen3.5-4B")
-
-(define (configured-model-path)
-  (or (getenv "RACK_LLM_MODEL_PATH") default-model-path))
-
-(define (configured-sidecar-command model-path)
-  (or (getenv "RACK_LLM_LLAMA_SIDECAR")
-      (format "~a ~a --model-path ~a"
-              (path->string (build-path repo-root ".venv-realbench" "bin" "python"))
-              (path->string (build-path repo-root "experiments" "012_real_model_benchmark" "code" "hf_logits_sidecar.py"))
-              model-path)))
+(define (configured-gguf-model-path)
+  (or (getenv "RACK_LLM_GGUF_MODEL") default-gguf-model-path))
 
 (define (open-real-backend)
-  (define model-path (configured-model-path))
-  (define command (configured-sidecar-command model-path))
-  (unless (directory-exists? model-path)
+  (define gguf-path (configured-gguf-model-path))
+  (unless (file-exists? gguf-path)
     (error 'e2e-real-test
-           "real model directory is missing: ~a; set RACK_LLM_MODEL_PATH or run `make realbench-env`"
-           model-path))
-  (with-handlers ([exn:fail?
-                   (lambda (exn)
-                     (error 'e2e-real-test
-                            "real sidecar/model backend is required; run `make realbench-env` or set RACK_LLM_MODEL_PATH and RACK_LLM_LLAMA_SIDECAR; backend error: ~a"
-                            (exn-message exn)))])
-    (qwen-model
-     #:model-path model-path
-     #:command command
-     #:context-size 192
-     #:threads 1
-     #:seed 0)))
+           "native GGUF model is required: ~a; set RACK_LLM_GGUF_MODEL or download Qwen3.5-4B-Q4_K_M.gguf"
+           gguf-path))
+  (llama-cpp-model
+   #:model-path gguf-path
+   #:context-size 192
+   #:threads 1
+   #:gpu-layers -1))
 
 (define (check-found result)
   (check-equal? (generation-result-status result) 'found)
@@ -224,7 +208,13 @@
                    (hard-perf-sample-candidate-counts sample))
            (format "~a should be a deterministic one-candidate path, got ~s"
                    (hard-perf-case-name (hard-perf-sample-case sample))
-                   (hard-perf-sample-candidate-counts sample))))
+                   (hard-perf-sample-candidate-counts sample)))
+          (check-equal?
+           (generation-metrics-llm-calls
+            (generation-result-metrics (hard-perf-sample-result sample)))
+           0
+           (format "~a should fast-forward without logits calls"
+                   (hard-perf-case-name (hard-perf-sample-case sample)))))
         (define average-ms
           (mean (map hard-perf-sample-latency-ms samples)))
         (check-true

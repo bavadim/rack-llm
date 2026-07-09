@@ -5,7 +5,7 @@
          "../main.rkt")
 
 (define-runtime-path core-module "../main.rkt")
-(define-runtime-path qwen-module "../model-qwen.rkt")
+(define-runtime-path llama-cpp-module "../model-llama-cpp.rkt")
 
 (define (exported-value module-path name)
   (with-handlers ([exn:fail? (lambda (_exn) 'missing)])
@@ -130,9 +130,9 @@
                     'missing
                     (format "~a should not be exported" name)))
 
-    (check-not-equal? (exported-value qwen-module 'qwen-model)
+    (check-not-equal? (exported-value llama-cpp-module 'llama-cpp-model)
                       'missing)
-    (check-equal? (exported-value qwen-module 'make-llama-cpp-backend)
+    (check-equal? (exported-value llama-cpp-module 'make-llama-cpp-backend)
                   'missing))
 
   (test-case "unsupported regex constructs fail at builder construction"

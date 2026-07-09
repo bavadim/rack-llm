@@ -4,18 +4,23 @@
 
 ```racket
 (require rack-llm
-         rack-llm/model-qwen)
+         rack-llm/model-llama-cpp)
 ```
 
 ## Model
 
 ```racket
-(qwen-model #:model-path path
-            #:command command
-            #:context-size 512
-            #:threads 1
-            #:seed 0)
+(llama-cpp-model #:model-path gguf-path
+                 #:context-size 512
+                 #:threads 1
+                 #:gpu-layers -1)
 ```
+
+It requires the native shim built by `make native-llama`, or
+`RACK_LLM_LLAMA_NATIVE_LIB` pointing at the shim. The shim wraps the official
+llama.cpp C API (`llama_model_load_from_file`, `llama_decode`,
+`llama_get_logits_ith`, tokenizer/detokenizer functions), so full-vocabulary
+logits stay in process instead of crossing JSON/base64 IPC.
 
 Returns a `Model`.
 
@@ -86,6 +91,9 @@ The result contains generated text and token ids:
 (generation-result-text result)
 (generation-result-token-ids result)
 ```
+
+Deterministic forced tokens may be fast-forwarded without a provider logits
+request; those tokens contribute `0.0` to `generation-result-lm-logprob`.
 
 ## Private Runtime
 
