@@ -7,14 +7,17 @@ This package is the paper-grade real benchmark package. Pilot artifacts `005-011
 - Create `.venv-realbench` and install `experiments/012_real_model_benchmark/requirements.txt`.
 - Ensure Racket is on `PATH`.
 - GGUF model path: `/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf`.
+- HF model path: `/mnt/storage/models/qwen/Qwen3.5-4B`.
 - Run commands from the repository root with:
   - `RACK_LLM_GGUF_MODEL=/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf`
+  - `RACK_LLM_HF_MODEL=/mnt/storage/models/qwen/Qwen3.5-4B`
   - `PLTCOLLECTS=/mnt/storage/work:`
 
 ## Commands
 
 ```bash
 export RACK_LLM_GGUF_MODEL=/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf
+export RACK_LLM_HF_MODEL=/mnt/storage/models/qwen/Qwen3.5-4B
 export PLTCOLLECTS=/mnt/storage/work:
 
 .venv-realbench/bin/python -m pytest -q experiments/012_real_model_benchmark/code/test_real_model_benchmark.py
@@ -38,4 +41,4 @@ racket experiments/012_real_model_benchmark/code/racket_ours_soft_batch.rkt --sa
 
 ## Artifact Hashes
 
-`ARTIFACT_MANIFEST.json` records sha256 for 0 final artifacts.
+`ARTIFACT_MANIFEST.json` records sha256 for 8 final artifacts.

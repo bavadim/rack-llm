@@ -28,9 +28,12 @@
       "risk_target:0.05"
     ]
   },
-  "date_generated": "2026-07-09",
+  "date_generated": "2026-07-10",
   "experiment": "012_real_model_benchmark",
-  "git_revision": "a63d68cf14bb53eb727f586137007ae45ed038fe",
+  "git_revision": "643711cba8c399164c93541cd1308f266d7e8a4a",
+  "hf_model": {
+    "path": "/mnt/storage/models/qwen/Qwen3.5-4B"
+  },
   "model": {
     "exists": true,
     "files": {
