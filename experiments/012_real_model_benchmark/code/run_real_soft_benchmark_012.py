@@ -20,9 +20,11 @@ from typing import Any
 import regex
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from experiments.ifbench.outcomes import Candidate, Outcome
 from experiments.ifbench.soft_methods import policy_label, threshold_for_policy
+from strict_json import strict_json_dumps
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -59,8 +61,8 @@ POLICIES = ["always", "risk_target:0.05"]
 MIN_AUDITED_ROWS = 150
 REGEX_TIMEOUT_SECONDS = 0.005
 MAX_OURS_SAMPLES = 16
-OURS_TOP_K = 128
 OURS_PROVIDER_MODE = "exact-full-vocab"
+OURS_GENERATION_BACKEND = "racket_generate_native_llama_cpp_full_vocab"
 OURS_MAX_TOKENS = 96
 OURS_DEADLINE_MS = 30000
 
@@ -74,7 +76,7 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+            handle.write(strict_json_dumps(row, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
 
 
@@ -85,9 +87,9 @@ def split_for_key(key: str) -> str:
 
 def pool_sort_key(row: dict[str, Any]) -> tuple[int, int, int, str]:
     source_rank = {
-        "real_qwen_unconstrained": 0,
-        "real_qwen_strict_chat_no_think": 1,
-        "real_qwen_strict_final": 2,
+        "real_qwen_native_unconstrained": 0,
+        "real_qwen_native_strict_chat_no_think": 1,
+        "real_qwen_native_strict_final": 2,
     }.get(row["pool_source"], 99)
     return (source_rank, int(row.get("candidate_index", 0)), int(row.get("seed", 0)), row.get("candidate_id", ""))
 
@@ -295,8 +297,6 @@ def ensure_ours_generation_samples(rows: list[dict[str, Any]]) -> list[dict[str,
             str(OURS_GENERATION_RAW),
             "--samples",
             str(MAX_OURS_SAMPLES),
-            "--provider-mode",
-            OURS_PROVIDER_MODE,
             "--max-tokens",
             str(OURS_MAX_TOKENS),
             "--deadline-ms",
@@ -317,7 +317,7 @@ def ours_generation_artifact_is_current(rows: list[dict[str, Any]]) -> bool:
     return all(
         row.get("provider_mode") == OURS_PROVIDER_MODE
         and row.get("approximation") == "none"
-        and row.get("generation_backend") == "racket_generate_hf_sidecar_full_vocab"
+        and row.get("generation_backend") == OURS_GENERATION_BACKEND
         for row in rows
     )
 
@@ -412,7 +412,7 @@ def select_ours_method(
             "provider_mode": OURS_PROVIDER_MODE,
             "approximation": "none",
             "top_k": None,
-            "generation_backend": "racket_generate_hf_sidecar_full_vocab",
+            "generation_backend": OURS_GENERATION_BACKEND,
         }
     return {
         "candidate_id": int(best["sample_index"]),

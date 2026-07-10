@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set up and verify the real Qwen backend for Experiment 012.
+"""Set up and verify the native real Qwen backend for Experiment 012.
 
 The script is intentionally explicit: dependency installation and model download
 only happen when requested with flags. A plain run performs checks and writes
@@ -27,7 +27,7 @@ RESULTS_DIR = EXPERIMENT_DIR / "results"
 ROOT_DATA_DIR = REPO_ROOT / "data"
 DEFAULT_VENV = REPO_ROOT / ".venv-realbench"
 DEFAULT_MODEL_ID = "Qwen/Qwen3.5-4B"
-DEFAULT_MODEL_DIR = Path("/mnt/storage/models/qwen/Qwen3.5-4B")
+DEFAULT_MODEL_DIR = Path("/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf")
 PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 
 BASE_PACKAGES = [
@@ -102,38 +102,36 @@ print(json.dumps(out, sort_keys=True))
     return json.loads(completed.stdout)
 
 
-def smoke_model(py: Path, model_dir: Path) -> dict[str, Any]:
-    code = r"""
-import json, sys, time
-from pathlib import Path
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-model_dir = Path(sys.argv[1])
-started = time.perf_counter()
-tok = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
-model = AutoModelForCausalLM.from_pretrained(
-    model_dir,
-    torch_dtype="auto",
-    device_map={"": "cuda"},
-    trust_remote_code=True,
-)
-inputs = tok("Say one word.", return_tensors="pt").to(model.device)
-with torch.no_grad():
-    out = model(**inputs)
-logits = out.logits[:, -1, :]
-print(json.dumps({
-    "cuda_available": torch.cuda.is_available(),
-    "torch_cuda": torch.version.cuda,
-    "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-    "gpu_memory_total": torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else None,
-    "model_device": str(model.device),
-    "vocab_size": int(logits.shape[-1]),
-    "input_token_count": int(inputs["input_ids"].shape[-1]),
-    "load_and_forward_seconds": time.perf_counter() - started,
-}, sort_keys=True))
+def smoke_model(model_path: Path) -> dict[str, Any]:
+    code = """
+(begin
+  (require json rack-llm rack-llm/model-llama-cpp)
+  (define model
+    (llama-cpp-model #:model-path (vector-ref (current-command-line-arguments) 0)
+                     #:context-size 128
+                     #:threads 1
+                     #:gpu-layers -1))
+  (define result
+    (generate model "Answer yes or no:" (choice (list (lit " yes") (lit " no")))
+              #:max-tokens 2
+              #:seed 0))
+  (define payload
+    (hash 'backend "llama.cpp-native"
+          'generation_status (symbol->string (generation-result-status result))
+          'generated_tokens (generation-result-generated-tokens result)
+          'generated_text (generation-result-text result)
+          'model_path (vector-ref (current-command-line-arguments) 0)))
+  (model-close! model)
+  (write-json payload)
+  (newline))
 """
-    completed = subprocess.run([str(py), "-c", code, str(model_dir)], text=True, capture_output=True, check=True)
+    completed = subprocess.run(
+        ["racket", "-e", code, str(model_path)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
     return json.loads(completed.stdout)
 
 
@@ -151,10 +149,13 @@ def model_metadata(model_dir: Path) -> dict[str, Any]:
         "exists": model_dir.exists(),
         "files": {},
     }
-    for name in ["config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json"]:
-        path = model_dir / name
-        if path.exists():
-            metadata["files"][name] = {"sha256": sha256_file(path), "bytes": path.stat().st_size}
+    if model_dir.is_file():
+        metadata["files"][model_dir.name] = {"sha256": sha256_file(model_dir), "bytes": model_dir.stat().st_size}
+    elif model_dir.is_dir():
+        for name in ["config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json"]:
+            path = model_dir / name
+            if path.exists():
+                metadata["files"][name] = {"sha256": sha256_file(path), "bytes": path.stat().st_size}
     return metadata
 
 
@@ -162,33 +163,30 @@ def check_backend(venv_dir: Path, model_dir: Path, *, run_smoke: bool) -> CheckR
     py = venv_python(venv_dir)
     missing: list[str] = []
     metadata: dict[str, Any] = {
+        "backend": "llama.cpp-native",
         "python": platform.python_version(),
         "venv": str(venv_dir),
         "model": model_metadata(model_dir),
         "packages": {},
     }
-    if not py.exists():
-        missing.append(f"venv python missing: {py}")
-        return CheckResult(False, missing, metadata)
-    try:
-        metadata["packages"] = collect_package_versions(py)
-    except subprocess.CalledProcessError as error:
-        missing.append(f"cannot collect package versions: {error}")
-        return CheckResult(False, missing, metadata)
-    for package, version in metadata["packages"].items():
-        if version is None:
-            missing.append(f"Python package is not installed in venv: {package}")
     if not model_dir.exists():
-        missing.append(f"model directory is missing: {model_dir}")
+        missing.append(f"GGUF model is missing: {model_dir}")
+    if py.exists():
+        try:
+            metadata["packages"] = collect_package_versions(py)
+        except subprocess.CalledProcessError as error:
+            missing.append(f"cannot collect package versions: {error}")
+    else:
+        metadata["packages"] = {"venv": None}
     if missing:
         return CheckResult(False, missing, metadata)
     if run_smoke:
         try:
-            metadata["smoke"] = smoke_model(py, model_dir)
-            if not metadata["smoke"].get("cuda_available"):
-                missing.append("torch.cuda.is_available() is false")
+            metadata["smoke"] = smoke_model(model_dir)
+            if metadata["smoke"].get("generation_status") != "found":
+                missing.append("native llama.cpp smoke generation did not return found")
         except subprocess.CalledProcessError as error:
-            missing.append("model smoke failed: " + (error.stderr[-2000:] if error.stderr else str(error)))
+            missing.append("native llama.cpp smoke failed: " + (error.stderr[-2000:] if error.stderr else str(error)))
     return CheckResult(not missing, missing, metadata)
 
 
@@ -212,8 +210,8 @@ def missing_markdown(result: CheckResult) -> str:
     lines = [
         "# Missing Real Qwen Backend",
         "",
-        "Task 012 is fail-closed. Benchmark metrics must not be produced until",
-        "the real CUDA Qwen backend is ready.",
+        "Task 012 is fail-closed. Benchmark metrics must not be packaged until",
+        "the native Qwen GGUF backend is ready.",
         "",
         "## Missing Requirements",
         "",
@@ -237,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--venv", type=Path, default=DEFAULT_VENV)
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
-    parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
+    parser.add_argument("--model-dir", type=Path, default=Path(os.environ.get("RACK_LLM_GGUF_MODEL", str(DEFAULT_MODEL_DIR))))
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--download", action="store_true")
     parser.add_argument("--smoke", action="store_true")

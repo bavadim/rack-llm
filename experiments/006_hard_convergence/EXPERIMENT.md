@@ -14,7 +14,6 @@ The runner `code/run_hard_convergence.py` reads
 - `ours_hard`
 - `guidance_hard`
 - `outlines_hard`
-- `vanilla_nucleus_posthoc`
 
 For every method, row, seed, and budget, the script recomputes the budgeted
 outcome. A `FOUND_OK` or `FOUND_WRONG` event counts only if the corresponding
@@ -40,9 +39,7 @@ The experiment writes:
 - `figures/006_hard_solve_by_tokens.png`
 
 Root-level copies of the raw and CSV artifacts are also written under `data/`.
-The hard methods solve all rows within the configured budgets in the offline
-spec-materialization setting. The vanilla posthoc baseline remains unsolved
-because no model/candidate cache is available.
+The curves are computed only for methods with real rows in Experiment 005.
 
 ## Discussion
 

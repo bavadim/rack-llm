@@ -29,12 +29,10 @@ ROOT_DATA_DIR = REPO_ROOT / "data"
 VENDOR_DIR = REPO_ROOT / "experiments" / "004_hard_guide_agreement" / "vendor" / "ifbench"
 HARD_GUIDES_DIR = REPO_ROOT / "experiments" / "003_hard_guides" / "code"
 RACKET_BATCH = EXPERIMENT_DIR / "code" / "racket_choice_batch.rkt"
-DEFAULT_MODEL_PATH = Path(os.environ.get("RACK_LLM_MODEL_PATH", "/mnt/storage/models/qwen/Qwen3.5-4B"))
-DEFAULT_SIDECAR = os.environ.get(
-    "RACK_LLM_LLAMA_SIDECAR",
-    ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/hf_logits_sidecar.py "
-    "--model-path /mnt/storage/models/qwen/Qwen3.5-4B",
+DEFAULT_GGUF_MODEL_PATH = Path(
+    os.environ.get("RACK_LLM_GGUF_MODEL", "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf")
 )
+DEFAULT_HF_MODEL_PATH = Path(os.environ.get("RACK_LLM_HF_MODEL", "/mnt/storage/models/qwen/Qwen3.5-4B"))
 
 METHODS = ["ours_hard", "guidance_hard", "outlines_hard"]
 PILOT_ROWS = 5
@@ -170,7 +168,6 @@ def run_ours(
     rows: list[dict[str, Any]],
     seeds: list[int],
     model_path: Path,
-    sidecar_command: str,
     scratch_dir: Path,
 ) -> list[dict[str, Any]]:
     requests = []
@@ -199,8 +196,6 @@ def run_ours(
             str(RACKET_BATCH),
             "--model-path",
             str(model_path),
-            "--sidecar-command",
-            sidecar_command,
             "--input",
             str(request_path),
             "--output",
@@ -463,8 +458,8 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def run(
     rows: list[dict[str, Any]],
     seeds: list[int],
-    model_path: Path,
-    sidecar_command: str,
+    gguf_model_path: Path,
+    hf_model_path: Path,
     per_sample_timeout_sec: float,
     max_selected_rows: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -476,9 +471,9 @@ def run(
     raw = []
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".scratch-hard-", dir=RESULTS_DIR) as scratch:
-        raw.extend(run_ours(selected, seeds, model_path, sidecar_command, Path(scratch)))
-    raw.extend(run_guidance(selected, seeds, model_path, per_sample_timeout_sec))
-    raw.extend(run_outlines(selected, seeds, model_path, per_sample_timeout_sec))
+        raw.extend(run_ours(selected, seeds, gguf_model_path, Path(scratch)))
+    raw.extend(run_guidance(selected, seeds, hf_model_path, per_sample_timeout_sec))
+    raw.extend(run_outlines(selected, seeds, hf_model_path, per_sample_timeout_sec))
     return evaluate_official(raw, selected), failures
 
 
@@ -492,8 +487,8 @@ def copy_outputs(names: list[str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["pilot", "full"], required=True)
-    parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH)
-    parser.add_argument("--sidecar-command", default=DEFAULT_SIDECAR)
+    parser.add_argument("--gguf-model-path", type=Path, default=DEFAULT_GGUF_MODEL_PATH)
+    parser.add_argument("--hf-model-path", type=Path, default=DEFAULT_HF_MODEL_PATH)
     parser.add_argument("--per-sample-timeout-sec", type=float, default=DEFAULT_PER_SAMPLE_TIMEOUT_SEC)
     args = parser.parse_args(argv)
 
@@ -515,8 +510,8 @@ def main(argv: list[str] | None = None) -> int:
     raw, failures = run(
         rows,
         seeds,
-        args.model_path,
-        args.sidecar_command,
+        args.gguf_model_path,
+        args.hf_model_path,
         args.per_sample_timeout_sec,
         max_selected_rows,
     )

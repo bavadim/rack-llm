@@ -8,6 +8,9 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from experiments.ifbench.json_artifacts import strict_json_dumps
 from soft_rules import build_soft_rules
 
 
@@ -95,7 +98,7 @@ def build_dataset(rows: list[dict], supported_ids: set[str]) -> tuple[list[dict]
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+            handle.write(strict_json_dumps(row, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
 
 

@@ -58,10 +58,11 @@ regexp matching per candidate.
 
 ## Known Repair Tracks
 
-Exact full-vocabulary soft decoding is the main open runtime repair. The
-current implementation is exact but can be too slow for Qwen-scale open text
-watchers; benchmark artifacts based on top-k approximations must not be treated
-as paper-grade exact evidence.
+Exact full-vocabulary soft decoding is the main open runtime repair. A
+full-vocab sampling step is atomic: interrupting it mid-pass would turn exact
+mode into a partial-candidate approximation. The main risk is the cost of one
+complete Qwen-scale vocabulary pass for open text watchers; benchmark artifacts
+based on top-k approximations must not be treated as paper-grade exact evidence.
 
 Experiment runners under `experiments/` are outside the core library boundary
 and may lag behind the public API. They must be realigned before regenerating

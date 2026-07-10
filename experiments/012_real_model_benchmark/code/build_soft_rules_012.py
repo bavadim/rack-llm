@@ -29,6 +29,9 @@ GLOBAL_SEED = 1729
 sys.path.insert(0, str(SOFT_RULES_DIR))
 from soft_rules import build_soft_rules, universal_rules  # noqa: E402
 
+sys.path.insert(0, str(EXPERIMENT_DIR / "code"))
+from strict_json import strict_json_dumps  # noqa: E402
+
 
 SUPPORTED_FAMILIES = {"count", "format", "sentence", "words", "ratio", "repeat"}
 
@@ -42,7 +45,7 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+            handle.write(strict_json_dumps(row, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
 
 

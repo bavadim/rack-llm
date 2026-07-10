@@ -3,22 +3,19 @@
 (require json
          racket/cmdline
          rack-llm
-         rack-llm/llama-cpp)
+         rack-llm/model-llama-cpp)
 
-(define model-path (make-parameter "/mnt/storage/models/qwen/Qwen3.5-4B"))
-(define sidecar-command
-  (make-parameter
-   ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/hf_logits_sidecar.py --model-path /mnt/storage/models/qwen/Qwen3.5-4B"))
+(define default-gguf-model-path
+  "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf")
+(define model-path (make-parameter (or (getenv "RACK_LLM_GGUF_MODEL") default-gguf-model-path)))
 (define input-path (make-parameter #f))
 (define output-path (make-parameter #f))
 
 (command-line
  #:program "racket_choice_batch.rkt"
  #:once-each
- [("--model-path") path "Hugging Face model directory"
+ [("--model-path") path "GGUF model file"
                    (model-path path)]
- [("--sidecar-command") command "Command used by make-llama-cpp-provider"
-                        (sidecar-command command)]
  [("--input") path "JSON file containing choice-generation requests"
               (input-path path)]
  [("--output") path "Write JSONL generation rows to path"
@@ -32,13 +29,12 @@
 (define requests
   (call-with-input-file (input-path) read-json))
 
-(define p
-  (make-llama-cpp-provider
+(define model
+  (llama-cpp-model
    #:model-path (model-path)
-   #:command (sidecar-command)
    #:context-size 512
    #:threads 1
-   #:seed 0))
+   #:gpu-layers -1))
 
 (define (field row key [default (lambda () (error 'field "missing key ~a in ~s" key row))])
   (hash-ref row key
@@ -52,10 +48,10 @@
   (define regex (field request 'regex #f))
   (cond
     [(and (list? choices) (pair? choices))
-     (apply select
-            (for/list ([choice (in-list choices)])
-              (lit choice)))]
-    [(string? regex) (rx (pregexp regex))]
+     (choice
+      (for/list ([item (in-list choices)])
+        (lit item)))]
+    [(string? regex) (rx regex)]
     [else (error 'racket_choice_batch
                  "request must contain non-empty choices or regex: ~s"
                  request)]))
@@ -76,7 +72,7 @@
               'failure_reason (exn-message exn)
               'source "real_runtime"))])
     (define generated
-      (generate p
+      (generate model
                 (field request 'prompt)
                 (request->guide request)
                 #:seed (field request 'seed)
@@ -89,7 +85,7 @@
           'text (generation-result-text generated)
           'latency_ms (- (current-inexact-milliseconds) started-ms)
           'generated_tokens (generation-result-generated-tokens generated)
-          'outcome (if (generation-result-ok? generated) "GENERATED" "NOT_FOUND")
+          'outcome (if (eq? (generation-result-status generated) 'found) "GENERATED" "NOT_FOUND")
           'failure_reason (or (generation-result-reason generated) "")
           'source "real_runtime")))
 
@@ -100,3 +96,5 @@
       (newline out)
       (flush-output out)))
   #:exists 'replace)
+
+(model-close! model)

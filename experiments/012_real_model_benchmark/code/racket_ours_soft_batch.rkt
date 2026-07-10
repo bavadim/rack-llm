@@ -4,22 +4,18 @@
          racket/cmdline
          racket/list
          racket/match
-         racket/port
          racket/string
          rack-llm
-         rack-llm/llama-cpp)
+         rack-llm/model-llama-cpp)
 
 (define rules-path (make-parameter "data/012_soft_ifbench_rules_audited.jsonl"))
 (define output-path
   (make-parameter "experiments/012_real_model_benchmark/results/012_ours_soft_generation_raw.jsonl"))
-(define model-path (make-parameter "/mnt/storage/models/qwen/Qwen3.5-4B"))
-(define sidecar-command
-  (make-parameter
-   ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/hf_logits_sidecar.py --model-path /mnt/storage/models/qwen/Qwen3.5-4B"))
+(define default-gguf-model-path
+  "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf")
+(define model-path (make-parameter (or (getenv "RACK_LLM_GGUF_MODEL") default-gguf-model-path)))
 (define limit-rows (make-parameter #f))
 (define samples (make-parameter 16))
-(define top-k (make-parameter 128))
-(define provider-mode-param (make-parameter "exact-full-vocab"))
 (define deadline-ms (make-parameter 5000))
 (define max-tokens (make-parameter 96))
 (define temperature (make-parameter 0.7))
@@ -29,19 +25,12 @@
  #:once-each
  [("--rules") path "Audited soft rules JSONL" (rules-path path)]
  [("--output") path "Output JSONL" (output-path path)]
- [("--model-path") path "Hugging Face model directory" (model-path path)]
- [("--sidecar-command") command "HF JSON-lines sidecar command" (sidecar-command command)]
+ [("--model-path") path "GGUF model file" (model-path path)]
  [("--limit-rows") n "Limit audited rows; omitted means all rows" (limit-rows (string->number n))]
  [("--samples") n "Samples per row/noise/method" (samples (string->number n))]
- [("--top-k") n "Top-k token shortlist size" (top-k (string->number n))]
- [("--provider-mode") mode "exact-full-vocab or top-k-approx"
-                       (provider-mode-param mode)]
  [("--deadline-ms") n "Per generate call Racket deadline" (deadline-ms (string->number n))]
  [("--max-tokens") n "Per generate call token budget" (max-tokens (string->number n))]
  [("--temperature") n "Sampling temperature" (temperature (string->number n))])
-
-(unless (member (provider-mode-param) '("exact-full-vocab" "top-k-approx"))
-  (error 'racket_ours_soft_batch "unsupported --provider-mode: ~a" (provider-mode-param)))
 
 (define noise-levels '("clean" "noisy_20" "noisy_40"))
 (define methods '("ours_soft_decoding" "ours_hybrid_decoding"))
@@ -58,8 +47,17 @@
     (lambda (in)
       (for/list ([line (in-lines in)]
                  #:when (not (string=? "" (string-trim line))))
-        (string->jsexpr
-         (string-replace line "-Infinity" "\"-Infinity\""))))))
+        (string->jsexpr line)))))
+
+(define (json-number-field value field-name)
+  (cond
+    [(number? value) value]
+    [(equal? value "-Infinity") -inf.0]
+    [(equal? value "Infinity") +inf.0]
+    [else (error 'json-number-field
+                 "expected numeric JSON field ~a, got ~s"
+                 field-name
+                 value)]))
 
 (define (python-regex->pregexp-pattern pattern)
   (define normalized
@@ -84,12 +82,12 @@
 
 (define (rule->watcher rule)
   (define kind (hget rule 'kind))
-  (define weight (hget rule 'weight 0.0))
+  (define weight (json-number-field (hget rule 'weight 0.0) 'weight))
   (define pattern-type (hget rule 'pattern_type))
   (define pattern (hget rule 'pattern))
   (define expr
     (cond
-      [(equal? pattern-type "regex") (rx (pregexp (python-regex->pregexp-pattern pattern)))]
+      [(equal? pattern-type "regex") (rx (python-regex->pregexp-pattern pattern))]
       [(equal? pattern-type "literal") pattern]
       [else (error 'rule->watcher "unsupported pattern_type: ~a" pattern-type)]))
   (cond
@@ -103,10 +101,7 @@
 
 (define (make-guide row noise)
   (define watchers (map rule->watcher (row-rules row noise)))
-  (keyword-apply text
-                 '(#:max-tokens)
-                 '(4096)
-                 watchers))
+  (text 4096 watchers))
 
 (define (json-number value)
   (if (and (real? value) (rational? value))
@@ -121,36 +116,6 @@
     [(not value) #f]
     [else (format "~s" value)]))
 
-(define (make-sidecar command)
-  (define-values (proc stdout stdin stderr)
-    (subprocess #f #f #f "/bin/sh" "-c" command))
-  (define (request payload)
-    (write-json payload stdin)
-    (newline stdin)
-    (flush-output stdin)
-    (define line (read-line stdout 'any))
-    (when (eof-object? line)
-      (error 'soft-batch-sidecar "sidecar closed stdout: ~a" (port->string stderr)))
-    (define response (string->jsexpr line))
-    (unless (equal? (hget response 'ok #f) #t)
-      (error 'soft-batch-sidecar "sidecar response is not ok: ~s" response))
-    response)
-  (define (close)
-    (with-handlers ([exn:fail? void])
-      (write-json (hash 'op "close") stdin)
-      (newline stdin)
-      (flush-output stdin))
-    (close-output-port stdin)
-    (subprocess-wait proc))
-  (values request close))
-
-(define (make-topk-provider tokens logits metadata)
-  (make-provider
-   #:vocab tokens
-   #:mode 'top-k-approx
-   #:metadata metadata
-   #:next-logits (lambda (_prompt _prefix) (list->vector logits))))
-
 (define (method-beta method)
   (cond
     [(equal? method "ours_soft_decoding") 1.0]
@@ -160,7 +125,7 @@
 (define (method-seed-offset method)
   (if (equal? method "ours_hybrid_decoding") 10000000 0))
 
-(define (result->payload row noise method sample-index result provider-kind model-vocab-size topk-response)
+(define (result->payload row noise method sample-index result)
   (define metrics (generation-result-metrics result))
   (hash 'key (hget row 'key)
         'example_id (hget row 'key)
@@ -176,22 +141,17 @@
         'failure_reason (jsexpr-or-string (generation-result-reason result))
         'text (generation-result-text result)
         'lm_logprob (json-number (generation-result-lm-logprob result))
-        'guide_score (json-number (generation-result-guide-score result))
-        'weak_score (json-number (generation-result-guide-score result))
+        'guide_score (json-number (generation-result-filter-score result))
+        'weak_score (json-number (generation-result-filter-score result))
         'total_score (json-number (generation-result-total-score result))
         'latency_ms (generation-result-latency-ms result)
         'generated_tokens (generation-result-generated-tokens result)
         'trace (format "~s" (generation-result-trace result))
         'metrics (format "~s" metrics)
-        'provider_mode provider-kind
-        'approximation (if (equal? provider-kind "top-k-approx")
-                           "top_k_logits_shortlist"
-                           "none")
-        'top_k (and topk-response (hget topk-response 'k))
-        'model_vocab_size model-vocab-size
-        'generation_backend (if (equal? provider-kind "top-k-approx")
-                                "racket_generate_hf_sidecar_topk"
-                                "racket_generate_hf_sidecar_full_vocab")
+        'provider_mode "exact-full-vocab"
+        'approximation "none"
+        'model_vocab_size (generation-metrics-vocab-size metrics)
+        'generation_backend "racket_generate_native_llama_cpp_full_vocab"
         'uses_candidate_pool #f
         'uses_official_verifier_for_selection #f
         'uses_official_verifier #f
@@ -219,15 +179,10 @@
         'generated_tokens 0
         'trace ""
         'metrics ""
-        'provider_mode (provider-mode-param)
-        'approximation (if (equal? (provider-mode-param) "top-k-approx")
-                           "top_k_logits_shortlist"
-                           "none")
-        'top_k (and (equal? (provider-mode-param) "top-k-approx") (top-k))
+        'provider_mode "exact-full-vocab"
+        'approximation "none"
         'model_vocab_size #f
-        'generation_backend (if (equal? (provider-mode-param) "top-k-approx")
-                                "racket_generate_hf_sidecar_topk"
-                                "racket_generate_hf_sidecar_full_vocab")
+        'generation_backend "racket_generate_native_llama_cpp_full_vocab"
         'uses_candidate_pool #f
         'uses_official_verifier_for_selection #f
         'uses_official_verifier #f
@@ -241,44 +196,12 @@
         (newline out)))
     #:exists 'replace))
 
-(define-values (sidecar-request close-sidecar)
-  (if (equal? (provider-mode-param) "top-k-approx")
-      (make-sidecar (sidecar-command))
-      (values #f void)))
-
-(define _load-response
-  (and sidecar-request
-       (sidecar-request
-        (hash 'op "load"
-              'model_path (path->string (if (path? (model-path))
-                                            (model-path)
-                                            (string->path (model-path))))))))
-
-(define exact-provider
-  (and (equal? (provider-mode-param) "exact-full-vocab")
-       (make-llama-cpp-provider
-        #:model-path (model-path)
-        #:command (sidecar-command)
-        #:context-size 512
-        #:threads 1
-        #:seed 0)))
-
-(define (make-run-provider topk-response)
-  (if exact-provider
-      exact-provider
-      (make-topk-provider (hget topk-response 'tokens)
-                          (hget topk-response 'logits)
-                          (hash 'provider-mode 'top-k-approx
-                                'approximation 'top_k_logits_shortlist
-                                'top-k (hget topk-response 'k)))))
-
-(define (run-provider-kind)
-  (if exact-provider "exact-full-vocab" "top-k-approx"))
-
-(define (run-model-vocab-size topk-response)
-  (if exact-provider
-      (length (provider-vocab exact-provider))
-      (hget topk-response 'vocab_size)))
+(define model
+  (llama-cpp-model
+   #:model-path (model-path)
+   #:context-size 512
+   #:threads 1
+   #:gpu-layers -1))
 
 (define all-input-rows (read-jsonl (rules-path)))
 (define input-rows
@@ -296,13 +219,6 @@
                          (for/list ([method (in-list methods)])
                            (for/list ([sample-index (in-range (samples))])
                              (failure->payload row noise method sample-index (exn-message exn))))))])
-       (define topk-response
-         (and sidecar-request
-              (sidecar-request
-               (hash 'op "next_topk"
-                     'prompt (hget row 'prompt)
-                     'prefix ""
-                     'k (top-k)))))
        (append*
         (for/list ([method (in-list methods)])
           (for/list ([sample-index (in-range (samples))])
@@ -310,9 +226,8 @@
                             (* 100000 sample-index)
                             (* 1000 (string->number (format "~a" (hget row 'key))))
                             (index-of noise-levels noise)))
-            (define provider (make-run-provider topk-response))
             (define result
-              (generate provider
+              (generate model
                         (hget row 'prompt)
                         (make-guide row noise)
                         #:beta (method-beta method)
@@ -324,21 +239,15 @@
                              noise
                              method
                              sample-index
-                             result
-                             (run-provider-kind)
-                             (run-model-vocab-size topk-response)
-                             topk-response))))))))
+                             result))))))))
 
 (write-jsonl (output-path) outputs)
-(close-sidecar)
+(model-close! model)
 (displayln (jsexpr->string (hash 'rows (length outputs)
                                   'input_rows (length input-rows)
                                   'noise_levels noise-levels
                                   'methods methods
                                   'samples (samples)
-                                  'provider_mode (provider-mode-param)
+                                  'provider_mode "exact-full-vocab"
                                   'max_tokens (max-tokens)
-                                  'top_k (and (equal? (provider-mode-param) "top-k-approx") (top-k))
-                                  'approximation (if (equal? (provider-mode-param) "top-k-approx")
-                                                     "top_k_logits_shortlist"
-                                                     "none"))))
+                                  'approximation "none")))

@@ -152,7 +152,6 @@ def draw_line_chart(path: Path, rows: list[dict], title: str, x_label: str) -> N
         "ours_hard": (31, 119, 180),
         "guidance_hard": (44, 160, 44),
         "outlines_hard": (214, 39, 40),
-        "vanilla_nucleus_posthoc": (127, 127, 127),
     }
 
     def px(budget: float) -> int:

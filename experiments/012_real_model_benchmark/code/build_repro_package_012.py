@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,8 @@ EXPERIMENT_DIR = Path(__file__).resolve().parents[1]
 RESULTS_DIR = EXPERIMENT_DIR / "results"
 FIGURES_DIR = EXPERIMENT_DIR / "figures"
 ROOT_DATA_DIR = REPO_ROOT / "data"
+DEFAULT_GGUF_MODEL_PATH = "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf"
+DEFAULT_HF_MODEL_PATH = "/mnt/storage/models/qwen/Qwen3.5-4B"
 
 
 def sha256(path: Path) -> str:
@@ -74,24 +78,24 @@ def final_artifacts() -> list[Path]:
 
 def build_config() -> dict[str, Any]:
     backend = maybe_json(ROOT_DATA_DIR / "012_backend_metadata.json")
+    model = backend.get("model", {})
+    gguf_model_path = model.get("path") or os.environ.get("RACK_LLM_GGUF_MODEL", DEFAULT_GGUF_MODEL_PATH)
     return {
         "experiment": "012_real_model_benchmark",
-        "date_generated": "2026-07-05",
+        "date_generated": date.today().isoformat(),
         "git_revision": git_revision(),
         "python": sys.version,
         "platform": platform.platform(),
-        "model": backend.get("model", {}),
-        "backend_smoke": {
-            "python_sidecar": maybe_json(ROOT_DATA_DIR / "012_sidecar_smoke.json"),
-            "racket_sidecar": maybe_json(ROOT_DATA_DIR / "012_racket_sidecar_smoke.json"),
-        },
+        "model": {**model, "path": gguf_model_path},
+        "hf_model": {"path": os.environ.get("RACK_LLM_HF_MODEL", DEFAULT_HF_MODEL_PATH)},
+        "backend_smoke": maybe_json(ROOT_DATA_DIR / "012_backend_metadata.json").get("smoke", {}),
         "packages": package_versions(),
         "benchmark": {
             "audited_soft_rows_min": 150,
             "noise_levels": ["clean", "noisy_20", "noisy_40"],
             "budgets": [1, 4, 8, 16],
             "return_policies": ["always", "risk_target:0.05"],
-            "ours_generation_provider_mode": "exact-full-vocab",
+            "ours_generation_backend": "racket_generate_native_llama_cpp_full_vocab",
             "ours_generation_approximation": "none",
             "ours_generation_max_tokens": 96,
             "pilot_outputs_005_011_are_paper_grade": False,
@@ -118,6 +122,8 @@ def build_manifest() -> dict[str, Any]:
 
 
 def reproduce_md(config: dict[str, Any], manifest: dict[str, Any]) -> str:
+    gguf_model_path = config.get("model", {}).get("path", DEFAULT_GGUF_MODEL_PATH)
+    hf_model_path = config.get("hf_model", {}).get("path", DEFAULT_HF_MODEL_PATH)
     return "\n".join(
         [
             "# Reproduce Experiment 012",
@@ -128,17 +134,33 @@ def reproduce_md(config: dict[str, Any], manifest: dict[str, Any]) -> str:
             "",
             "- Create `.venv-realbench` and install `experiments/012_real_model_benchmark/requirements.txt`.",
             "- Ensure Racket is on `PATH`.",
-            f"- Model path: `{config.get('model', {}).get('path', 'unknown')}`.",
+            f"- GGUF model path: `{gguf_model_path}`.",
+            f"- HF model path: `{hf_model_path}`.",
+            "- Run commands from the repository root with:",
+            f"  - `RACK_LLM_GGUF_MODEL={gguf_model_path}`",
+            f"  - `RACK_LLM_HF_MODEL={hf_model_path}`",
+            "  - `PLTCOLLECTS=/mnt/storage/work:`",
             "",
             "## Commands",
             "",
             "```bash",
+            f"export RACK_LLM_GGUF_MODEL={gguf_model_path}",
+            f"export RACK_LLM_HF_MODEL={hf_model_path}",
+            "export PLTCOLLECTS=/mnt/storage/work:",
+            "",
+            ".venv-realbench/bin/python -m pytest -q experiments/012_real_model_benchmark/code/test_real_model_benchmark.py",
+            "raco make experiments/012_real_model_benchmark/code/racket_choice_batch.rkt experiments/012_real_model_benchmark/code/racket_ours_soft_smoke.rkt experiments/012_real_model_benchmark/code/racket_ours_soft_batch.rkt experiments/012_real_model_benchmark/code/racket_soft_candidate_pool.rkt",
+            ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/run_real_model_benchmark.py --experiment-only --no-write",
+            "",
             ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/build_soft_rules_012.py",
-            ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/generate_soft_candidate_pool.py --help",
+            ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/generate_soft_candidate_pool.py --limit-rows 1 --candidates-per-row 1 --experiment-only",
+            "racket experiments/012_real_model_benchmark/code/racket_ours_soft_smoke.rkt --rules data/soft_ifbench_rules.jsonl --output experiments/012_real_model_benchmark/results/019_ours_soft_smoke_raw.jsonl --limit-rows 1 --max-tokens 1 --attempt-timeout-seconds 10",
+            "",
+            ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/generate_soft_candidate_pool.py",
             ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/normalize_soft_candidate_pool.py",
             ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/audit_soft_rules_012.py",
             "racket experiments/012_real_model_benchmark/code/racket_ours_soft_smoke.rkt --limit-rows 5 --max-tokens 1 --attempt-timeout-seconds 10",
-            "racket experiments/012_real_model_benchmark/code/racket_ours_soft_batch.rkt --samples 16 --provider-mode exact-full-vocab --max-tokens 96",
+            "racket experiments/012_real_model_benchmark/code/racket_ours_soft_batch.rkt --samples 16 --max-tokens 96",
             ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/run_hard_runtime_benchmark.py --mode full",
             ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/run_real_soft_benchmark_012.py",
             ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/run_real_analysis_012.py",
@@ -154,17 +176,20 @@ def reproduce_md(config: dict[str, Any], manifest: dict[str, Any]) -> str:
 
 
 def command_log() -> str:
+    today = date.today().isoformat()
     return "\n".join(
         [
-            "2026-07-05 build_soft_rules_012.py",
-            "2026-07-05 generate/normalize real Qwen soft candidate pool",
-            "2026-07-05 audit_soft_rules_012.py -> audited_rows=152",
-            "2026-07-05 racket_ours_soft_smoke.rkt --limit-rows 5 --max-tokens 1 --attempt-timeout-seconds 10",
-            "2026-07-05 run_hard_runtime_benchmark.py --mode full -> raw_rows=165, failures=138",
-            "2026-07-05 racket_ours_soft_batch.rkt --samples 16 --provider-mode exact-full-vocab --max-tokens 96 -> rows=14592",
-            "2026-07-05 run_real_soft_benchmark_012.py -> raw_rows=25536, missing_runs=0",
-            "2026-07-05 run_real_analysis_012.py -> hard_rows=3, soft_rows=84, test_rows=6",
-            "2026-07-05 build_repro_package_012.py",
+            f"{today} setup_real_backend.py -> native GGUF backend metadata",
+            f"{today} build_soft_rules_012.py",
+            f"{today} generate_soft_candidate_pool.py -> native real Qwen candidate pool",
+            f"{today} normalize_soft_candidate_pool.py",
+            f"{today} audit_soft_rules_012.py",
+            f"{today} racket_ours_soft_smoke.rkt --limit-rows 5 --max-tokens 1 --attempt-timeout-seconds 10",
+            f"{today} run_hard_runtime_benchmark.py --mode full",
+            f"{today} racket_ours_soft_batch.rkt --samples 16 --max-tokens 96",
+            f"{today} run_real_soft_benchmark_012.py",
+            f"{today} run_real_analysis_012.py",
+            f"{today} build_repro_package_012.py",
             "",
         ]
     )

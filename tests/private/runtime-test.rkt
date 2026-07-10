@@ -1,6 +1,8 @@
 #lang racket/base
 
-(require rackunit
+(require racket/list
+         racket/sandbox
+         rackunit
          "../../main.rkt"
          "../../private/logits.rkt"
          "../../private/model.rkt")
@@ -122,3 +124,94 @@
     (check-equal?
      (generation-metrics-candidate-count-per-step (generation-result-metrics result))
      '(1 1 1 1)))
+
+  (test-case "broad bounded regex full-vocab step does not spend time in epsilon closure"
+    (define vocab-size 50000)
+    (define tok
+      (tokenizer
+       #:vocab-size vocab-size
+       #:fingerprint "large-regex-mock"
+       #:token-ref
+       (lambda (id)
+         (cond
+           [(= id 0) "My"]
+           [(= id 1) " Answer:"]
+           [(= id 2) " x"]
+           [else " filler"]))
+       #:tokenize
+       (lambda (_text) '())
+       #:detokenize
+       (lambda (ids)
+         (apply string-append
+                (map (lambda (id)
+                       (cond
+                         [(= id 0) "My"]
+                         [(= id 1) " Answer:"]
+                         [(= id 2) " x"]
+                         [else " filler"]))
+                     ids)))))
+    (define logits (make-vector vocab-size 0.0))
+    (define p
+      (provider
+       #:vocab-size vocab-size
+       #:next-logits (lambda (_prompt-ids _prefix-ids)
+                       (vector->logits-view logits))))
+    (define m (model tok p (hash 'name 'large-regex-mock) void))
+    (define result
+      (call-with-limits
+       2
+       256
+       (lambda ()
+         (generate m
+                   ""
+                   (rx "My Answer: .{1,512} My Conclusion: .{1,512} Future Outlook: .{1,512}")
+                   #:candidate-policy 'full-vocab
+                   #:max-tokens 1
+                   #:seed 0))))
+    (check-not-false
+     (member (generation-result-status result) '(found not-found-budget not-found-hard))))
+
+  (test-case "broad bounded regex full-vocab avoids per-candidate filter state allocation"
+    (define vocab-size 100000)
+    (define (token-text id)
+      (cond
+        [(= id 0) "My"]
+        [(= id 1) " Answer:"]
+        [(= id 2) " x"]
+        [(= id 3) " My"]
+        [(= id 4) " Conclusion:"]
+        [(= id 5) " y"]
+        [(= id 6) " Future"]
+        [(= id 7) " Outlook:"]
+        [(= id 8) " z"]
+        [else " filler"]))
+    (define tok
+      (tokenizer
+       #:vocab-size vocab-size
+       #:fingerprint "large-regex-fast-path-mock"
+       #:token-ref token-text
+       #:tokenize (lambda (_text) '())
+       #:detokenize (lambda (ids) (apply string-append (map token-text ids)))))
+    (define logits (make-vector vocab-size 0.0))
+    (define p
+      (provider
+       #:vocab-size vocab-size
+       #:next-logits (lambda (_prompt-ids _prefix-ids)
+                       (vector->logits-view logits))))
+    (define m (model tok p (hash 'name 'large-regex-fast-path-mock) void))
+    (define result
+      (call-with-limits
+       2
+       256
+       (lambda ()
+         (generate m
+                   ""
+                   (rx "My Answer: .{1,512} My Conclusion: .{1,512} Future Outlook: .{1,512}")
+                   #:candidate-policy 'full-vocab
+                   #:max-tokens 4
+                   #:seed 0))))
+    (check-not-false
+     (member (generation-result-status result) '(found not-found-budget not-found-hard)))
+    (check-equal?
+     (generation-metrics-candidate-count-per-step (generation-result-metrics result))
+     (make-list 4 vocab-size)))

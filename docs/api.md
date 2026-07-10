@@ -81,9 +81,10 @@ Candidate policies:
 '(top-k K)
 ```
 
-`'full-vocab` is exact over the model vocabulary. For large vocabularies and
-open text watchers this can be expensive; use `#:deadline-ms` to fail closed
-instead of relying on an external timeout.
+`'full-vocab` is exact over the model vocabulary. Each generated token requires
+one complete vocabulary pass, so use `#:max-tokens` to bound generation depth
+for open text watchers. `#:deadline-ms` is a coarse guard between generation
+steps; it does not interrupt one exact full-vocabulary sampling pass.
 
 The result contains generated text and token ids:
 

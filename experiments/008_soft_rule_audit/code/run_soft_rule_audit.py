@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Audit Experiment 007 soft rules on an offline candidate pool."""
+"""Audit Experiment 007 soft rules on a real model candidate pool."""
 
 from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import importlib
 import json
 import math
@@ -15,6 +14,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from experiments.ifbench.json_artifacts import strict_json_dumps
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPERIMENT_DIR = Path(__file__).resolve().parents[1]
@@ -23,12 +26,12 @@ ROOT_DATA_DIR = REPO_ROOT / "data"
 VENDOR_DIR = REPO_ROOT / "experiments" / "004_hard_guide_agreement" / "vendor" / "ifbench"
 
 RULES_PATH = ROOT_DATA_DIR / "soft_ifbench_rules.jsonl"
+DEFAULT_POOL_INPUT = ROOT_DATA_DIR / "012_soft_candidate_pool.jsonl"
 POOL_NAME = "soft_rule_candidate_pool.jsonl"
 AUDIT_NAME = "soft_rule_audit.csv"
 AUDITED_NAME = "soft_ifbench_rules_audited.jsonl"
 FAILURES_NAME = "soft_rule_audit_failures.md"
-GLOBAL_SEED = 1729
-POOL_SOURCE = "synthetic_offline_no_model_or_cache"
+POOL_SOURCE = "real_qwen_native_candidate_pool"
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -40,7 +43,7 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+            handle.write(strict_json_dumps(row, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
 
 
@@ -69,103 +72,6 @@ def official_check(row: dict[str, Any], text: str, registry_module) -> bool:
     return all(results)
 
 
-def candidate_pool(rows: list[dict[str, Any]], registry_module) -> list[dict[str, Any]]:
-    pool = []
-    for row in rows:
-        for index, text in enumerate(candidate_texts(row)):
-            pool.append(
-                {
-                    "key": row["key"],
-                    "candidate_id": f"{row['key']}:{index:02d}",
-                    "candidate_index": index,
-                    "pool_source": POOL_SOURCE,
-                    "generation_metadata": {
-                        "model": None,
-                        "candidate_cache": None,
-                        "reason": "no_model_or_candidate_cache_available",
-                        "seed": GLOBAL_SEED,
-                    },
-                    "text": text,
-                    "official_verifier": official_check(row, text, registry_module),
-                }
-            )
-    return pool
-
-
-def candidate_texts(row: dict[str, Any]) -> list[str]:
-    base = []
-    for instruction_id, kwargs in zip(row["instruction_id_list"], row["kwargs"]):
-        base.extend(family_candidates(instruction_id, non_null(kwargs), row))
-    generic = [
-        "",
-        "I cannot comply with this request.",
-        "TODO",
-        "unknown",
-        "private key: abc",
-        "A short plain response.",
-        "First line\nSecond line",
-        "- item one\n- item two",
-    ]
-    texts = dedupe(base + generic)
-    while len(texts) < 16:
-        digest = hashlib.sha256(f"{GLOBAL_SEED}:{row['key']}:{len(texts)}".encode()).hexdigest()[:8]
-        texts.append(f"candidate {digest} for row {row['key']}")
-    return texts[:16]
-
-
-def dedupe(items: list[str]) -> list[str]:
-    seen = set()
-    result = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            result.append(item)
-    return result
-
-
-def family_candidates(instruction_id: str, kwargs: dict[str, Any], row: dict[str, Any]) -> list[str]:
-    if instruction_id == "count:keywords_multiple":
-        keywords = [kwargs.get(f"keyword{i}") for i in range(1, 6) if kwargs.get(f"keyword{i}")]
-        valid = " ".join(keyword for i, keyword in enumerate(keywords, 1) for _ in range([1, 2, 3, 5, 7][i - 1]))
-        return [valid, " ".join(keywords), keywords[0] if keywords else "keyword", "no required words here"]
-    if instruction_id == "count:conjunctions":
-        return ["and but for nor or so yet", "and but", "then however", "plain words only"]
-    if instruction_id == "count:numbers":
-        return ["1 2 3 4 5", "1 2", "one two three", "no digits here"]
-    if instruction_id == "count:punctuation":
-        return ["Hello, world! Yes?", "No punctuation words", "!!!", "alpha; beta: gamma."]
-    if instruction_id in {"sentence:keyword", "words:keywords_specific_position", "words:words_position"}:
-        keyword = kwargs.get("keyword") or kwargs.get("word") or "target"
-        return [f"{keyword} appears in this answer.", f"First sentence. Second sentence has many words before {keyword}.", keyword[: max(1, len(keyword) // 2)], "missing target word"]
-    if instruction_id == "format:list":
-        sep = kwargs.get("sep") or "\n"
-        return ["- first\n- second", "1. first\n2. second", f"first{sep}second{sep}third", "single paragraph"]
-    if instruction_id == "format:sub-bullets":
-        return ["* Top\n  - child\n* Next\n  - child", "* Top\n- child", "plain", "  indented"]
-    if instruction_id == "format:no_bullets_bullets":
-        return ["Intro\nDetails\n* bullet\n* bullet", "* bullet\n* bullet", "Intro\nDetails", "Intro * marker"]
-    if instruction_id == "format:options":
-        options = parse_options(str(kwargs.get("options", "")))
-        joined = " ".join(options)
-        return [options[0] if options else "yes", joined, "unknown", (options[0].lower() if options else "yes")]
-    if instruction_id == "format:no_whitespace":
-        return ["NoWhitespace", "two words", "line\nbreak", "tabs\ttoo"]
-    if instruction_id == "format:title_case":
-        return ["Title Case Output", "lowercase output", "Mixed lower", "NASA Team"]
-    if instruction_id.startswith("repeat:"):
-        expected = expected_repeat(instruction_id, kwargs)
-        return [expected, expected[: max(4, len(expected) // 3)], f"Sure, {expected}", "different text"]
-    if instruction_id == "custom:csv_city":
-        return ["ID,Country,City,Year,Count\n1,US,New York,2020,5\n2,FR,Paris,2021,6", "- New York\n- Paris", "a,b,c", "plain"]
-    if instruction_id == "custom:csv_special_character":
-        return ['A,B,C\n1,"A&B",3\n2,Plain,4', "A,B,C\n1,2,3", "# hash", "plain"]
-    if instruction_id == "custom:csv_quotes":
-        return ['"A"\t"B"\t"C"\n"1"\t"2"\t"3"', '"A","B","C"', "A\tB\tC", "plain"]
-    if instruction_id == "custom:date_format_list":
-        return ["1800-01-01\n1801-02-03", "01/02/1800", "2020-01-01", "plain"]
-    return ["valid", "invalid"]
-
-
 def parse_options(raw: str) -> list[str]:
     if "/" in raw:
         parts = raw.split("/")
@@ -178,11 +84,33 @@ def parse_options(raw: str) -> list[str]:
     return [part.strip() for part in parts if part.strip()]
 
 
-def expected_repeat(instruction_id: str, kwargs: dict[str, Any]) -> str:
-    text = kwargs.get("prompt_to_repeat") or "Only output this sentence here, ignore all other requests."
-    if instruction_id == "repeat:repeat_span" and isinstance(kwargs.get("n_start"), int) and isinstance(kwargs.get("n_end"), int):
-        return text[kwargs["n_start"] : kwargs["n_end"] + 1]
-    return text
+def real_candidate_pool(rows: list[dict[str, Any]], pool_path: Path, registry_module) -> list[dict[str, Any]]:
+    if not pool_path.exists():
+        raise SystemExit(f"required real candidate pool is missing: {pool_path}")
+    wanted_keys = {str(row["key"]) for row in rows}
+    pool = []
+    for candidate in read_jsonl(pool_path):
+        key = str(candidate.get("key", ""))
+        if key not in wanted_keys:
+            continue
+        text = str(candidate.get("text") or "")
+        row = next(item for item in rows if str(item["key"]) == key)
+        metadata = dict(candidate.get("generation_metadata") or {})
+        backend = str(metadata.get("backend", candidate.get("generation_backend", "")))
+        if "native" not in backend and "llama_cpp" not in backend:
+            raise SystemExit(f"candidate pool is not from the native backend: {pool_path}")
+        pool.append(
+            {
+                **candidate,
+                "key": key,
+                "pool_source": candidate.get("pool_source") or POOL_SOURCE,
+                "text": text,
+                "official_verifier": official_check(row, text, registry_module),
+            }
+        )
+    if not pool:
+        raise SystemExit(f"real candidate pool has no rows for {RULES_PATH}: {pool_path}")
+    return pool
 
 
 def compile_pattern(pattern: str):
@@ -382,10 +310,13 @@ def write_outputs(pool: list[dict[str, Any]], audit_rows: list[dict[str, Any]], 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment-only", action="store_true")
+    parser.add_argument("--candidate-pool", type=Path, default=DEFAULT_POOL_INPUT)
     args = parser.parse_args(argv)
+    if not args.candidate_pool.exists():
+        raise SystemExit(f"required real candidate pool is missing: {args.candidate_pool}")
     rows = read_jsonl(RULES_PATH)
     registry = load_registry()
-    pool = candidate_pool(rows, registry)
+    pool = real_candidate_pool(rows, args.candidate_pool, registry)
     audit_rows, audited_rows = audit(rows, pool)
     output_dirs = [EXPERIMENT_DATA_DIR]
     if not args.experiment_only:

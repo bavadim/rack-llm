@@ -2,10 +2,9 @@
 
 ## Introduction
 
-Experiments 005-011 are pilot/smoke-test artifacts because hard comparisons use
-grammar witnesses and soft comparisons use an offline synthetic candidate pool.
-This experiment is the paper-grade entrypoint: it requires a real local model,
-the Racket provider path, and runtime Guidance/Outlines baselines.
+Experiment 012 is the paper-grade entrypoint for real local-model runs. It
+requires the native llama.cpp GGUF backend for our Racket path and runtime
+Guidance/Outlines baselines for hard comparisons.
 
 ## Methods
 
@@ -13,17 +12,13 @@ The runner is fail-closed. If any required runtime dependency is missing, it
 writes `MISSING_BACKEND.md` and does not create benchmark result CSV/JSONL
 files. Required runtime inputs:
 
-- `RACK_LLM_MODEL_PATH`: local model path.
-- `RACK_LLM_LLAMA_SIDECAR`: command for the JSON-lines sidecar.
+- `RACK_LLM_GGUF_MODEL`: local GGUF model file for the native llama.cpp backend.
+- `RACK_LLM_HF_MODEL`: optional Hugging Face model directory for Guidance and
+  Outlines baselines.
 - Python packages `guidance` and `outlines`.
 - Existing IFBench snapshot, hard subset, and audited soft rules.
 
-The sidecar must implement `load`, `tokenize`, `detokenize`, and `next_logits`.
-The Racket provider uses the model tokenizer through sidecar callbacks; this is
-required for real BPE/SentencePiece models.
-
-Soft `ours_*` main results must use `exact-full-vocab`. Top-k shortlist runs are
-debug/pilot artifacts only and are not paper-grade evidence.
+Soft `ours_*` main results must use native llama.cpp full-vocabulary logits.
 
 Guidance regex support is not disabled globally. The hard runtime runner excludes
 only unbounded/open Guidance regex rows from paired comparisons, for example
@@ -48,8 +43,8 @@ python3 experiments/012_real_model_benchmark/code/test_real_model_benchmark.py
 
 ## Results
 
-No synthetic or witness-based result is produced by this experiment. In an
-unconfigured environment, only `MISSING_BACKEND.md` is expected.
+No placeholder result is produced by this experiment. In an unconfigured
+environment, only `MISSING_BACKEND.md` is expected.
 
 ## Discussion
 

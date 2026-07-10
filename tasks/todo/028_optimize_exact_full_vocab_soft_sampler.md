@@ -2,31 +2,32 @@
 
 Status: todo
 
-## Current status 2026-07-08
+## Current status 2026-07-09
 
-Still current. The library now has `private/sampling.rkt`, but exact
-full-vocabulary soft decoding still checks `#:deadline-ms` only around the
-generation step, not inside the candidate loop. A synthetic 20k-vocab open-text
-run with `#:deadline-ms 1` returned `error-budget` only after finishing one
-full candidate pass and generating one token.
+Still current as an umbrella task for performance evidence and benchmark
+artifact decisions. `032_repair_exact_full_vocab_soft_sampler.md` is closed:
+exact full-vocabulary soft decoding remains atomic, bounded by `#:max-tokens`,
+and covered by real Qwen e2e tests.
 
-This task should be implemented through `032_repair_exact_full_vocab_soft_sampler.md`.
-Do not regenerate paper artifacts until that repair either makes exact mode
-practical or marks it fail-closed infeasible.
+Do not regenerate paper artifacts until this task records whether the current
+bounded exact mode is sufficient for paper claims or whether exact soft claims
+must be invalidated for the current runtime.
 
 ## Problem
 
 `ours_soft_*` больше не должен использовать `top-k-approx` как paper-grade
-режим. После переключения на `exact-full-vocab` маленький smoke
-`1 row x 1 sample x 3 tokens` завершается управляемым `error-budget`, но полный
-vocabulary pass слишком медленный: основная стоимость в `watcher-score` для
-каждого token candidate.
+режим. Full-vocab режим должен доказывать, что каждый generated token был
+выбран после полного прохода по словарю. Основная стоимость остается в
+candidate evaluation для open text watchers, поэтому прикладные тесты должны
+быть bounded через `#:max-tokens` и проверять реальное время на Qwen.
 
 ## DoD
 
 - Есть benchmark/trace, показывающий стоимость одного full-vocab sampling pass.
 - Реализован один из вариантов:
-  - exact full-vocab pass укладывается в заданный deadline на Qwen3.5-4B; или
-  - метод явно объявлен infeasible для текущего runtime с error-budget rows.
+  - bounded exact full-vocab задачи укладываются в проверяемый latency budget
+    на Qwen3.5-4B; или
+  - метод явно объявлен infeasible для текущего runtime и exact soft claims
+    invalidated.
 - Нельзя возвращаться к top-k как main result.
 - `racket_ours_soft_batch.rkt` main mode остается `exact-full-vocab`.

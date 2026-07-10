@@ -20,6 +20,7 @@ POOL_NAME = "012_soft_candidate_pool.jsonl"
 
 sys.path.insert(0, str(EXPERIMENT_DIR / "code"))
 from run_hard_runtime_benchmark import official_check, load_registry  # noqa: E402
+from strict_json import strict_json_dumps  # noqa: E402
 
 
 SPECIAL_TOKEN_RE = re.compile(r"<\|(?:im_start|im_end|endoftext)\|>")
@@ -34,7 +35,7 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+            handle.write(strict_json_dumps(row, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
 
 

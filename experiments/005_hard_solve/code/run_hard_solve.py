@@ -33,9 +33,7 @@ RAW_NAME = "005_hard_solve_raw.jsonl"
 SUMMARY_NAME = "005_hard_solve_summary.csv"
 WRONG_FAILURES_NAME = "005_hard_wrong_failures.jsonl"
 
-HARD_METHODS = ["ours_hard", "guidance_hard", "outlines_hard"]
-POSTHOC_METHODS = ["vanilla_nucleus_posthoc", "repair_loop_posthoc"]
-METHODS = HARD_METHODS + POSTHOC_METHODS
+METHODS = ["ours_hard", "guidance_hard", "outlines_hard"]
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -125,7 +123,7 @@ def build_raw(rows: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[s
     seed_count = int(config["seed_count"])
     for input_row in rows:
         key = str(input_row["key"])
-        for method in HARD_METHODS:
+        for method in METHODS:
             for seed in range(seed_count):
                 attempts = int(config["max_attempts"])
                 real = real_by_key.get((key, method, seed))
@@ -153,23 +151,6 @@ def build_raw(rows: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[s
                         attempts,
                         "missing real runtime row",
                         "real_runtime_012_missing",
-                    )
-                )
-        for method in POSTHOC_METHODS:
-            attempts = (
-                int(config["repair_loop_max_attempts"])
-                if method == "repair_loop_posthoc"
-                else int(config["max_attempts"])
-            )
-            for seed in range(seed_count):
-                raw.append(
-                    not_found_row(
-                        input_row,
-                        method,
-                        seed,
-                        attempts,
-                        "real posthoc model baseline not implemented for Experiment 005",
-                        "baseline_not_run",
                     )
                 )
     return raw
@@ -228,7 +209,7 @@ def write_outputs(raw_rows: list[dict[str, Any]], summary_rows: list[dict[str, A
         hard_wrong = [
             row
             for row in raw_rows
-            if row["method"] in HARD_METHODS and row["outcome"] == "FOUND_WRONG"
+            if row["method"] in METHODS and row["outcome"] == "FOUND_WRONG"
         ]
         wrong_path = output_dir / WRONG_FAILURES_NAME
         if hard_wrong:

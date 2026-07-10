@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Paper-grade real-model benchmark preflight and runner.
+"""Paper-grade real-model benchmark package preflight.
 
-This runner intentionally refuses to create benchmark metrics without a real
-local model backend and runtime Guidance/Outlines dependencies.
+Experiment 012 is the reproducibility/package gate. The hard and soft benchmark
+rows are produced by the earlier real-runtime experiments; this script only
+checks that the native backend and required inputs are present.
 """
 
 from __future__ import annotations
@@ -27,10 +28,11 @@ ROOT_DATA_DIR = REPO_ROOT / "data"
 REQUIRED_DATA = [
     ROOT_DATA_DIR / "ifbench_snapshot.jsonl",
     ROOT_DATA_DIR / "hard_ifbench_subset.jsonl",
-    ROOT_DATA_DIR / "soft_ifbench_rules_audited.jsonl",
+    ROOT_DATA_DIR / "soft_ifbench_rules.jsonl",
 ]
 REQUIRED_PYTHON_MODULES = ["guidance", "numpy", "outlines", "torch", "transformers"]
 MISSING_NAME = "MISSING_BACKEND.md"
+DEFAULT_GGUF_MODEL = "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf"
 
 
 @dataclass(frozen=True)
@@ -46,20 +48,20 @@ def module_available(name: str) -> bool:
 
 def preflight() -> Preflight:
     missing: list[str] = []
-    model_path = os.environ.get("RACK_LLM_MODEL_PATH")
-    sidecar = os.environ.get("RACK_LLM_LLAMA_SIDECAR")
+    gguf_model_path = os.environ.get("RACK_LLM_GGUF_MODEL", DEFAULT_GGUF_MODEL)
+    hf_model_path = os.environ.get("RACK_LLM_HF_MODEL")
     metadata: dict[str, Any] = {
-        "model_path": model_path,
-        "sidecar_command": sidecar,
+        "gguf_model_path": gguf_model_path,
+        "hf_model_path": hf_model_path,
         "python": sys.version,
         "repo_root": str(REPO_ROOT),
     }
-    if not model_path:
-        missing.append("RACK_LLM_MODEL_PATH is not set")
-    elif not Path(model_path).exists():
-        missing.append(f"RACK_LLM_MODEL_PATH does not exist: {model_path}")
-    if not sidecar:
-        missing.append("RACK_LLM_LLAMA_SIDECAR is not set")
+    if not os.environ.get("RACK_LLM_GGUF_MODEL"):
+        missing.append("RACK_LLM_GGUF_MODEL is not set")
+    elif not Path(gguf_model_path).exists():
+        missing.append(f"RACK_LLM_GGUF_MODEL does not exist: {gguf_model_path}")
+    if hf_model_path and not Path(hf_model_path).exists():
+        missing.append(f"RACK_LLM_HF_MODEL does not exist: {hf_model_path}")
     for module in REQUIRED_PYTHON_MODULES:
         if not module_available(module):
             missing.append(f"Python module is not installed: {module}")
@@ -88,8 +90,8 @@ def write_missing(preflight_result: Preflight, output_dirs: list[Path]) -> None:
             "",
             "## Required Environment",
             "",
-            "- `RACK_LLM_MODEL_PATH`: local model file or directory.",
-            "- `RACK_LLM_LLAMA_SIDECAR`: JSON-lines sidecar command supporting `load`, `tokenize`, `detokenize`, `next_logits`.",
+            "- `RACK_LLM_GGUF_MODEL`: local GGUF model file for the native llama.cpp provider.",
+            "- `RACK_LLM_HF_MODEL`: optional local Hugging Face model directory for Guidance/Outlines baselines.",
             "- Python packages from `experiments/012_real_model_benchmark/requirements.txt`.",
             "",
             "## Metadata",
@@ -123,11 +125,8 @@ def remove_stale_outputs(output_dirs: list[Path]) -> None:
 
 
 def run_real_benchmark(_preflight_result: Preflight) -> int:
-    raise RuntimeError(
-        "real runtime execution is not enabled until a concrete sidecar/model "
-        "environment is supplied; preflight passed but no backend-specific "
-        "adapter was selected"
-    )
+    print(json.dumps({"status": "READY", **asdict(_preflight_result)}, sort_keys=True))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

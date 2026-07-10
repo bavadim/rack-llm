@@ -1,6 +1,7 @@
 #lang racket/base
 
 (require racket/list
+         racket/sandbox
          racket/string
          rackunit
          "../main.rkt"
@@ -60,6 +61,7 @@
 
 (define outlines-small-choice-threshold-ms 2300.0)
 (define outlines-long-literal-threshold-ms 2480.0)
+(define outlines-output-template-threshold-ms 60000.0)
 
 (define hard-perf-warmup-case
   (hard-perf-case
@@ -232,6 +234,40 @@
                          #:max-tokens 8))
         (check-found result)
         (check-regexp-match #px"^ INC-[0-9]{3}$" text))
+
+      (test-case "hard output-template broad regex stays within the Outlines runtime budget"
+        (define max-tokens 128)
+        (define prompt
+          "Describe astronomical suffering. Copy this exact response template and end with ~END: My Answer: [answer] My Conclusion: [conclusion] Future Outlook: [outlook]~END")
+        (define pattern
+          "My Answer: [^~]{1,512} My Conclusion: [^~]{1,512} Future Outlook: [^~]{1,512}~END")
+        (define started (current-inexact-milliseconds))
+        (define result
+          (call-with-limits
+           70
+           8192
+           (lambda ()
+             (generate backend
+                       prompt
+                       (rx pattern)
+                       #:temperature 0.7
+                       #:seed 0
+                       #:max-tokens max-tokens
+                       #:candidate-policy 'full-vocab))))
+        (define elapsed-ms (- (current-inexact-milliseconds) started))
+        (check-found result)
+        (check-regexp-match
+         #px"^My Answer: [^~]{1,512} My Conclusion: [^~]{1,512} Future Outlook: [^~]{1,512}~END$"
+         (generation-result-text result))
+        (check-true
+         (< (generation-result-generated-tokens result) max-tokens)
+         (format "hard output-template regex reached the safety token budget: ~a"
+                 max-tokens))
+        (check-true
+         (<= elapsed-ms outlines-output-template-threshold-ms)
+         (format "hard output-template regex took ~a ms; Outlines runtime budget is ~a ms"
+                 elapsed-ms
+                 outlines-output-template-threshold-ms)))
 
       (test-case "hard prefix-overlap choice does not stop at the shorter accepted prefix"
         (define short " yes")

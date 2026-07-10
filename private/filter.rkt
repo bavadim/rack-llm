@@ -36,10 +36,12 @@
          filter-value
          filter-token-ids
          filter-trace
+         filter-fast-token-validity
          filter-fill-token-adjustments!)
 
 (define-type TokenId Natural)
 (define-type TokenIds (Listof TokenId))
+(define-type TokenValidity (-> TokenId Boolean))
 (define-type Score Real)
 (define neg-inf : Real -inf.0)
 
@@ -71,7 +73,7 @@
 (define-type Watcher (U rank-watcher ban-watcher weighted-watcher))
 
 (struct lit-state ([pos : Natural] [len : Natural]) #:transparent)
-(struct rx-state ([state : RegexState] [accepting? : Boolean] [terminal? : Boolean]) #:transparent)
+(struct rx-state ([state : RegexState] [accepting? : Boolean]) #:transparent)
 (struct pure-state ([value : Any]) #:transparent)
 (struct (A) choice-state ([children : (Listof A)]) #:transparent)
 (struct (A) seq-state
@@ -143,8 +145,7 @@
      [(%rx-filter? f)
       (define initial-rx-state (regex-initial (%rx-filter-machine f)))
       (rx-state initial-rx-state
-                (regex-accepting? (%rx-filter-machine f) initial-rx-state)
-                (regex-terminal? (%rx-filter-machine f) initial-rx-state))]
+                (regex-accepting? (%rx-filter-machine f) initial-rx-state))]
      [(%pure-filter? f) (pure-state (%pure-filter-value f))]
      [(%choice-filter? f)
       (choice-state (map filter-initial (%choice-filter-options f)))]
@@ -199,8 +200,7 @@
      (define next (regex-step (%rx-filter-machine f) (rx-state-state s) id))
      (if next
          (rx-state next
-                   (regex-accepting? (%rx-filter-machine f) next)
-                   (regex-terminal? (%rx-filter-machine f) next))
+                   (regex-accepting? (%rx-filter-machine f) next))
          (dead-state (list id) (list 'rx-dead)))]
     [(%pure-filter? f) (dead-state (list id) (list 'pure-terminal))]
     [(%choice-filter? f)
@@ -411,7 +411,9 @@
   (cond
     [(filter-dead? st) #t]
     [(%lit-filter? f) (filter-accepting? st)]
-    [(%rx-filter? f) (rx-state-terminal? (assert-rx-state st))]
+    [(%rx-filter? f)
+     (regex-terminal? (%rx-filter-machine f)
+                      (rx-state-state (assert-rx-state st)))]
     [(%pure-filter? f) #t]
     [(%choice-filter? f)
      (define s (assert-choice-state st))
@@ -523,6 +525,69 @@
     [(dead-state? st) (dead-state-trace st)]
     [(text-state? st) (append-map watch-state-trace (text-state-watch-states st))]
     [else '()]))
+
+(: false-token-validity TokenValidity)
+(define (false-token-validity _id) #f)
+
+(: filter-fast-token-validity (-> Filter FilterState (Option TokenValidity)))
+(define (filter-fast-token-validity f st)
+  (cond
+    [(filter-dead? st) false-token-validity]
+    [(%lit-filter? f)
+     (define s (assert-lit-state st))
+     (if (< (lit-state-pos s) (length (%lit-filter-ids f)))
+         (let ([expected (list-ref (%lit-filter-ids f) (lit-state-pos s))])
+           (lambda ([id : TokenId]) (= id expected)))
+         false-token-validity)]
+    [(%rx-filter? f)
+     (define machine (%rx-filter-machine f))
+     (define regex-state (rx-state-state (assert-rx-state st)))
+     (lambda ([id : TokenId])
+       (regex-token-valid? machine regex-state id))]
+    [(%pure-filter? f) false-token-validity]
+    [(%choice-filter? f)
+     (define s (assert-choice-state st))
+     (let loop : (Option TokenValidity)
+       ([children : (Listof Filter) (%choice-filter-options f)]
+        [child-states : (Listof FilterState) (choice-state-children s)]
+        [validities : (Listof TokenValidity) '()])
+       (cond
+         [(or (null? children) (null? child-states))
+          (if (null? validities)
+              false-token-validity
+              (lambda ([id : TokenId])
+                (for/or : Boolean ([valid? (in-list validities)])
+                  (valid? id))))]
+         [(filter-dead? (car child-states))
+          (loop (cdr children) (cdr child-states) validities)]
+         [else
+          (define child-validity
+            (filter-fast-token-validity (car children) (car child-states)))
+          (and child-validity
+               (loop (cdr children)
+                     (cdr child-states)
+                     (cons child-validity validities)))]))]
+    [(%seq-filter? f)
+     (define s (assert-seq-state st))
+     (if (>= (seq-state-index s) (length (%seq-filter-children f)))
+         false-token-validity
+         (filter-fast-token-validity
+          (list-ref (%seq-filter-children f) (seq-state-index s))
+          (seq-state-child s)))]
+    [(%repeat-filter? f)
+     (define s (assert-repeat-state st))
+     (if (>= (repeat-state-count s) (%repeat-filter-max-count f))
+         false-token-validity
+         (filter-fast-token-validity (%repeat-filter-item f)
+                                     (repeat-state-child s)))]
+    [(%bind-filter? f)
+     (define s (assert-bind-state st))
+     (define active-filter
+       (if (eq? (bind-state-phase s) 'first)
+           (%bind-filter-first f)
+           (assert (bind-state-cont-filter s) values)))
+     (filter-fast-token-validity active-filter (bind-state-child s))]
+    [else #f]))
 
 (: filter-fill-token-adjustments!
    (-> Filter FilterState (Vectorof Real) Real Real Boolean))

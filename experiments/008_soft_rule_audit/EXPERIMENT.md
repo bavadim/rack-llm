@@ -3,17 +3,17 @@
 ## Introduction
 
 Soft rules should be weak but nontrivial. This experiment audits the clean and
-noisy watcher sets from Experiment 007 against an offline candidate pool and the
-pinned IFBench official verifier.
+noisy watcher sets from Experiment 007 against a real native-Qwen candidate pool
+and the pinned IFBench official verifier.
 
 ## Methods
 
-No model backend or candidate cache is available in this repository, so the
-candidate pool is a deterministic synthetic offline pool with 16 candidates per
-soft-supported row. The pool metadata records
-`synthetic_offline_no_model_or_cache`. The audit runner imports the official
-IFBench verifier from the pinned vendored runtime used by Experiment 004; the
-rule builder from Experiment 007 still does not import or call verifier code.
+The runner consumes `data/012_soft_candidate_pool.jsonl`, which is produced by
+the native llama.cpp Qwen path in Experiment 012. If that real pool is absent or
+comes from an old backend, the audit fails instead of creating placeholder
+candidates. The audit runner imports the official IFBench verifier from the
+pinned vendored runtime used by Experiment 004; the rule builder from Experiment
+007 still does not import or call verifier code.
 
 For each watcher, the audit computes coverage, precision, lift, and nearest
 Jaccard overlap. Clean watchers are accepted only when they are nontrivial,

@@ -21,11 +21,14 @@ RAW_PATH = RESULTS_DIR / "006_hard_convergence_raw.jsonl"
 TIME_CSV = RESULTS_DIR / "006_hard_solve_by_time.csv"
 TOKENS_CSV = RESULTS_DIR / "006_hard_solve_by_tokens.csv"
 ATTEMPTS_CSV = RESULTS_DIR / "006_hard_solve_by_attempts.csv"
+SOURCE_RAW = REPO_ROOT / "data" / "005_hard_solve_raw.jsonl"
 
 
 class HardConvergenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if not SOURCE_RAW.exists():
+            raise unittest.SkipTest(f"requires Experiment 005 artifact: {SOURCE_RAW}")
         if not RAW_PATH.exists() or not TIME_CSV.exists():
             subprocess.run(
                 [sys.executable, str(RUNNER), "--experiment-only"],
@@ -54,7 +57,7 @@ class HardConvergenceTests(unittest.TestCase):
             self.assertTrue(required.issubset(row))
 
     def test_curves_cover_required_methods_and_budgets(self) -> None:
-        methods = {"ours_hard", "guidance_hard", "outlines_hard", "vanilla_nucleus_posthoc"}
+        methods = {"ours_hard", "guidance_hard", "outlines_hard"}
         self.assertEqual({row["method"] for row in self.time_rows}, methods)
         self.assertEqual({float(row["budget"]) for row in self.time_rows}, {500, 1000, 2000, 5000, 10000})
         self.assertEqual({float(row["budget"]) for row in self.token_rows}, {64, 128, 256, 512})

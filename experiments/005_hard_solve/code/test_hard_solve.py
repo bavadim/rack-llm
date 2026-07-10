@@ -18,11 +18,14 @@ RUNNER = EXPERIMENT_DIR / "code" / "run_hard_solve.py"
 RESULTS_DIR = EXPERIMENT_DIR / "results"
 RAW_PATH = RESULTS_DIR / "005_hard_solve_raw.jsonl"
 SUMMARY_PATH = RESULTS_DIR / "005_hard_solve_summary.csv"
+SOURCE_RAW = REPO_ROOT / "data" / "012_hard_real_raw.jsonl"
 
 
 class HardSolveTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if not SOURCE_RAW.exists():
+            raise unittest.SkipTest(f"requires native hard runtime artifact: {SOURCE_RAW}")
         if not RAW_PATH.exists() or not SUMMARY_PATH.exists():
             subprocess.run(
                 [sys.executable, str(RUNNER), "--experiment-only"],
@@ -44,13 +47,7 @@ class HardSolveTests(unittest.TestCase):
         methods = {row["method"] for row in self.raw_rows}
         self.assertEqual(
             methods,
-            {
-                "ours_hard",
-                "guidance_hard",
-                "outlines_hard",
-                "vanilla_nucleus_posthoc",
-                "repair_loop_posthoc",
-            },
+            {"ours_hard", "guidance_hard", "outlines_hard"},
         )
         expected_pairs = {
             (row["example_id"], row["seed"])
@@ -79,7 +76,7 @@ class HardSolveTests(unittest.TestCase):
         by_method = {row["method"]: row for row in self.summary_rows}
         self.assertEqual(float(by_method["ours_hard"]["WrongRate"]), 0.0)
         self.assertGreater(float(by_method["ours_hard"]["SolveRate"]), 0.0)
-        self.assertEqual(float(by_method["vanilla_nucleus_posthoc"]["SolveRate"]), 0.0)
+        self.assertNotIn("vanilla_nucleus_posthoc", by_method)
 
 
 if __name__ == "__main__":

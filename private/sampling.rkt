@@ -8,6 +8,7 @@
          make-sampler sampler-select-token log-softmax sample-id)
 
 (define-type TokenId Natural)
+(define-type TokenIds (Listof TokenId))
 (define-type LogitsScratch (Vectorof Real))
 (define-type CandidatePolicy (U 'full-vocab 'allowed-only (List 'top-k Positive-Integer)))
 
@@ -46,8 +47,17 @@
                                           beta lambda-weight))
      (select-token/full-vocab-fast f state logits token-adjustments temperature rng)]
     [else
-     (select-token/generic f state logits candidate-policy
-                           last-score last-potential beta lambda-weight temperature rng)]))
+     (define hard-validity
+       (if (eq? candidate-policy 'full-vocab)
+           (filter-fast-token-validity f state)
+           #f))
+     (if hard-validity
+         (let ([allowed (filter-allowed-ids f state)])
+           (if allowed
+               (select-token/full-vocab-allowed-fast f state logits allowed temperature rng)
+               (select-token/full-vocab-validity-fast f state logits hard-validity temperature rng)))
+         (select-token/generic f state logits candidate-policy
+                               last-score last-potential beta lambda-weight temperature rng))]))
 
 (: select-token/generic
    (-> Filter FilterState LogitsView CandidatePolicy Real Real Real Real Real
@@ -177,6 +187,75 @@
   (if (and best-state (filter-dead? best-state))
       (token-selection #f -inf.0 0.0 (add1 dead) #f vocab-size)
       (token-selection best-id best-lm best-adjustment dead best-state vocab-size)))
+
+(: select-token/full-vocab-allowed-fast
+   (-> Filter FilterState LogitsView TokenIds Real Pseudo-Random-Generator token-selection))
+(define (select-token/full-vocab-allowed-fast f state logits allowed temperature rng)
+  (define vocab-size (logits-length logits))
+  (define allowed-set (token-id-set allowed))
+  (define-values (best-id best-score best-raw dead log-z)
+    (parameterize ([current-pseudo-random-generator rng])
+      (for/fold ([best-id : (Option TokenId) #f]
+                 [best-score : Real -inf.0]
+                 [best-raw : Real -inf.0]
+                 [dead : Natural 0]
+                 [log-z : Real -inf.0])
+                ([id : Natural (in-range vocab-size)])
+        (define raw (logits-ref logits id))
+        (define next-log-z (log-z-add log-z raw))
+        (cond
+          [(or (log-score-dead? raw)
+               (not (hash-has-key? allowed-set id)))
+           (values best-id best-score best-raw (add1 dead) next-log-z)]
+          [else
+           (define sample-score (+ (/ raw temperature) (gumbel/current)))
+           (if (> sample-score best-score)
+               (values id sample-score raw dead next-log-z)
+               (values best-id best-score best-raw dead next-log-z))]))))
+  (define best-lm (logit-logprob best-raw log-z))
+  (define best-state
+    (and best-id
+         (filter-step f state (assert best-id exact-nonnegative-integer?))))
+  (if (and best-state (filter-dead? best-state))
+      (token-selection #f -inf.0 0.0 (add1 dead) #f vocab-size)
+      (token-selection best-id best-lm 0.0 dead best-state vocab-size)))
+
+(: token-id-set (-> TokenIds (HashTable TokenId Boolean)))
+(define (token-id-set ids)
+  (for/hash : (HashTable TokenId Boolean) ([id (in-list ids)])
+    (values id #t)))
+
+(: select-token/full-vocab-validity-fast
+   (-> Filter FilterState LogitsView (-> TokenId Boolean) Real
+       Pseudo-Random-Generator token-selection))
+(define (select-token/full-vocab-validity-fast f state logits valid-token? temperature rng)
+  (define vocab-size (logits-length logits))
+  (define-values (best-id best-score best-raw dead log-z)
+    (parameterize ([current-pseudo-random-generator rng])
+      (for/fold ([best-id : (Option TokenId) #f]
+                 [best-score : Real -inf.0]
+                 [best-raw : Real -inf.0]
+                 [dead : Natural 0]
+                 [log-z : Real -inf.0])
+                ([id : Natural (in-range vocab-size)])
+        (define raw (logits-ref logits id))
+        (define next-log-z (log-z-add log-z raw))
+        (cond
+          [(or (log-score-dead? raw)
+               (not (valid-token? id)))
+           (values best-id best-score best-raw (add1 dead) next-log-z)]
+          [else
+           (define sample-score (+ (/ raw temperature) (gumbel/current)))
+           (if (> sample-score best-score)
+               (values id sample-score raw dead next-log-z)
+               (values best-id best-score best-raw dead next-log-z))]))))
+  (define best-lm (logit-logprob best-raw log-z))
+  (define best-state
+    (and best-id
+         (filter-step f state (assert best-id exact-nonnegative-integer?))))
+  (if (and best-state (filter-dead? best-state))
+      (token-selection #f -inf.0 0.0 (add1 dead) #f vocab-size)
+      (token-selection best-id best-lm 0.0 dead best-state vocab-size)))
 
 (: top-k-ids (-> LogitsView Positive-Integer (Listof TokenId)))
 (define (top-k-ids logits k)

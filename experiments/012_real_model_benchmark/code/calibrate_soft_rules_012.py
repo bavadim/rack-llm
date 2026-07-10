@@ -19,6 +19,8 @@ try:
 except ModuleNotFoundError:
     regex_module = re
 
+from strict_json import strict_json_dumps
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPERIMENT_DIR = Path(__file__).resolve().parents[1]
@@ -126,7 +128,7 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True, allow_nan=True))
+            handle.write(strict_json_dumps(row, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
 
 
@@ -539,7 +541,7 @@ def write_outputs(
     write_csv(RESULTS_CORRELATIONS, correlation_rows, CORRELATION_FIELDS)
     write_jsonl(RESULTS_CALIBRATED, calibrated_rows)
     REPORT_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_OUTPUT.write_text(json.dumps(report, indent=2, sort_keys=True, allow_nan=True), encoding="utf-8")
+    REPORT_OUTPUT.write_text(strict_json_dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     if not experiment_only:
         write_jsonl(ROOT_FEATURES, feature_rows)
         write_csv(ROOT_CALIBRATION, calibration_rows, CALIBRATION_FIELDS)

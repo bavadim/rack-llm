@@ -6,15 +6,14 @@
          racket/match
          racket/string
          rack-llm
-         rack-llm/llama-cpp)
+         rack-llm/model-llama-cpp)
 
 (define rules-path (make-parameter "data/012_soft_ifbench_rules_audited.jsonl"))
 (define output-path
   (make-parameter "experiments/012_real_model_benchmark/results/019_ours_soft_smoke_raw.jsonl"))
-(define model-path (make-parameter "/mnt/storage/models/qwen/Qwen3.5-4B"))
-(define sidecar-command
-  (make-parameter
-   ".venv-realbench/bin/python experiments/012_real_model_benchmark/code/hf_logits_sidecar.py --model-path /mnt/storage/models/qwen/Qwen3.5-4B"))
+(define default-gguf-model-path
+  "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf")
+(define model-path (make-parameter (or (getenv "RACK_LLM_GGUF_MODEL") default-gguf-model-path)))
 (define limit-rows (make-parameter 5))
 (define max-tokens (make-parameter 64))
 (define beta (make-parameter 1.0))
@@ -26,8 +25,7 @@
  #:once-each
  [("--rules") path "Audited soft rules JSONL" (rules-path path)]
  [("--output") path "Output JSONL" (output-path path)]
- [("--model-path") path "Hugging Face model directory" (model-path path)]
- [("--sidecar-command") command "Command used by make-llama-cpp-provider" (sidecar-command command)]
+ [("--model-path") path "GGUF model file" (model-path path)]
  [("--limit-rows") n "Number of audited rows for smoke" (limit-rows (string->number n))]
  [("--max-tokens") n "Generation token budget" (max-tokens (string->number n))]
  [("--beta") n "Soft guide beta" (beta (string->number n))]
@@ -48,8 +46,17 @@
     (lambda (in)
       (for/list ([line (in-lines in)]
                  #:when (not (string=? "" (string-trim line))))
-        (string->jsexpr
-         (string-replace line "-Infinity" "\"-Infinity\""))))))
+        (string->jsexpr line)))))
+
+(define (json-number-field value field-name)
+  (cond
+    [(number? value) value]
+    [(equal? value "-Infinity") -inf.0]
+    [(equal? value "Infinity") +inf.0]
+    [else (error 'json-number-field
+                 "expected numeric JSON field ~a, got ~s"
+                 field-name
+                 value)]))
 
 (define (python-regex->pregexp-pattern pattern)
   (define normalized
@@ -63,12 +70,12 @@
 
 (define (rule->watcher rule)
   (define kind (hget rule 'kind))
-  (define weight (hget rule 'weight 0.0))
+  (define weight (json-number-field (hget rule 'weight 0.0) 'weight))
   (define pattern-type (hget rule 'pattern_type))
   (define pattern (hget rule 'pattern))
   (define expr
     (cond
-      [(equal? pattern-type "regex") (rx (pregexp (python-regex->pregexp-pattern pattern)))]
+      [(equal? pattern-type "regex") (rx (python-regex->pregexp-pattern pattern))]
       [(equal? pattern-type "literal") pattern]
       [else (error 'rule->watcher "unsupported pattern_type: ~a" pattern-type)]))
   (cond
@@ -82,10 +89,7 @@
 
 (define (make-guide row noise)
   (define watchers (map rule->watcher (row-rules row noise)))
-  (keyword-apply text
-                 '(#:max-tokens)
-                 (list (* 16 (max-tokens)))
-                 watchers))
+  (text (* 16 (max-tokens)) watchers))
 
 (define (json-number value)
   (if (and (real? value) (rational? value))
@@ -109,13 +113,15 @@
         'failure_reason (jsexpr-or-string (generation-result-reason result))
         'text (generation-result-text result)
         'lm_logprob (json-number (generation-result-lm-logprob result))
-        'guide_score (json-number (generation-result-guide-score result))
+        'guide_score (json-number (generation-result-filter-score result))
         'total_score (json-number (generation-result-total-score result))
         'latency_ms (generation-result-latency-ms result)
         'generated_tokens (generation-result-generated-tokens result)
         'trace (format "~s" (generation-result-trace result))
         'metrics (format "~s" (generation-result-metrics result))
-        'generation_backend "racket_generate_hf_sidecar"
+        'provider_mode "exact-full-vocab"
+        'approximation "none"
+        'generation_backend "racket_generate_native_llama_cpp_full_vocab"
         'uses_candidate_pool #f
         'uses_official_verifier #f))
 
@@ -134,7 +140,9 @@
         'generated_tokens 0
         'trace ""
         'metrics ""
-        'generation_backend "racket_generate_hf_sidecar"
+        'provider_mode "exact-full-vocab"
+        'approximation "none"
+        'generation_backend "racket_generate_native_llama_cpp_full_vocab"
         'uses_candidate_pool #f
         'uses_official_verifier #f))
 
@@ -165,13 +173,12 @@
         (newline out)))
     #:exists 'replace))
 
-(define p
-  (make-llama-cpp-provider
+(define model
+  (llama-cpp-model
    #:model-path (model-path)
-   #:command (sidecar-command)
    #:context-size 512
    #:threads 1
-   #:seed 0))
+   #:gpu-layers -1))
 
 (define all-input-rows (read-jsonl (rules-path)))
 (define input-rows (take all-input-rows (min (limit-rows) (length all-input-rows))))
@@ -185,7 +192,7 @@
             (attempt-timeout-seconds)
             (lambda ()
               (define result
-                (generate p
+                (generate model
                           (hget row 'prompt)
                           (make-guide row noise)
                           #:beta (beta)
@@ -197,6 +204,7 @@
       [(list 'error reason) (failure->payload row noise seed reason)])))
 
 (write-jsonl (output-path) outputs)
+(model-close! model)
 (displayln (jsexpr->string (hash 'rows (length outputs)
                                   'input_rows (length input-rows)
                                   'noise_levels noise-levels)))

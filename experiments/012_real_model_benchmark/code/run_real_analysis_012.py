@@ -253,7 +253,7 @@ def claims_md(hard_table: list[dict[str, Any]], soft_table: list[dict[str, Any]]
     hard_status = "supported" if all(row["claim_status"] == "supported" for row in tests if row["domain"] == "hard") else "inconclusive"
     soft_status = "supported" if all(row["claim_status"] == "supported" for row in tests if row["domain"] == "soft") else "inconclusive"
     soft_note = (
-        "- soft note: `ours_*` rows are real Racket generation-time runs. Main paper-grade runs require `exact-full-vocab`; top-k shortlist artifacts are debug/pilot only."
+        "- soft note: `ours_*` rows are real Racket native llama.cpp generation-time runs over the full vocabulary."
         if not missing
         else "- soft note: candidate-pool baselines are reported, but `ours_*` soft claims remain inconclusive until exact-full-vocab Racket generation-time runs complete."
     )
