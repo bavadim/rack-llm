@@ -22,6 +22,7 @@ RACKET_GENERATOR = EXPERIMENT_DIR / "code" / "racket_soft_candidate_pool.rkt"
 
 sys.path.insert(0, str(EXPERIMENT_DIR / "code"))
 from run_hard_runtime_benchmark import official_check, load_registry  # noqa: E402
+from racket_env import racket_env  # noqa: E402
 from strict_json import strict_json_dumps  # noqa: E402
 
 
@@ -90,7 +91,7 @@ def run_racket_generator(args: argparse.Namespace, raw_output: Path, input_path:
     ]
     if args.limit_rows is not None:
         cmd.extend(["--limit-rows", str(args.limit_rows)])
-    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+    subprocess.run(cmd, cwd=REPO_ROOT, env=racket_env(), check=True)
 
 
 def main(argv: list[str] | None = None) -> int:

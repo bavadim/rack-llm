@@ -41,6 +41,7 @@ DEFAULT_PER_SAMPLE_TIMEOUT_SEC = 60.0
 
 sys.path.insert(0, str(HARD_GUIDES_DIR))
 from hard_guides import GuideSpec, Unsupported, build_guidance_hard_grammar, build_ours_hard_guide, build_outlines_hard_grammar, check_spec  # noqa: E402
+from racket_env import racket_env  # noqa: E402
 
 
 class SampleTimeoutError(TimeoutError):
@@ -169,6 +170,7 @@ def run_ours(
     seeds: list[int],
     model_path: Path,
     scratch_dir: Path,
+    per_sample_timeout_sec: float,
 ) -> list[dict[str, Any]]:
     requests = []
     for row in rows:
@@ -183,6 +185,7 @@ def run_ours(
                     "choices": spec.choices,
                     "regex": spec.regex,
                     "max_tokens": 512,
+                    "deadline_ms": int(per_sample_timeout_sec * 1000) if per_sample_timeout_sec > 0 else None,
                     "seed": seed,
                 }
             )
@@ -202,6 +205,7 @@ def run_ours(
             str(output_path),
         ],
         cwd=REPO_ROOT,
+        env=racket_env(),
         check=True,
     )
     rows_out = read_jsonl(output_path)
@@ -471,7 +475,7 @@ def run(
     raw = []
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".scratch-hard-", dir=RESULTS_DIR) as scratch:
-        raw.extend(run_ours(selected, seeds, gguf_model_path, Path(scratch)))
+        raw.extend(run_ours(selected, seeds, gguf_model_path, Path(scratch), per_sample_timeout_sec))
     raw.extend(run_guidance(selected, seeds, hf_model_path, per_sample_timeout_sec))
     raw.extend(run_outlines(selected, seeds, hf_model_path, per_sample_timeout_sec))
     return evaluate_official(raw, selected), failures

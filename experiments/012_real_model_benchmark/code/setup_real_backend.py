@@ -20,6 +20,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from racket_env import racket_env
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPERIMENT_DIR = Path(__file__).resolve().parents[1]
@@ -128,6 +130,7 @@ def smoke_model(model_path: Path) -> dict[str, Any]:
     completed = subprocess.run(
         ["racket", "-e", code, str(model_path)],
         cwd=REPO_ROOT,
+        env=racket_env(),
         text=True,
         capture_output=True,
         check=True,

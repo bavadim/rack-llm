@@ -25,6 +25,29 @@ RULES_PATH = ROOT_DATA_DIR / "soft_ifbench_rules.jsonl"
 FAILURES_PATH = ROOT_DATA_DIR / "soft_rule_coverage_failures.jsonl"
 REPORT_PATH = RESULTS_DIR / "016_soft_rule_coverage_report.json"
 GLOBAL_SEED = 1729
+COMMON_REPEAT_WORDS = [
+    "the",
+    "and",
+    "of",
+    "to",
+    "in",
+    "that",
+    "is",
+    "for",
+    "with",
+    "as",
+    "on",
+    "by",
+    "it",
+    "this",
+    "be",
+    "are",
+    "was",
+    "from",
+    "or",
+    "an",
+]
+LETTERS = "abcdefghijklmnopqrstuvwxyz"
 
 sys.path.insert(0, str(SOFT_RULES_DIR))
 from soft_rules import build_soft_rules, universal_rules  # noqa: E402
@@ -101,6 +124,36 @@ def word_boundary(text: str) -> str:
     return rf"(?i)\b{re.escape(text)}\b"
 
 
+def same_initial_pattern(*, min_tail: int = 0) -> str:
+    tail = "[a-z]" + ("*" if min_tail == 0 else "+")
+    alternatives = [rf"\b{letter}{tail}\W+{letter}{tail}\b" for letter in LETTERS]
+    return "(?i)(?:" + "|".join(alternatives) + ")"
+
+
+def repeated_common_word_pattern(words: list[str], min_count: int = 2) -> str:
+    if min_count < 2:
+        raise ValueError("min_count must be at least 2")
+    alternatives = [
+        rf"(?:\b{re.escape(word)}\b[\s\S]*){{{min_count},}}"
+        for word in words
+        if word
+    ]
+    return "(?i)(?:" + "|".join(alternatives) + ")"
+
+
+def prompt_anchor_repeat_pattern(row: dict[str, Any]) -> str | None:
+    anchors = [
+        value.lower()
+        for value in literal_values(row)
+        if re.fullmatch(r"[A-Za-z]{3,24}", value)
+    ]
+    anchors.extend(COMMON_REPEAT_WORDS[:8])
+    unique = list(dict.fromkeys(anchors))[:16]
+    if not unique:
+        return None
+    return repeated_common_word_pattern(unique, 2)
+
+
 def non_null(kwargs: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in kwargs.items() if value is not None}
 
@@ -172,31 +225,30 @@ def generic_clean_rules(row: dict[str, Any]) -> list[dict[str, Any]]:
 
 def universal_hygiene_rules() -> list[dict[str, Any]]:
     return [
-        rule("universal_no_think_block_012", "universal", 1.0, r"^(?![\s\S]*</?think>)[\s\S]{1,2000}$", "positive", "reward final answer without visible thinking block"),
-        rule("universal_no_chat_tokens_012", "universal", 0.75, r"^(?![\s\S]*<\|(?:im_start|im_end|endoftext)\|>)[\s\S]{1,2000}$", "positive", "reward final answer without chat/special tokens"),
-        rule("universal_no_analysis_boilerplate_012", "universal", 0.75, r"(?i)^(?![\s\S]*(thinking process|analyze the request|constraint\s+1|hidden reasoning))[\s\S]+$", "positive", "reward answer without analysis boilerplate"),
         rule("universal_concise_final_answer_012", "universal", 0.5, r"^[\s\S]{1,1200}$", "positive", "reward bounded final answer length"),
+        rule("universal_think_block_negative_012", "universal", -1.0, r"(?is)</?think>", "negative", "penalize visible thinking block"),
+        rule("universal_chat_tokens_negative_012", "universal", -0.75, r"(?i)<\|(?:im_start|im_end|endoftext)\|>", "negative", "penalize chat/special tokens"),
+        rule("universal_analysis_boilerplate_negative_012", "universal", -0.75, r"(?i)(thinking process|analyze the request|constraint\s+1|hidden reasoning)", "negative", "penalize analysis boilerplate"),
     ]
 
 
 def generic_surface_rules(row: dict[str, Any]) -> list[dict[str, Any]]:
     source = "surface:" + safe_id("_".join(row["instruction_id_list"]))
     return [
-        rule(f"{safe_id(source)}_final_medium_no_think_012", source, 0.75, r"(?is)^(?!.*</?think>)(?=.{20,1200}$)[\s\S]+$", "positive", "reward medium-length final answer without thinking block"),
-        rule(f"{safe_id(source)}_final_medium_no_analysis_012", source, 0.75, r"(?is)^(?!.*(?:thinking process|analyze the request|hidden reasoning))(?=.{20,1200}$)[\s\S]+$", "positive", "reward medium-length final answer without analysis boilerplate"),
-        rule(f"{safe_id(source)}_short_final_no_special_012", source, 0.75, r"(?is)^(?!.*(?:<\\|im_|<\\|endoftext\\|>|</?think>))(?=.{1,600}$)[\s\S]+$", "positive", "reward short final answer without special tokens"),
-        rule(f"{safe_id(source)}_paragraph_final_012", source, 0.5, r"(?s)^(?!.*</?think>)(?=.{80,900}$)(?=.*\b[A-Za-z]{4,}\b)[\s\S]+$", "positive", "reward substantive paragraph-like final answer"),
+        rule(f"{safe_id(source)}_final_medium_length_012", source, 0.75, r"(?s)[\s\S]{20,1200}", "positive", "reward medium-length final answer"),
+        rule(f"{safe_id(source)}_short_final_length_012", source, 0.75, r"(?s)[\s\S]{1,600}", "positive", "reward short final answer"),
+        rule(f"{safe_id(source)}_paragraph_final_012", source, 0.5, r"(?s)\b[A-Za-z]{4,}\b[\s\S]{80,900}|(?s)[\s\S]{80,900}\b[A-Za-z]{4,}\b", "positive", "reward substantive paragraph-like final answer"),
         rule(f"{safe_id(source)}_sentence_pair_012", source, 0.5, r"(?s)[.!?]\s+[A-Z][\s\S]{20,}[.!?]", "positive", "reward multiple sentence surface"),
         rule(f"{safe_id(source)}_numbered_or_bulleted_line_012", source, 0.5, r"(?m)^\s*(?:[-*+]|\d+[.)])\s+\S+", "positive", "reward explicit list line"),
         rule(f"{safe_id(source)}_two_visible_lines_012", source, 0.5, r"(?m)^\S[^\n]{0,120}\n\S", "positive", "reward two compact visible lines"),
         rule(f"{safe_id(source)}_three_line_structure_012", source, 0.5, r"(?m)^(?:.{1,120}\n){2,}.{1,120}$", "positive", "reward three-line structure"),
-        rule(f"{safe_id(source)}_alpha_final_short_012", source, 0.5, r"(?is)^(?!.*</?think>)(?=.{1,400}$)(?=.*[A-Za-z]{3})[\s\S]+$", "positive", "reward short alphabetic final answer"),
-        rule(f"{safe_id(source)}_alpha_final_long_012", source, 0.5, r"(?is)^(?!.*</?think>)(?=.{400,1800}$)(?=.*[A-Za-z]{3})[\s\S]+$", "positive", "reward long alphabetic final answer"),
+        rule(f"{safe_id(source)}_alpha_final_short_012", source, 0.5, r"(?is)[A-Za-z]{3}[\s\S]{1,400}|(?is)[\s\S]{1,400}[A-Za-z]{3}", "positive", "reward short alphabetic final answer"),
+        rule(f"{safe_id(source)}_alpha_final_long_012", source, 0.5, r"(?is)[A-Za-z]{3}[\s\S]{400,1800}|(?is)[\s\S]{400,1800}[A-Za-z]{3}", "positive", "reward long alphabetic final answer"),
         rule(f"{safe_id(source)}_has_terminal_punctuation_012", source, 0.5, r"(?s)[.!?]\s*$", "positive", "reward terminal sentence punctuation"),
         rule(f"{safe_id(source)}_has_digit_surface_012", source, 0.5, r"\b\d+\b", "positive", "reward digit surface"),
         rule(f"{safe_id(source)}_has_quote_surface_012", source, 0.5, r"[\"']", "positive", "reward quote surface"),
         rule(f"{safe_id(source)}_has_colon_semicolon_surface_012", source, 0.5, r"[:;]", "positive", "reward colon or semicolon surface"),
-        rule(f"{safe_id(source)}_starts_with_content_012", source, 0.5, r"(?is)^\s*(?!</?think>|<\|)[A-Za-z0-9\"'(*<\-]", "positive", "reward direct answer start"),
+        rule(f"{safe_id(source)}_starts_with_content_012", source, 0.5, r"(?is)^\s*[A-Za-z0-9\"'(*\-]", "positive", "reward direct answer start"),
         rule(f"{safe_id(source)}_has_uppercase_word_012", source, 0.5, r"\b[A-Z][a-z]{2,}\b", "positive", "reward uppercase-starting content word"),
         rule(f"{safe_id(source)}_has_comma_surface_012", source, 0.5, r",", "positive", "reward comma surface"),
         rule(f"{safe_id(source)}_has_newline_surface_012", source, 0.5, r"\n", "positive", "reward newline surface"),
@@ -320,11 +372,11 @@ def count_rules(row: dict[str, Any], source: str) -> list[dict[str, Any]]:
         for mark, pattern in marks:
             rules.append(rule(f"count_punctuation_{safe_id(mark)}_present_012", source, 1.0, pattern, "positive", f"reward punctuation {mark!r}"))
         rules.append(rule("count_punctuation_interrobang_012", source, 1.0, r"(?:!\?|\?!|‽)", "positive", "reward interrobang form"))
-        rules.append(rule("count_punctuation_many_marks_012", source, 1.0, r"(?s)(?=.*\.)(?=.*,)(?=.*!)(?=.*\?)(?=.*;)(?=.*:).+", "positive", "reward broad punctuation coverage"))
+        rules.append(rule("count_punctuation_many_marks_012", source, 1.0, r"(?:[.,!?;:][\s\S]*){4,}", "positive", "reward broad punctuation coverage"))
         rules.append(rule("count_punctuation_no_marks_012", source, -1.0, r"^[^.,!?;:]*$", "negative", "penalize absence of common punctuation"))
     if source == "count:pronouns":
         rules.append(rule("count_pronouns_common_012", source, 1.0, r"(?i)\b(i|me|my|mine|you|your|yours|he|him|his|she|her|hers|it|its|we|us|our|they|them|their)\b", "positive", "reward common pronoun"))
-        rules.append(rule("count_pronouns_none_012", source, -1.0, r"(?i)^(?!.*\b(i|me|my|you|your|he|she|it|we|they|them|their)\b).*$", "negative", "penalize no common pronoun"))
+        rules.append(rule("count_pronouns_dense_negative_012", source, -1.0, r"(?i)(?:\b(i|me|my|you|your|he|she|it|we|they|them|their)\b[\s\S]*){8,}", "negative", "penalize overly dense common pronouns"))
     if source == "count:person_names":
         rules.append(rule("count_person_names_capitalized_pair_012", source, 1.0, r"\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b", "positive", "reward capitalized name-like pair"))
         rules.append(rule("count_person_names_name_list_012", source, 0.75, r"(?i)\b(alex|maria|john|emma|david|sarah|michael|anna|james|linda)\b", "positive", "reward common given-name proxy"))
@@ -364,7 +416,7 @@ def format_rules(row: dict[str, Any], source: str) -> list[dict[str, Any]]:
             [
                 rule("format_indent_leading_spaces_012", source, 1.5, r"(?m)^\s{2,}\S", "positive", "reward indented line"),
                 rule("format_indent_after_newline_012", source, 1.0, r"\n\s{2,}\S", "positive", "reward newline followed by indentation"),
-                rule("format_indent_none_012", source, -1.0, r"(?m)^(?!.*^\s{2,}\S).*$", "negative", "penalize no indented line"),
+                rule("format_indent_flush_left_negative_012", source, -1.0, r"(?m)^\S[^\n]{20,}$", "negative", "penalize long flush-left line"),
             ]
         )
     if source == "format:quote_unquote":
@@ -375,7 +427,7 @@ def format_rules(row: dict[str, Any], source: str) -> list[dict[str, Any]]:
                 rule("format_quote_unquote_many_quotes_012", source, 0.75, r'(?:[^"]*"[^"]*"){2,}', "positive", "reward multiple quote delimiters"),
                 rule("format_quote_unquote_quote_then_sentence_012", source, 0.75, r'"[^"\n]{2,}"\s*[A-Za-z][^.!?]{5,}[.!?]', "positive", "reward quote followed by explanatory sentence"),
                 rule("format_quote_unquote_balanced_quote_proxy_012", source, 0.75, r'(?s)"[^"]{2,}"[^"]{5,}', "positive", "reward balanced quote plus unquoted continuation proxy"),
-                rule("format_quote_unquote_no_adjacent_quotes_012", source, 0.5, r'^(?![\s\S]*""[\s\S]*$)[\s\S]*"[\s\S]+$', "positive", "reward quote text without adjacent empty quotes"),
+                rule("format_quote_unquote_quote_text_012", source, 0.5, r'"[\s\S]+|"', "positive", "reward quote text"),
                 rule("format_quote_unquote_no_quote_012", source, -1.0, r'^[^"]*$', "negative", "penalize absence of double quote"),
             ]
         )
@@ -408,7 +460,7 @@ def format_rules(row: dict[str, Any], source: str) -> list[dict[str, Any]]:
                 rule("format_parentheses_nested_3_012", source, 1.0, r"[\(\[\{][\s\S]{0,160}[\(\[\{][\s\S]{0,160}[\(\[\{]", "positive", "reward nested opening delimiters"),
                 rule("format_parentheses_nested_5_012", source, 1.5, r"[\(\[\{][\s\S]{0,120}[\(\[\{][\s\S]{0,120}[\(\[\{][\s\S]{0,120}[\(\[\{][\s\S]{0,120}[\(\[\{]", "positive", "reward five nested opening delimiters"),
                 rule("format_parentheses_many_delimiters_012", source, 0.75, r"(?:[\(\)\[\]\{\}][\s\S]*){6,}", "positive", "reward many bracket delimiters"),
-                rule("format_parentheses_mixed_delimiters_012", source, 0.75, r"(?s)(?=.*[()])(?=.*[\[\]])(?=.*[{}]).+", "positive", "reward mixed bracket families"),
+                rule("format_parentheses_mixed_delimiters_012", source, 0.75, r"(?:[()\[\]{}][\s\S]*){3,}", "positive", "reward mixed bracket families"),
                 rule("format_parentheses_none_012", source, -1.0, r"^[^()[\]{}]*$", "negative", "penalize no bracket-like punctuation"),
             ]
         )
@@ -476,7 +528,7 @@ def sentence_rules(row: dict[str, Any], source: str) -> list[dict[str, Any]]:
         rules.append(rule("sentence_increment_many_sentences_012", source, 0.75, r"(?:[.!?]\s+){2,}", "positive", "reward multiple sentence spans"))
         rules.append(rule("sentence_increment_short_then_long_012", source, 0.75, r"(?s)^[^.!?]{1,80}[.!?]\s+[^.!?]{20,160}[.!?]", "positive", "reward increasing sentence length proxy"))
     if source == "sentence:alliteration_increment":
-        rules.append(rule("sentence_alliteration_repeated_initial_012", source, 0.75, r"(?i)\b([a-z])[a-z]+\s+\1[a-z]+\b", "positive", "reward adjacent repeated initials"))
+        rules.append(rule("sentence_alliteration_repeated_initial_012", source, 0.75, same_initial_pattern(min_tail=1), "positive", "reward adjacent repeated initials"))
         rules.append(rule("sentence_alliteration_sequence_012", source, 0.75, r"(?i)\b(first|second|third|fourth|fifth|next)\b", "positive", "reward sequence markers"))
     return rules
 
@@ -486,7 +538,7 @@ def words_rules(row: dict[str, Any], source: str) -> list[dict[str, Any]]:
     rules = [
         rule(f"{safe_id(source)}_alphabetic_words", source, 1.0, r"(?i)\b[a-z]{4,}\b", "positive", "reward alphabetic word tokens"),
         rule(f"{safe_id(source)}_many_words", source, 1.0, r"(?:\b[a-zA-Z]+\b[\s,.;:]*){10,}", "positive", "reward multi-word response"),
-        rule(f"{safe_id(source)}_non_words", source, -1.0, r"^[\W\d_]+$", "negative", "penalize no alphabetic words"),
+        rule(f"{safe_id(source)}_non_words", source, -1.0, r"^[^A-Za-z]+$", "negative", "penalize no alphabetic words"),
     ]
     for value in values[:3]:
         rules.append(rule(f"{safe_id(source)}_{safe_id(value)}", source, 1.0, word_boundary(value), "positive", f"reward literal {value!r}"))
@@ -498,24 +550,29 @@ def words_rules(row: dict[str, Any], source: str) -> list[dict[str, Any]]:
         rules.append(rule("words_consonants_cluster_pair_012", source, 0.75, r"(?i)\b[a-z]*[bcdfghjklmnpqrstvwxyz]{2}[a-z]*\b.*\b[a-z]*[bcdfghjklmnpqrstvwxyz]{2}[a-z]*\b", "positive", "reward multiple consonant-cluster words"))
         rules.append(rule("words_consonants_vowel_only_negative_012", source, -0.75, r"(?i)\b[aeiou]{2,}\b", "negative", "penalize vowel-only tokens"))
     if source == "words:last_first":
-        rules.append(rule("words_last_first_chain_012", source, 0.75, r"(?i)\b([a-z])[a-z]*\s+\1[a-z]*\b", "positive", "reward adjacent same initial proxy"))
-        rules.append(rule("words_last_first_sentence_chain_012", source, 1.0, r"(?is)\b([a-z]{3,})[.!?]\s+\1\b", "positive", "reward sentence last/first word chain proxy"))
-        rules.append(rule("words_last_first_repeated_boundary_012", source, 0.75, r"(?is)\b([a-z]{3,})\W+\1\b", "positive", "reward repeated boundary word proxy"))
+        rules.append(rule("words_last_first_chain_012", source, 0.75, same_initial_pattern(), "positive", "reward adjacent same initial proxy"))
+        rules.append(rule("words_last_first_sentence_chain_012", source, 1.0, repeated_common_word_pattern(COMMON_REPEAT_WORDS[:12], 2), "positive", "reward sentence boundary repeat proxy"))
+        rules.append(rule("words_last_first_repeated_boundary_012", source, 0.75, repeated_common_word_pattern(COMMON_REPEAT_WORDS, 2), "positive", "reward repeated boundary word proxy"))
     if source == "words:no_consecutive":
-        rules.append(rule("words_no_consecutive_same_initial_negative_012", source, -1.25, r"(?i)\b([a-z])[a-z]*\W+\1[a-z]*\b", "negative", "penalize adjacent words sharing first letter"))
-        rules.append(rule("words_no_consecutive_clean_word_012", source, 0.5, r"(?i)\b(?![a-z]*([a-z])\1)[a-z]{4,}\b", "positive", "reward word without repeated adjacent letters"))
+        rules.append(rule("words_no_consecutive_same_initial_negative_012", source, -1.25, same_initial_pattern(), "negative", "penalize adjacent words sharing first letter"))
+        rules.append(rule("words_no_consecutive_clean_word_012", source, 0.5, r"(?i)\b[a-z]{4,}\b(?:\W+\b[a-z]{4,}\b){2,}", "positive", "reward multi-word alphabetic answer"))
     if source == "words:odd_even_syllables":
         rules.append(rule("words_syllable_length_mix_012", source, 0.5, r"(?i)\b[a-z]{3,5}\b.*\b[a-z]{6,9}\b", "positive", "reward mixed short/long word lengths"))
     if source == "words:paragraph_last_first":
         rules.append(rule("words_paragraph_break_012", source, 0.75, r"\n\s*\n", "positive", "reward paragraph break"))
-        rules.append(rule("words_paragraph_same_start_end_proxy_012", source, 0.75, r"(?ims)^\s*([a-z]{3,})\b[\s\S]*\b\1[.!?]?\s*$", "positive", "reward paragraph-like same start/end word proxy"))
+        repeated_anchor = prompt_anchor_repeat_pattern(row)
+        if repeated_anchor:
+            rules.append(rule("words_paragraph_same_start_end_proxy_012", source, 0.75, repeated_anchor, "positive", "reward paragraph-like repeated anchor proxy"))
         rules.append(rule("words_paragraph_no_break_012", source, -0.75, r"^[\s\S]*[^\n]\n?[^\n]*$", "negative", "penalize no visible paragraph break"))
     if source == "words:prime_lengths":
         rules.append(rule("words_prime_length_proxy_012", source, 0.75, r"(?i)\b[a-z]{2,3}\b|\b[a-z]{5}\b|\b[a-z]{7}\b", "positive", "reward prime-length token proxy"))
         rules.append(rule("words_prime_lengths_bad_length_negative_012", source, -1.0, r"(?i)\b[a-z]{1}\b|\b[a-z]{4}\b|\b[a-z]{6}\b|\b[a-z]{8}\b|\b[a-z]{9}\b", "negative", "penalize common non-prime word lengths"))
     if source == "words:repeats":
-        rules.append(rule("words_repeats_word_again_012", source, 1.0, r"(?i)\b(\w+)\b(?:\W+\w+){0,12}\W+\1\b", "positive", "reward repeated word"))
-        rules.append(rule("words_repeats_no_repeat_negative_012", source, -0.75, r"(?i)^(?!.*\b(\w+)\b.*\b\1\b).*$", "negative", "penalize no repeated word"))
+        small_n_values = [kwargs.get("small_n") for kwargs in row.get("kwargs", []) if kwargs.get("small_n") is not None]
+        max_repeats = int(float(small_n_values[0])) if small_n_values else 2
+        repeated_words = list(dict.fromkeys([value.lower() for value in values if re.fullmatch(r"[A-Za-z]{3,24}", value)] + COMMON_REPEAT_WORDS))
+        rules.append(rule("words_repeats_word_again_012", source, 1.0, repeated_common_word_pattern(repeated_words[:24], 2), "positive", "reward repeated common/prompt word proxy"))
+        rules.append(rule("words_repeats_over_limit_negative_012", source, -0.75, repeated_common_word_pattern(repeated_words[:24], max_repeats + 1), "negative", "penalize common/prompt word over-repeat proxy"))
     if source == "words:start_verb":
         rules.append(rule("words_start_verb_imperative_012", source, 0.75, r"(?i)^\s*(write|make|create|explain|describe|list|compare|analyze|give|take|use)\b", "positive", "reward imperative verb start"))
         rules.append(rule("words_start_verb_expanded_012", source, 1.0, r"(?i)^\s*(clarify|simplify|prove|show|derive|demonstrate|explain|describe|write|make|create|list|compare|analyze|give|take|use|is)\b", "positive", "reward expanded verb-start proxy"))
@@ -541,15 +598,15 @@ def ratio_rules(row: dict[str, Any], source: str) -> list[dict[str, Any]]:
         rules.append(rule(f"{safe_id(source)}_{safe_id(value)}_overlap", source, 0.5, word_boundary(value), "positive", f"weak overlap literal {value!r}"))
     if source == "ratio:stop_words":
         rules.append(rule("ratio_stop_words_dense_012", source, 1.0, r"(?i)\b(?:the|and|of|to|in|that|is|for)\b.*\b(?:the|and|of|to|in|that|is|for)\b", "positive", "reward multiple stop words"))
-        rules.append(rule("ratio_stop_words_sparse_012", source, 1.0, r"(?i)^(?!(?:.*\b(?:the|and|of|to|in|that|is|for|a|an)\b){8,})[\s\S]{20,1200}$", "positive", "reward sparse common stop words"))
-        rules.append(rule("ratio_stop_words_content_words_012", source, 0.75, r"(?i)(?:\b(?!the\b|and\b|of\b|to\b|in\b|that\b|is\b|for\b|a\b|an\b)[a-z]{5,}\b[\s,.;:]*){8,}", "positive", "reward dense content-word surface"))
+        rules.append(rule("ratio_stop_words_moderate_012", source, 0.75, r"(?i)(?:\b(?:the|and|of|to|in|that|is|for|a|an)\b[\s\S]*){2,}", "positive", "reward some common stop words"))
+        rules.append(rule("ratio_stop_words_content_words_012", source, 0.75, r"(?i)(?:\b[a-z]{5,}\b[\s,.;:]*){8,}", "positive", "reward dense content-word surface"))
         rules.append(rule("ratio_stop_words_very_dense_negative_012", source, -1.0, r"(?i)(?:\b(?:the|and|of|to|in|that|is|for|a|an)\b[\s\S]*){12,}", "negative", "penalize very dense stop-word surface"))
     if source == "ratio:sentence_balance":
         rules.append(rule("ratio_sentence_balance_two_sentences_012", source, 1.0, r"[.!?]\s+[A-Z].{10,}[.!?]", "positive", "reward two sentence-like spans"))
-        rules.append(rule("ratio_sentence_balance_all_types_012", source, 1.0, r"(?s)(?=.*\.)(?=.*\?)(?=.*!).+", "positive", "reward declarative/interrogative/exclamatory marks"))
-        rules.append(rule("ratio_sentence_balance_question_exclaim_012", source, 0.75, r"(?s)(?=.*\?)(?=.*!).+", "positive", "reward question and exclamation marks"))
-        rules.append(rule("ratio_sentence_balance_period_question_012", source, 0.75, r"(?s)(?=.*\.)(?=.*\?).+", "positive", "reward declarative and interrogative marks"))
-        rules.append(rule("ratio_sentence_balance_missing_type_negative_012", source, -1.0, r"(?s)^(?:(?![?]|!|\.).)*$", "negative", "penalize no sentence type punctuation"))
+        rules.append(rule("ratio_sentence_balance_all_types_012", source, 1.0, r"(?:[.?!][\s\S]*){3,}", "positive", "reward declarative/interrogative/exclamatory marks"))
+        rules.append(rule("ratio_sentence_balance_question_exclaim_012", source, 0.75, r"\?[\s\S]*!|![\s\S]*\?", "positive", "reward question and exclamation marks"))
+        rules.append(rule("ratio_sentence_balance_period_question_012", source, 0.75, r"\.[\s\S]*\?|\?[\s\S]*\.", "positive", "reward declarative and interrogative marks"))
+        rules.append(rule("ratio_sentence_balance_missing_type_negative_012", source, -1.0, r"^[^?!.]*$", "negative", "penalize no sentence type punctuation"))
     if source == "ratio:sentence_type":
         rules.append(rule("ratio_sentence_type_question_012", source, 0.75, r"\?", "positive", "reward question mark sentence type"))
         rules.append(rule("ratio_sentence_type_exclamation_012", source, 0.75, r"!", "positive", "reward exclamation sentence type"))

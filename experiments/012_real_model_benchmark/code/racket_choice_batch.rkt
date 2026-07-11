@@ -77,6 +77,7 @@
                 (request->guide request)
                 #:seed (field request 'seed)
                 #:temperature 0.7
+                #:deadline-ms (field request 'deadline_ms #f)
                 #:max-tokens (field request 'max_tokens 512)))
     (hash 'run_id (field request 'run_id)
           'key (field request 'key)

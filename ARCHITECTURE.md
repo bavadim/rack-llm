@@ -1,69 +1,43 @@
 # Architecture
 
-The repository uses a small public facade over private token-native runtime
-modules plus separate model implementations.
+The runtime is a small typed core around two native boundaries.
 
 ```text
-main.rkt
-  public Model type
-  public filter builders
-  public model-level generation entrypoint
+main.rkt                 public DSL and generation loop
+  private/model.rkt      tokenizer, session provider, model lifetime
+  private/guidance.rkt   compiled programs and residual generation state
+  private/sampling.rkt   exact full-vocabulary sampling
+  private/cars.rkt       fractional-envelope prefix trie
+  private/regex.rkt      typed PCRE2 facade
+    private/pcre2-ffi.rkt
+    native/regex/        PCRE2 DFA and token transition cache
 
-private/logits.rkt
-  logits view abstraction for vector and future foreign-backed logits
-
-private/model.rkt
-  tokenizer, provider, model runtime objects and session protocol
-
-private/filter.rkt
-  filter descriptions, states, watchers, and transition protocol
-
-private/regex.rkt
-  regex AST/parser, NFA compiler, token transition caches
-
-private/sampling.rkt
-  default token selection and logprob math
-
-model-qwen.rkt
-  Qwen sidecar model implementation
-  returns one Model containing tokenizer + provider + close hook
+model-llama-cpp.rkt
+  native/llama/          in-process llama.cpp session provider
 ```
 
-`rack-llm` does not import model implementations. Model modules import the core
-private runtime constructors and return `Model` values.
+Model implementations construct one `Model`; the core never imports a model
+backend. A provider exposes its EOG ids and one session protocol: start, read
+current logits, commit a content token, and end.
 
-## Flow
+Programs are immutable descriptions compiled against a tokenizer. Generation
+then advances a residual guidance state. Hard regex constraints use restartable
+PCRE2 DFA transitions for a conservative consuming subset and exact full-prefix
+matching for boundary-sensitive constructs. Open `text` programs use
+exact full-vocabulary logits with exact candidate vetoes and optional local
+reward hints.
 
-```text
-qwen-model -> Model
-generate + Model + prompt text + FilterBuilder
-private Tokenizer compiles FilterBuilder -> Filter
-private Provider returns LogitsView
-private sampler produces token ids
-public result contains generated text
-```
+Regex programs compiled for one generator share one lazily created
+native vocabulary. Token pieces cross the FFI boundary as one UTF-8 blob plus
+lengths; native states retain the ownership chain `state -> regex -> vocabulary`.
 
-## State
+`Program` never selects a sampler. A reusable generator owns the compiled
+guidance, prompt ids, RNG and optional CARS trie. Local sampling follows one
+masked path. CARS creates a fresh provider session per proposal and retains only
+token-prefix probabilities and envelope masses between attempts and samples.
 
-Tokenizer/provider state, logits views, filter state, and filter protocol
-functions are internal. Users construct a filter builder and pass it with a
-model and prompt string to `generate`. Public results expose generated text,
-token ids, scores, metrics, status, reason, and trace.
-
-## Regex
-
-`rx` compiles regex source with a tokenizer into a token-level automaton. The
-sampling hot path uses `state + token-id -> next-state`; it does not call string
-regexp matching per candidate.
-
-## Known Repair Tracks
-
-Exact full-vocabulary soft decoding is the main open runtime repair. A
-full-vocab sampling step is atomic: interrupting it mid-pass would turn exact
-mode into a partial-candidate approximation. The main risk is the cost of one
-complete Qwen-scale vocabulary pass for open text watchers; benchmark artifacts
-based on top-k approximations must not be treated as paper-grade exact evidence.
-
-Experiment runners under `experiments/` are outside the core library boundary
-and may lag behind the public API. They must be realigned before regenerating
-`012_*` artifacts.
+Forced deterministic segments do not query or replay the model. Consequently
+their LM score is unknown (`#f`), while sampled segments retain exact log
+probabilities. `#:max-tokens` and `#:deadline-ms` are the only runtime budgets.
+The token budget is a stopping boundary, not a guarantee that every live regex
+trajectory reaches an accepting state.

@@ -127,7 +127,7 @@ def _source(system: str, kind: str, payload: str) -> str:
 def _regex_source(system: str, regex: str) -> str:
     escaped = json.dumps(regex)
     if system == "ours":
-        return f"(rx #px{escaped})"
+        return f"(rx {escaped})"
     if system == "guidance":
         return f"regex({escaped})"
     return f"outlines.regex({escaped})"

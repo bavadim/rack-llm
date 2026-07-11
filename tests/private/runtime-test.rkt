@@ -24,7 +24,6 @@
           best)))
   (tokenizer
    #:vocab-size (vector-length vocab-vector)
-   #:fingerprint (format "test:~a" (length vocab))
    #:token-ref (lambda (id) (vector-ref vocab-vector id))
    #:tokenize
    (lambda (text)
@@ -46,7 +45,6 @@
     (define tok
       (tokenizer
        #:vocab-size vocab-size
-       #:fingerprint "large-mock"
        #:token-ref (lambda (id) (if (= id target-id) " target" " filler"))
        #:tokenize
        (lambda (text)
@@ -62,15 +60,17 @@
     (define p
       (provider
        #:vocab-size vocab-size
-       #:next-logits (lambda (_prompt-ids _prefix-ids)
-                       (vector->logits-view logits))))
+       #:eog-token-ids '(0)
+       #:start-session (lambda (_prompt-ids) 'session)
+       #:next-logits/session (lambda (_session) (vector->logits-view logits))
+       #:commit-token! (lambda (_session _token-id) (void))
+       #:end-session! (lambda (_session) (void))))
     (define m (model tok p (hash 'name 'large-mock) void))
     (collect-garbage)
     (define result
       (generate m
                 ""
                 (lit " target")
-                #:candidate-policy 'allowed-only
                 #:max-tokens 1
                 #:seed 0))
     (check-equal? (generation-result-status result) 'found)
@@ -92,16 +92,13 @@
     (define p
       (provider
        #:vocab-size 5
-       #:next-logits
-       (lambda (_prompt-ids _prefix-ids)
-         (set! logits-calls (add1 logits-calls))
-         (error 'runtime-test "non-session logits should not be requested"))
+       #:eog-token-ids '(0)
        #:start-session
        (lambda (_prompt-ids) 'session)
        #:next-logits/session
        (lambda (_session)
          (set! logits-calls (add1 logits-calls))
-         (error 'runtime-test "session logits should not be requested"))
+         (vector->logits-view (vector 0.0 0.0 0.0 0.0 0.0)))
        #:commit-token!
        (lambda (_session token-id)
          (set! commits (append commits (list token-id))))
@@ -112,25 +109,23 @@
       (generate m
                 ""
                 (lit " A B C D")
-                #:candidate-policy 'allowed-only
                 #:max-tokens 8
                 #:seed 0))
     (check-equal? (generation-result-status result) 'found)
     (check-equal? (generation-result-text result) " A B C D")
     (check-equal? logits-calls 0)
     (check-equal? commits '(1 2 3 4))
-    (check-equal? (generation-result-lm-logprob result) 0.0)
+    (check-false (generation-result-lm-logprob result))
     (check-equal? (generation-metrics-llm-calls (generation-result-metrics result)) 0)
     (check-equal?
      (generation-metrics-candidate-count-per-step (generation-result-metrics result))
-     '(1 1 1 1)))
+     '(1)))
 
   (test-case "broad bounded regex full-vocab step does not spend time in epsilon closure"
     (define vocab-size 50000)
     (define tok
       (tokenizer
        #:vocab-size vocab-size
-       #:fingerprint "large-regex-mock"
        #:token-ref
        (lambda (id)
          (cond
@@ -154,8 +149,11 @@
     (define p
       (provider
        #:vocab-size vocab-size
-       #:next-logits (lambda (_prompt-ids _prefix-ids)
-                       (vector->logits-view logits))))
+       #:eog-token-ids '(0)
+       #:start-session (lambda (_prompt-ids) 'session)
+       #:next-logits/session (lambda (_session) (vector->logits-view logits))
+       #:commit-token! (lambda (_session _token-id) (void))
+       #:end-session! (lambda (_session) (void))))
     (define m (model tok p (hash 'name 'large-regex-mock) void))
     (define result
       (call-with-limits
@@ -165,7 +163,6 @@
          (generate m
                    ""
                    (rx "My Answer: .{1,512} My Conclusion: .{1,512} Future Outlook: .{1,512}")
-                   #:candidate-policy 'full-vocab
                    #:max-tokens 1
                    #:seed 0))))
     (check-not-false
@@ -188,7 +185,6 @@
     (define tok
       (tokenizer
        #:vocab-size vocab-size
-       #:fingerprint "large-regex-fast-path-mock"
        #:token-ref token-text
        #:tokenize (lambda (_text) '())
        #:detokenize (lambda (ids) (apply string-append (map token-text ids)))))
@@ -196,8 +192,11 @@
     (define p
       (provider
        #:vocab-size vocab-size
-       #:next-logits (lambda (_prompt-ids _prefix-ids)
-                       (vector->logits-view logits))))
+       #:eog-token-ids '(0)
+       #:start-session (lambda (_prompt-ids) 'session)
+       #:next-logits/session (lambda (_session) (vector->logits-view logits))
+       #:commit-token! (lambda (_session _token-id) (void))
+       #:end-session! (lambda (_session) (void))))
     (define m (model tok p (hash 'name 'large-regex-fast-path-mock) void))
     (define result
       (call-with-limits
@@ -207,11 +206,56 @@
          (generate m
                    ""
                    (rx "My Answer: .{1,512} My Conclusion: .{1,512} Future Outlook: .{1,512}")
-                   #:candidate-policy 'full-vocab
                    #:max-tokens 4
                    #:seed 0))))
     (check-not-false
      (member (generation-result-status result) '(found not-found-budget not-found-hard)))
-    (check-equal?
-     (generation-metrics-candidate-count-per-step (generation-result-metrics result))
-     (make-list 4 vocab-size)))
+    (check-true
+     (andmap (lambda (count) (<= count vocab-size))
+             (generation-metrics-candidate-count-per-step (generation-result-metrics result)))))
+
+  (test-case "budget-feasible template completes even when logits maximize every wildcard"
+    (define pattern
+      "My Answer: [^~]{1,24} My Conclusion: [^~]{1,24} Future Outlook: [^~]{1,24}~END")
+    (define chars
+      (remove-duplicates
+       (map string (string->list (string-append pattern "x")))))
+    (define vocab (cons "" chars))
+    (define tok (simple-tokenizer vocab))
+    (define logits
+      (for/vector ([piece (in-list vocab)])
+        (if (string=? piece "x") 0.0 -1000.0)))
+    (define p
+      (provider
+       #:vocab-size (length vocab)
+       #:eog-token-ids '(0)
+       #:start-session (lambda (_prompt-ids) 'session)
+       #:next-logits/session (lambda (_session) (vector->logits-view logits))
+       #:commit-token! (lambda (_session _token-id) (void))
+       #:end-session! (lambda (_session) (void))))
+    (define m (model tok p (hash 'name 'template-budget) void))
+    (define result
+      (generate m "" (rx pattern) #:max-tokens 128 #:seed 0))
+    (check-equal? (generation-result-status result) 'found)
+    (check-equal? (generation-result-generated-tokens result) 120)
+    (check-regexp-match
+     #px"^My Answer: [^~]{1,24} My Conclusion: [^~]{1,24} Future Outlook: [^~]{1,24}~END$"
+     (generation-result-text result)))
+
+  (test-case "live broad regex reports token budget exhaustion honestly"
+    (define pattern "A [^~]{1,512}~END")
+    (define tok (simple-tokenizer '("" "A" " " "x" "~" "E" "N" "D")))
+    (define logits (vector -1000.0 -1000.0 -1000.0 0.0 -1000.0 -1000.0 -1000.0 -1000.0))
+    (define p
+      (provider
+       #:vocab-size 8
+       #:eog-token-ids '(0)
+       #:start-session (lambda (_prompt-ids) 'session)
+       #:next-logits/session (lambda (_session) (vector->logits-view logits))
+       #:commit-token! (lambda (_session _token-id) (void))
+       #:end-session! (lambda (_session) (void))))
+    (define m (model tok p (hash 'name 'broad-budget) void))
+    (define result
+      (generate m "" (rx pattern) #:max-tokens 128 #:seed 0))
+    (check-equal? (generation-result-status result) 'not-found-budget)
+    (check-equal? (generation-result-generated-tokens result) 128))

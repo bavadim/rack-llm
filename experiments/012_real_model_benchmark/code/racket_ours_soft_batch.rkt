@@ -59,49 +59,31 @@
                  field-name
                  value)]))
 
-(define (python-regex->pregexp-pattern pattern)
-  (define normalized
-    (decode-python-unicode-escapes
-     (string-replace
-      (string-replace pattern "\\n" "\n")
-      "\\t" "\t")))
-  (define m (regexp-match #rx"^\\(\\?([ims]+)\\)(.*)$" normalized))
-  (if m
-      (format "(?~a:~a)" (cadr m) (regexp-replace* #rx"\\(\\?[ims]+\\)" (caddr m) ""))
-      (regexp-replace* #rx"\\(\\?[ims]+\\)" normalized "")))
-
-(define (decode-python-unicode-escapes pattern)
-  (regexp-replace*
-   #px"\\\\U([0-9A-Fa-f]{8})|\\\\u([0-9A-Fa-f]{4})"
-   pattern
-   (lambda captures
-     (define hex
-       (or (and (>= (length captures) 2) (list-ref captures 1))
-           (and (>= (length captures) 3) (list-ref captures 2))))
-     (string (integer->char (string->number hex 16))))))
-
-(define (rule->watcher rule)
+(define (rule->observer rule)
   (define kind (hget rule 'kind))
   (define weight (json-number-field (hget rule 'weight 0.0) 'weight))
   (define pattern-type (hget rule 'pattern_type))
   (define pattern (hget rule 'pattern))
-  (define expr
-    (cond
-      [(equal? pattern-type "regex") (rx (python-regex->pregexp-pattern pattern))]
-      [(equal? pattern-type "literal") pattern]
-      [else (error 'rule->watcher "unsupported pattern_type: ~a" pattern-type)]))
   (cond
-    [(equal? kind "rank") (rank weight expr)]
-    [(equal? kind "ban") (ban expr)]
-    [else (error 'rule->watcher "unsupported rule kind: ~a" kind)]))
+    [(and (equal? kind "rank") (equal? pattern-type "regex"))
+     (rank-rx weight pattern)]
+    [(and (equal? kind "rank") (equal? pattern-type "literal"))
+     (rank weight pattern)]
+    [(and (equal? kind "ban") (equal? pattern-type "regex"))
+     (ban-rx pattern)]
+    [(and (equal? kind "ban") (equal? pattern-type "literal"))
+     (ban pattern)]
+    [(not (or (equal? pattern-type "regex") (equal? pattern-type "literal")))
+     (error 'rule->observer "unsupported pattern_type: ~a" pattern-type)]
+    [else (error 'rule->observer "unsupported rule kind: ~a" kind)]))
 
 (define (row-rules row noise)
   (define rule-sets (hget row 'rule_sets))
   (hget rule-sets (string->symbol noise)))
 
 (define (make-guide row noise)
-  (define watchers (map rule->watcher (row-rules row noise)))
-  (text 4096 watchers))
+  (define observers (map rule->observer (row-rules row noise)))
+  (text 4096 observers))
 
 (define (json-number value)
   (if (and (real? value) (rational? value))
@@ -141,8 +123,8 @@
         'failure_reason (jsexpr-or-string (generation-result-reason result))
         'text (generation-result-text result)
         'lm_logprob (json-number (generation-result-lm-logprob result))
-        'guide_score (json-number (generation-result-filter-score result))
-        'weak_score (json-number (generation-result-filter-score result))
+        'guide_score (json-number (generation-result-guidance-score result))
+        'weak_score (json-number (generation-result-guidance-score result))
         'total_score (json-number (generation-result-total-score result))
         'latency_ms (generation-result-latency-ms result)
         'generated_tokens (generation-result-generated-tokens result)
@@ -196,6 +178,26 @@
         (newline out)))
     #:exists 'replace))
 
+(define (call-with-attempt-timeout timeout-ms thunk)
+  (cond
+    [(or (not timeout-ms) (<= timeout-ms 0))
+     (list 'ok (thunk))]
+    [else
+     (define ch (make-channel))
+     (define worker
+       (thread
+        (lambda ()
+          (with-handlers ([exn:fail?
+                           (lambda (exn)
+                             (channel-put ch (list 'error (exn-message exn))))])
+            (channel-put ch (list 'ok (thunk)))))))
+     (define result (sync/timeout (/ timeout-ms 1000.0) ch))
+     (cond
+       [result result]
+       [else
+        (kill-thread worker)
+        (list 'error (format "generation attempt timed out after ~a ms" timeout-ms))])]))
+
 (define model
   (llama-cpp-model
    #:model-path (model-path)
@@ -219,6 +221,7 @@
                          (for/list ([method (in-list methods)])
                            (for/list ([sample-index (in-range (samples))])
                              (failure->payload row noise method sample-index (exn-message exn))))))])
+       (define guide (make-guide row noise))
        (append*
         (for/list ([method (in-list methods)])
           (for/list ([sample-index (in-range (samples))])
@@ -226,20 +229,28 @@
                             (* 100000 sample-index)
                             (* 1000 (string->number (format "~a" (hget row 'key))))
                             (index-of noise-levels noise)))
-            (define result
-              (generate model
-                        (hget row 'prompt)
-                        (make-guide row noise)
-                        #:beta (method-beta method)
-                        #:seed seed
-                        #:temperature (temperature)
-                        #:deadline-ms (deadline-ms)
-                        #:max-tokens (max-tokens)))
-            (result->payload row
-                             noise
-                             method
-                             sample-index
-                             result))))))))
+            (match (call-with-attempt-timeout
+                    (deadline-ms)
+                    (lambda ()
+                      (generate model
+                                (hget row 'prompt)
+                                guide
+                                #:beta (method-beta method)
+                                #:seed seed
+                                #:temperature (temperature)
+                                #:max-tokens (max-tokens))))
+              [(list 'ok result)
+               (result->payload row
+                                noise
+                                method
+                                sample-index
+                                result)]
+              [(list 'error reason)
+               (failure->payload row
+                                 noise
+                                 method
+                                 sample-index
+                                 reason)]))))))))
 
 (write-jsonl (output-path) outputs)
 (model-close! model)

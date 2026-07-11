@@ -24,6 +24,9 @@ ROOT_BACKEND_METADATA = REPO_ROOT / "data" / "012_backend_metadata.json"
 CONFIG_LOCK = EXPERIMENT_DIR / "config.lock.json"
 ARTIFACT_MANIFEST = EXPERIMENT_DIR / "ARTIFACT_MANIFEST.json"
 REPRODUCE = EXPERIMENT_DIR / "REPRODUCE.md"
+SOFT_AUDITED_RULES = REPO_ROOT / "data" / "012_soft_ifbench_rules_audited.jsonl"
+SOFT_AUDIT_FAILURES = EXPERIMENT_DIR / "results" / "012_soft_rule_audit_failures.md"
+HARD_RUNTIME_FAILURE = EXPERIMENT_DIR / "results" / "012_hard_runtime_benchmark_failure.md"
 
 FINAL_ARTIFACTS = [
     REPO_ROOT / "data" / "005_hard_solve_raw.jsonl",
@@ -65,6 +68,17 @@ PLACEHOLDER_MARKERS = [
     "candidate_from_spec",
 ]
 
+REQUIRED_PAPER_GRADE_ARTIFACTS = {
+    "experiments/012_real_model_benchmark/results/012_hard_real_raw.jsonl",
+    "experiments/012_real_model_benchmark/results/012_hard_real_summary.csv",
+    "experiments/012_real_model_benchmark/results/012_soft_real_raw.jsonl",
+    "experiments/012_real_model_benchmark/results/012_soft_real_summary.csv",
+    "experiments/012_real_model_benchmark/results/012_soft_real_risk_coverage.csv",
+    "experiments/012_real_model_benchmark/results/012_hard_final_table.csv",
+    "experiments/012_real_model_benchmark/results/012_soft_final_table.csv",
+    "experiments/012_real_model_benchmark/results/012_stat_tests.csv",
+    "experiments/012_real_model_benchmark/results/012_claims.md",
+}
 
 def read_jsonl(path: Path) -> list[dict]:
     with path.open("r", encoding="utf-8") as handle:
@@ -91,6 +105,27 @@ def assert_no_markers(path: Path, markers: list[str]) -> None:
     text = path.read_text(encoding="utf-8", errors="ignore")
     found = [marker for marker in markers if marker in text]
     assert not found, f"{path} contains stale markers: {found}"
+
+
+def assert_generation_rows_are_successful(path: Path, rows: list[dict]) -> None:
+    failures = [
+        row
+        for row in rows
+        if row.get("status") == "error" or row.get("failure_reason")
+    ]
+    assert not failures, (
+        f"{path} contains {len(failures)} failed generation rows; "
+        f"first failure: {failures[0] if failures else None}"
+    )
+    empty_rows = [
+        row
+        for row in rows
+        if int(row.get("generated_tokens") or 0) <= 0 or not str(row.get("text") or "").strip()
+    ]
+    assert not empty_rows, (
+        f"{path} contains {len(empty_rows)} rows without generated text; "
+        f"first empty row: {empty_rows[0] if empty_rows else None}"
+    )
 
 
 def test_required_data_paths_are_real_inputs() -> None:
@@ -217,6 +252,7 @@ def test_ours_soft_generation_samples_are_native_full_vocab_runs() -> None:
     assert all(row.get("generation_backend") == "racket_generate_native_llama_cpp_full_vocab" for row in rows)
     assert all(row.get("provider_mode") == "exact-full-vocab" for row in rows)
     assert all(row.get("approximation") == "none" for row in rows)
+    assert_generation_rows_are_successful(path, rows)
 
 
 def test_real_soft_benchmark_uses_native_ours_rows() -> None:
@@ -229,6 +265,32 @@ def test_real_soft_benchmark_uses_native_ours_rows() -> None:
     assert all(row.get("generation_backend") == "racket_generate_native_llama_cpp_full_vocab" for row in ours)
     assert all(row.get("provider_mode") == "exact-full-vocab" for row in ours)
     assert all(row.get("approximation") == "none" for row in ours)
+    assert_generation_rows_are_successful(path, ours)
+
+
+def test_soft_audit_meets_required_row_count() -> None:
+    assert SOFT_AUDITED_RULES.exists(), SOFT_AUDITED_RULES
+    rows = read_jsonl(SOFT_AUDITED_RULES)
+    required = 150
+    extra = SOFT_AUDIT_FAILURES.read_text(encoding="utf-8") if SOFT_AUDIT_FAILURES.exists() else ""
+    assert len(rows) >= required, (
+        f"{SOFT_AUDITED_RULES} has {len(rows)} audited rows, expected at least {required}.\n{extra}"
+    )
+
+
+def test_audited_soft_rules_lower_to_public_racket_dsl() -> None:
+    from build_soft_racket_dsl_dataset import build_dataset
+
+    rows, report = build_dataset()
+    assert rows
+    assert report["failed_rows"] == 0, report
+    assert report["total_json_rules"] == report["total_racket_watchers"], report
+    assert report["racket_validation"]["ok"] is True, report["racket_validation"]
+
+
+def test_hard_runtime_has_no_failure_marker() -> None:
+    detail = HARD_RUNTIME_FAILURE.read_text(encoding="utf-8") if HARD_RUNTIME_FAILURE.exists() else ""
+    assert not HARD_RUNTIME_FAILURE.exists(), detail
 
 
 def test_repro_package_hashes_final_artifacts() -> None:
@@ -244,6 +306,15 @@ def test_repro_package_hashes_final_artifacts() -> None:
     assert "top-k" not in reproduce.lower()
 
 
+def test_repro_package_contains_paper_grade_final_artifacts() -> None:
+    if not ARTIFACT_MANIFEST.exists():
+        return
+    manifest = json.loads(ARTIFACT_MANIFEST.read_text(encoding="utf-8"))
+    paths = {item["path"] for item in manifest["artifacts"]}
+    missing = sorted(REQUIRED_PAPER_GRADE_ARTIFACTS - paths)
+    assert not missing, f"artifact manifest is missing paper-grade outputs: {missing}"
+
+
 def main() -> int:
     tests = [
         test_required_data_paths_are_real_inputs,
@@ -256,7 +327,11 @@ def main() -> int:
         test_backend_metadata_artifact_is_native_gguf,
         test_ours_soft_generation_samples_are_native_full_vocab_runs,
         test_real_soft_benchmark_uses_native_ours_rows,
+        test_soft_audit_meets_required_row_count,
+        test_audited_soft_rules_lower_to_public_racket_dsl,
+        test_hard_runtime_has_no_failure_marker,
         test_repro_package_hashes_final_artifacts,
+        test_repro_package_contains_paper_grade_final_artifacts,
     ]
     for test in tests:
         test()

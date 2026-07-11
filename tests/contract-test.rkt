@@ -25,11 +25,19 @@
                            score
                            text
                            rank
+                           rank-rx
                            ban
+                           ban-rx
                            weight
+                           local-sampler
+                           cars-sampler
+                           make-generator
+                           generator-sample!
+                           generator-sample-n!
+                           generator-close!
                            generate
                            generation-result-text
-                           generation-metrics-filter-step-calls))])
+                           generation-metrics-guidance-step-calls))])
       (check-not-equal? (exported-value core-module name)
                         'missing
                         (format "~a should be exported" name)))
@@ -41,8 +49,9 @@
                            ProviderMode
                            Tokenizer
                            Provider
-                           Filter
-                           Watcher
+                           Program
+                           Guidance
+                           TextObserver
                            tokenizer
                            provider
                            model
@@ -58,44 +67,42 @@
                            provider-metadata
                            model-tokenizer
                            model-provider
-                           log-softmax
                            sequence-logprob
-                           sample-id
                            make-tokenizer
                            make-provider
                            make-mock-provider
                            mock-provider
-                           make-lit-filter
-                           make-rx-filter
-                           make-pure-filter
-                           make-seq-filter
-                           make-choice-filter
-                           make-repeat-filter
-                           make-bind-filter
-                           make-score-filter
-                           make-text-filter
-                           make-rank-watcher
-                           make-ban-watcher
+                           make-lit-program
+                           make-rx-program
+                           make-pure-program
+                           make-seq-program
+                           make-choice-program
+                           make-repeat-program
+                           make-bind-program
+                           make-score-program
+                           make-text-program
+                           make-rank-observer
+                           make-ban-observer
+                           make-rx-rank-observer
+                           make-rx-ban-observer
                            make-weighted-rule
-                           make-weighted-watcher
+                           make-weighted-observer
                            neg-inf
                            log-score-add
                            log-score-dead?
-                           log-score>?
-                           filter-initial
-                           filter-step
-                           filter-allowed-ids
-                           filter-accepting?
-                           filter-terminal?
-                           filter-dead?
-                           filter-score
-                           filter-potential
-                           filter-value
-                           filter-token-ids
-                           filter-trace
-                           FilterState
-                           filter-accepted-score
-                           fit-weighted-watcher
+                           guidance-initial
+                           guidance-step
+                           guidance-accepting?
+                           guidance-terminal?
+                           guidance-dead?
+                           guidance-score
+                           guidance-potential
+                           guidance-value
+                           guidance-token-ids
+                           guidance-trace
+                           GuidanceState
+                           guidance-accepted-score
+                           fit-weighted-observer
                            check
                            check-result
                            generate-stream
@@ -110,20 +117,9 @@
                            score-filter
                            lit-filter
                            generation-metrics-runtime-step-calls
-                           select-token
-                           sampler-select-token
-                           make-sampler
-                           Sampler
                            candidate-ids
-                           top-k-ids
                            make-rng
                            gumbel
-                           token-selection
-                           token-selection-id
-                           token-selection-lm-logprob
-                           token-selection-dead-count
-                           token-selection-next-state
-                           token-selection-candidate-count
                            rx-machine
                            compile-regex-machine))])
       (check-equal? (exported-value core-module name)
@@ -135,11 +131,20 @@
     (check-equal? (exported-value llama-cpp-module 'make-llama-cpp-backend)
                   'missing))
 
-  (test-case "unsupported regex constructs fail at builder construction"
+  (test-case "regex builders expose PCRE2's DFA-compatible syntax"
     (check-exn #rx"unsupported backreference"
                (lambda () (rx "(a)\\1")))
-    (check-exn #rx"unsupported regex group"
-               (lambda () (rx "(?=a)a")))
-    (check-exn #rx"unsupported regex anchor"
-               (lambda () (rx "^a")))
-    (check-true (procedure? (rx "a")))))
+    (check-exn #rx"unsupported capture-dependent conditional"
+               (lambda () (rx "(a)(?(1)b|c)")))
+    (for ([pattern (in-list '("a"
+                              "(?<=a)b"
+                              "(?>ab|a)b"
+                              "\\p{L}+"
+                              "(?i)\\brefund\\b"
+                              "(?i:\\brefund\\b)"
+                              "(?i:a)(?-i:b)"
+                              "[[:alpha:]][[:word:]]+"
+                              "(?is)[\\s\\S]{3,20}"
+                              "(?m)^\\s*(?:[-*+]|\\d+[.)])\\s+\\S+"))])
+      (check-not-exn (lambda () (rx pattern))
+                     (format "~a should be supported" pattern)))))

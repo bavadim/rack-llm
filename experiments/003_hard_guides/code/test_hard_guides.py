@@ -205,6 +205,12 @@ class HardGuideTests(unittest.TestCase):
         self.assertIsInstance(result, Unsupported)
         self.assertIn("non-hard-supported", result.reason)
 
+    def test_ours_regex_sources_use_public_string_dialect(self) -> None:
+        result = build_ours_hard_guide(row("format:no_whitespace"))
+        self.assertIsInstance(result, GuideSpec)
+        self.assertEqual(result.guide_source, '(rx "\\\\S{1,512}")')
+        self.assertNotIn("#px", result.guide_source)
+
     def test_report_builds(self) -> None:
         subprocess.run(
             [sys.executable, str(BUILD_REPORT), "--experiment-only"],

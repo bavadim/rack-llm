@@ -10,6 +10,8 @@ struct rackllm_llama_model {
     struct llama_model * model;
     const struct llama_vocab * vocab;
     int32_t vocab_size;
+    int32_t * eog_tokens;
+    int32_t eog_count;
     int32_t context_size;
     int32_t threads;
 };
@@ -65,6 +67,26 @@ rackllm_llama_model_open(const char * path_model,
     handle->model = model;
     handle->vocab = llama_model_get_vocab(model);
     handle->vocab_size = llama_vocab_n_tokens(handle->vocab);
+    handle->eog_tokens = (int32_t *) malloc((size_t) handle->vocab_size * sizeof(int32_t));
+    if (handle->eog_tokens == NULL) {
+        llama_model_free(model);
+        free(handle);
+        set_error(err, err_len, "allocating EOG token table failed");
+        return NULL;
+    }
+    handle->eog_count = 0;
+    for (int32_t id = 0; id < handle->vocab_size; id++) {
+        if (llama_vocab_is_eog(handle->vocab, (llama_token) id)) {
+            handle->eog_tokens[handle->eog_count++] = id;
+        }
+    }
+    if (handle->eog_count == 0) {
+        free(handle->eog_tokens);
+        llama_model_free(model);
+        free(handle);
+        set_error(err, err_len, "model vocabulary has no EOG tokens");
+        return NULL;
+    }
     handle->context_size = context_size;
     handle->threads = threads;
     return handle;
@@ -77,11 +99,21 @@ void rackllm_llama_model_close(struct rackllm_llama_model * handle) {
     if (handle->model != NULL) {
         llama_model_free(handle->model);
     }
+    free(handle->eog_tokens);
     free(handle);
 }
 
 int32_t rackllm_llama_vocab_size(struct rackllm_llama_model * handle) {
     return handle->vocab_size;
+}
+
+int32_t rackllm_llama_eog_count(struct rackllm_llama_model * handle) {
+    return handle ? handle->eog_count : -1;
+}
+
+int32_t rackllm_llama_eog_ref(struct rackllm_llama_model * handle, int32_t index) {
+    if (!handle || index < 0 || index >= handle->eog_count) return -1;
+    return handle->eog_tokens[index];
 }
 
 int32_t rackllm_llama_tokenize(struct rackllm_llama_model * handle,

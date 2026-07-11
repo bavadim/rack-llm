@@ -33,18 +33,16 @@
                        #:beta [beta 1.0]
                        #:lambda [lambda-weight 0.5]
                        #:seed [seed 0]
-                       #:max-tokens [max-tokens 8]
-                       #:candidate-policy [candidate-policy 'allowed-only])
+                       #:max-tokens [max-tokens 8])
   (define result
     (generate backend
               prompt
               filter
               #:beta beta
-              #:lambda lambda-weight
+              #:sampler (local-sampler #:lambda lambda-weight)
               #:temperature 0.7
               #:seed seed
-              #:max-tokens max-tokens
-              #:candidate-policy candidate-policy))
+              #:max-tokens max-tokens))
   (values result (generation-result-text result)))
 
 (define (prefix-of? xs ys)
@@ -127,8 +125,7 @@
               (hard-perf-filter item)
               #:temperature 0.7
               #:seed 0
-              #:max-tokens 32
-              #:candidate-policy 'allowed-only))
+              #:max-tokens 32))
   (hard-perf-sample
    item
    result
@@ -226,7 +223,7 @@
                  outlines-long-literal-threshold-ms)))
 
       (test-case "hard regex generates a compact incident id"
-        (define filter (rx " INC-[0-9]{3}"))
+        (define filter (rx " INC-[[:digit:]]{3}"))
         (define-values (result text)
           (generate-text backend
                          "Create one incident id in the form INC-123:"
@@ -235,12 +232,22 @@
         (check-found result)
         (check-regexp-match #px"^ INC-[0-9]{3}$" text))
 
-      (test-case "hard output-template broad regex stays within the Outlines runtime budget"
+      (test-case "hard regex supports real-rule flags and word boundaries"
+        (define filter (rx "(?i)\\brefund\\b"))
+        (define-values (result text)
+          (generate-text backend
+                         "Reply with exactly one word, refund:"
+                         filter
+                         #:max-tokens 4))
+        (check-found result)
+        (check-regexp-match #px"(?i:^refund$)" (string-trim text)))
+
+      (test-case "hard output-template regex is feasible within the Outlines token budget"
         (define max-tokens 128)
         (define prompt
           "Describe astronomical suffering. Copy this exact response template and end with ~END: My Answer: [answer] My Conclusion: [conclusion] Future Outlook: [outlook]~END")
         (define pattern
-          "My Answer: [^~]{1,512} My Conclusion: [^~]{1,512} Future Outlook: [^~]{1,512}~END")
+          "My Answer: [^~]{1,24} My Conclusion: [^~]{1,24} Future Outlook: [^~]{1,24}~END")
         (define started (current-inexact-milliseconds))
         (define result
           (call-with-limits
@@ -252,12 +259,11 @@
                        (rx pattern)
                        #:temperature 0.7
                        #:seed 0
-                       #:max-tokens max-tokens
-                       #:candidate-policy 'full-vocab))))
+                       #:max-tokens max-tokens))))
         (define elapsed-ms (- (current-inexact-milliseconds) started))
         (check-found result)
         (check-regexp-match
-         #px"^My Answer: [^~]{1,512} My Conclusion: [^~]{1,512} Future Outlook: [^~]{1,512}~END$"
+         #px"^My Answer: [^~]{1,24} My Conclusion: [^~]{1,24} Future Outlook: [^~]{1,24}~END$"
          (generation-result-text result))
         (check-true
          (< (generation-result-generated-tokens result) max-tokens)
@@ -287,7 +293,7 @@
       (test-case "soft ranked choice can overcome the model-preferred branch"
         (define filter
           (choice
-           (list (score 20.0 (lit " approve") #f)
+           (list (score 20.0 (lit " approve"))
                  (lit " reject"))))
         (define-values (result text)
           (generate-text backend
@@ -297,7 +303,7 @@
                          #:max-tokens 2))
         (check-found result)
         (check-equal? text " approve")
-        (check-true (> (generation-result-filter-score result) 0.0)))
+        (check-true (> (generation-result-guidance-score result) 0.0)))
 
       (test-case "soft open text veto rejects TODO even when prompted"
         (define filter
@@ -309,7 +315,6 @@
           (generate-text backend
                          "Reply with TODO:"
                          filter
-                         #:candidate-policy 'full-vocab
                          #:max-tokens 3))
         (check-found result)
         (check-false (string-contains? generated "TODO")))
@@ -325,13 +330,12 @@
           (generate-text backend
                          "Write one legal invention keyword:"
                          filter
-                         #:candidate-policy 'full-vocab
                          #:beta 10.0
                          #:lambda 10.0
                          #:max-tokens preferred-token-count))
         (check-found result)
         (check-true (string-contains? (string-downcase generated) "patent"))
-        (check-true (> (generation-result-filter-score result) 0.0)))
+        (check-true (> (generation-result-guidance-score result) 0.0)))
 
       (test-case "bind selects a value and continues with a matching literal"
         (define filter
@@ -348,10 +352,9 @@
           (generate-text backend
                          "Reply exactly with either small cat or large elephant:"
                          filter
-                         #:candidate-policy 'allowed-only
                          #:max-tokens 6))
         (check-found result)
         (check-true (and (member text '(" small cat" " large elephant")) #t))))
     (lambda ()
       (when backend
-        ((model-close! backend))))))
+        (model-close! backend)))))

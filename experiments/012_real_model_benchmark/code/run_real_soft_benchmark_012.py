@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from experiments.ifbench.outcomes import Candidate, Outcome
 from experiments.ifbench.soft_methods import policy_label, threshold_for_policy
+from racket_env import racket_env
 from strict_json import strict_json_dumps
 
 
@@ -303,6 +304,7 @@ def ensure_ours_generation_samples(rows: list[dict[str, Any]]) -> list[dict[str,
             str(OURS_DEADLINE_MS),
         ],
         cwd=REPO_ROOT,
+        env=racket_env(),
         check=True,
     )
     samples = read_jsonl(OURS_GENERATION_RAW)
@@ -318,6 +320,10 @@ def ours_generation_artifact_is_current(rows: list[dict[str, Any]]) -> bool:
         row.get("provider_mode") == OURS_PROVIDER_MODE
         and row.get("approximation") == "none"
         and row.get("generation_backend") == OURS_GENERATION_BACKEND
+        and row.get("status") != "error"
+        and not row.get("failure_reason")
+        and int(row.get("generated_tokens") or 0) > 0
+        and bool(str(row.get("text") or "").strip())
         for row in rows
     )
 

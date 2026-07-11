@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import math
-import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from racket_env import racket_env
 from strict_json import strict_json_dumps
 
 
@@ -65,45 +65,20 @@ def racket_number(value: Any) -> str:
     return repr(number)
 
 
-def python_regex_to_pregexp(pattern: str) -> str:
-    normalized = pattern.replace("\\n", "\n").replace("\\t", "\t")
-    normalized = re.sub(r"\\U([0-9a-fA-F]{8})", lambda m: chr(int(m.group(1), 16)), normalized)
-    normalized = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), normalized)
-    if normalized.startswith("(?"):
-        close = normalized.find(")")
-        if close > 2:
-            flags = normalized[2:close]
-            if flags and set(flags) <= {"i", "m", "s"}:
-                body = normalized[close + 1 :]
-                body = remove_inline_flags(body)
-                return f"(?{flags}:{body})"
-    return remove_inline_flags(normalized)
-
-
-def remove_inline_flags(pattern: str) -> str:
-    output = pattern
-    for flags in ("ims", "im", "is", "ms", "i", "m", "s"):
-        output = output.replace(f"(?{flags})", "")
-    return output
-
-
-def rule_expr(rule: dict[str, Any]) -> str:
-    pattern_type = rule.get("pattern_type")
-    pattern = str(rule.get("pattern", ""))
-    if pattern_type == "literal":
-        return racket_string(pattern)
-    if pattern_type == "regex":
-        return f"(rx #px{racket_string(python_regex_to_pregexp(pattern))})"
-    raise ValueError(f"unsupported pattern_type: {pattern_type!r}")
-
-
 def watcher_source(rule: dict[str, Any]) -> str:
     kind = rule.get("kind")
-    expr = rule_expr(rule)
-    if kind == "rank":
-        return f"(rank {racket_number(rule.get('weight', 0.0))} {expr})"
-    if kind == "ban":
-        return f"(ban {expr})"
+    pattern_type = rule.get("pattern_type")
+    pattern = str(rule.get("pattern", ""))
+    if kind == "rank" and pattern_type == "literal":
+        return f"(rank {racket_number(rule.get('weight', 0.0))} {racket_string(pattern)})"
+    if kind == "rank" and pattern_type == "regex":
+        return f"(rank-rx {racket_number(rule.get('weight', 0.0))} {racket_string(pattern)})"
+    if kind == "ban" and pattern_type == "literal":
+        return f"(ban {racket_string(pattern)})"
+    if kind == "ban" and pattern_type == "regex":
+        return f"(ban-rx {racket_string(pattern)})"
+    if pattern_type not in {"literal", "regex"}:
+        raise ValueError(f"unsupported pattern_type: {pattern_type!r}")
     raise ValueError(f"unsupported rule kind: {kind!r}")
 
 
@@ -115,10 +90,10 @@ def lower_rule_set(rules: list[dict[str, Any]]) -> dict[str, Any]:
             watchers.append(watcher_source(rule))
         except Exception as error:  # noqa: BLE001 - report all lowering failures.
             errors.append(f"rule[{index}] {rule.get('rule_id', '<missing>')}: {error}")
-    guide_source = f"(text #:max-tokens {GUIDE_MAX_TOKENS}"
+    guide_source = f"(text {GUIDE_MAX_TOKENS}\n  (list"
     if watchers:
-        guide_source += "\n  " + "\n  ".join(watchers)
-    guide_source += ")"
+        guide_source += "\n    " + "\n    ".join(watchers)
+    guide_source += "))"
     digest_payload = json.dumps(watchers, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return {
         "watchers": watchers,
@@ -146,6 +121,7 @@ def validate_racket_sources(rows: list[dict[str, Any]]) -> dict[str, Any]:
         completed = subprocess.run(
             ["racket", str(path)],
             cwd=REPO_ROOT,
+            env=racket_env(),
             text=True,
             capture_output=True,
             check=False,

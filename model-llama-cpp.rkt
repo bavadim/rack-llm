@@ -3,9 +3,7 @@
 (require ffi/unsafe
          racket/runtime-path
          (only-in "private/logits.rkt"
-                  function->logits-view
-                  logits->vector
-                  vector->logits-view)
+                  function->logits-view)
          (only-in "private/model.rkt"
                   tokenizer
                   provider
@@ -16,7 +14,7 @@
 (define-runtime-path default-native-lib "native/llama/build/librackllm_llama.so")
 
 (struct native-api
-  (model-open model-close vocab-size tokenize detokenize token->piece
+  (model-open model-close vocab-size eog-count eog-ref tokenize detokenize token->piece
               session-start session-close session-logits session-commit)
   #:transparent)
 
@@ -41,9 +39,11 @@
      (lambda (err err-len)
        ((native-api-model-open api) path-string context-size threads gpu-layers err err-len))))
   (define size ((native-api-vocab-size api) handle))
+  (define eog-token-ids
+    (for/list ([i (in-range ((native-api-eog-count api) handle))])
+      ((native-api-eog-ref api) handle i)))
   (define tok
     (tokenizer
-     #:fingerprint (format "llama-cpp:~a" path-string)
      #:vocab-size size
      #:token-ref
      (lambda (id)
@@ -57,21 +57,7 @@
   (define llm-provider
     (provider
      #:vocab-size size
-     #:mode 'exact-full-vocab
-     #:metadata (hash 'name 'llama-cpp
-                     'model-path path-string
-                     'native-lib (native-lib-description native-lib-path))
-     #:next-logits
-     (lambda (prompt-ids prefix-ids)
-       (define session (native-session-start api handle (append prompt-ids prefix-ids)))
-       (dynamic-wind
-         void
-         (lambda ()
-           (vector->logits-view
-            (logits->vector
-             (native-session-logits-view api (session-ptr session) size))))
-         (lambda ()
-           (native-session-close! api session))))
+     #:eog-token-ids eog-token-ids
      #:start-session
      (lambda (prompt-ids)
        (native-session-start api handle prompt-ids))
@@ -114,6 +100,8 @@
    (ffi "rackllm_llama_model_open" (_fun _string _int32 _int32 _int32 _bytes _int64 -> _pointer))
    (ffi "rackllm_llama_model_close" (_fun _pointer -> _void))
    (ffi "rackllm_llama_vocab_size" (_fun _pointer -> _int32))
+   (ffi "rackllm_llama_eog_count" (_fun _pointer -> _int32))
+   (ffi "rackllm_llama_eog_ref" (_fun _pointer _int32 -> _int32))
    (ffi "rackllm_llama_tokenize" (_fun _pointer _bytes _int32 _pointer _int32 -> _int32))
    (ffi "rackllm_llama_detokenize" (_fun _pointer _pointer _int32 _bytes _int32 -> _int32))
    (ffi "rackllm_llama_token_to_piece" (_fun _pointer _int32 _bytes _int32 -> _int32))
