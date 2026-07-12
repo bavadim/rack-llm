@@ -9,7 +9,7 @@
          pcre-text-match?)
 
 (define-runtime-path native-lib "../native/regex/build/librackllm_pcre2.so")
-(define lib (ffi-lib native-lib))
+(define lib (ffi-lib (or (getenv "RACK_LLM_REGEX_NATIVE_LIB") native-lib)))
 
 (define vocab-open*
   (get-ffi-obj "rackllm_vocab_open" lib

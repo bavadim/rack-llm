@@ -3,95 +3,118 @@
 (require racket/list
          rackunit
          "../../main.rkt"
+         "../../private/guidance.rkt"
          "../../private/logits.rkt"
-         "../../private/model.rkt")
+         "../../private/model.rkt"
+         "../../private/weak.rkt")
 
-(define vocab (vector " a" " b" "<eog>"))
-
+(define vocab (vector " a" " b" " c" " d" "<eog>"))
 (define tok
   (tokenizer
-   #:vocab-size 3
+   #:vocab-size 5
    #:token-ref (lambda (id) (vector-ref vocab id))
    #:tokenize
-   (lambda (text)
-     (cond [(string=? text "") '()]
-           [(string=? text " a") '(0)]
-           [(string=? text " b") '(1)]
-           [else (error 'tokenize "unexpected text: ~s" text)]))
-   #:detokenize
-   (lambda (ids) (apply string-append (map (lambda (id) (vector-ref vocab id)) ids)))))
+   (lambda (source)
+     (cond [(string=? source "") '()]
+           [else
+            (define found
+              (for/first ([piece (in-vector vocab)] [id (in-naturals)]
+                          #:when (string=? piece source)) id))
+            (if found (list found) (error 'tokenize "unexpected text ~s" source))]))
+   #:detokenize (lambda (ids) (apply string-append (map (lambda (id) (vector-ref vocab id)) ids)))))
 
-(define start-count (box 0))
-(define end-count (box 0))
-
-(define p
+(define starts (box 0))
+(define ends (box 0))
+(define probabilities '(0.4 0.3 0.15 0.05 0.1))
+(define provider*
   (provider
-   #:vocab-size 3
-   #:eog-token-ids '(2)
-   #:start-session
-   (lambda (_prompt)
-     (set-box! start-count (add1 (unbox start-count)))
-     'session)
+   #:vocab-size 5
+   #:eog-token-ids '(4)
+   #:start-session (lambda (_prompt) (set-box! starts (add1 (unbox starts))) 'session)
    #:next-logits/session
-   (lambda (_session)
-     (vector->logits-view (vector (log 0.6) (log 0.3) (log 0.1))))
-   #:commit-token!
-   (lambda (_session _id) (void))
-   #:end-session!
-   (lambda (_session) (set-box! end-count (add1 (unbox end-count))))))
+   (lambda (_session) (vector->logits-view (list->vector (map log probabilities))))
+   #:commit-token! (lambda (_session _id) (void))
+   #:end-session! (lambda (_session) (set-box! ends (add1 (unbox ends))))))
+(define model* (model tok provider* (hash 'name 'tiny-pwsg) void))
 
-(define m (model tok p (hash 'name 'tiny-cars) void))
+(define spec
+  (control
+   (choice (map lit '(" a" " b" " c" " d")))
+   (prefer (lit " a"))
+   (prefer (lit " b"))
+   (avoid (lit " c"))
+   (avoid (lit " d"))))
+
+(define descriptors
+  '(("root/control/rule[0]" prefer literal)
+    ("root/control/rule[1]" prefer literal)
+    ("root/control/rule[2]" avoid literal)
+    ("root/control/rule[3]" avoid literal)))
+
+(define (synthetic-observation fires)
+  (make-weak-observation
+   descriptors 'parameterized-spec
+   (for/list ([descriptor (in-list descriptors)] [fire? (in-list fires)] #:when fire?)
+     (weak-match (car descriptor) (cadr descriptor) #t 0 1 '(0)))))
+
+(define calibration
+  (append
+   (make-list 350 (synthetic-observation '(#t #t #f #f)))
+   (make-list 120 (synthetic-observation '(#t #f #f #f)))
+   (make-list 100 (synthetic-observation '(#f #t #f #f)))
+   (make-list 300 (synthetic-observation '(#f #f #t #t)))
+   (make-list 90 (synthetic-observation '(#f #f #t #f)))
+   (make-list 80 (synthetic-observation '(#f #f #f #t)))))
 
 (module+ test
-  (test-case "weighted CARS samples the global Gibbs target and reuses its trie"
-    (set-box! start-count 0)
-    (set-box! end-count 0)
-    (define program
-      (choice (list (score (log 2.0) (lit " a"))
-                    (lit " b"))))
+  (test-case "PWSG CARS samples Q times posterior and reuses its fractional trie"
+    (set-box! starts 0)
+    (set-box! ends 0)
+    (define weak-model (fit-weak-model calibration))
+    (define qs
+      (for/vector ([source (in-list '(" a" " b" " c" " d"))])
+        (weak-posterior weak-model (observe model* spec source))))
+    (define raw
+      (for/vector ([base (in-list (take probabilities 4))] [q (in-vector qs)]) (* base q)))
+    (define z (for/sum ([x (in-vector raw)]) x))
+    (define expected (for/vector ([x (in-vector raw)]) (/ x z)))
     (define generator
-      (make-generator m "" program
-                      #:sampler (cars-sampler #:max-attempts 20)
-                      #:beta 1.0
-                      #:temperature 1.0
-                      #:max-tokens 1
-                      #:seed 17))
-    (define results (generator-sample-n! generator 2000))
-    (define a-count
-      (count (lambda (result) (equal? (generation-result-token-ids result) '(0))) results))
+      (make-generator model* "" spec
+                      #:sampler (cars-sampler #:max-attempts 100 #:weak-model weak-model)
+                      #:temperature 1.0 #:max-tokens 1 #:seed 17))
+    (define results (generator-sample-n! generator 5000))
     (check-true (andmap (lambda (result) (eq? (generation-result-status result) 'found)) results))
-    ;; q(a)*2 : q(b) = 0.6*2 : 0.3 = 4 : 1.
-    (check-= (/ a-count (length results)) 0.8 0.04)
-    (define metrics (generation-result-metrics (last results)))
-    (check-equal? (generation-metrics-sampler metrics) 'cars)
-    (check-true (> (generation-metrics-trie-nodes metrics) 1))
-    (check-= (generation-metrics-root-envelope metrics) 0.75 1e-9)
-    (check-equal? (unbox start-count) (unbox end-count))
-    (check-exn #rx"active generators" (lambda () (model-close! m)))
+    (for ([id (in-range 4)])
+      (define observed
+        (/ (count (lambda (result) (equal? (generation-result-token-ids result) (list id))) results)
+           (length results)))
+      (check-= observed (vector-ref expected id) 0.035))
+    (define last-metrics (generation-result-metrics (last results)))
+    (check-true (> (generation-metrics-trie-nodes last-metrics) 1))
+    (check-true (> (generation-metrics-weak-cache-hits last-metrics) 0))
+    (check-equal? (unbox starts) (unbox ends))
     (generator-close! generator))
 
-  (test-case "weighted CARS rejects dynamic bind before opening a session"
-    (define before (unbox start-count))
-    (check-exn
-     #rx"does not support bind"
-     (lambda ()
-       (make-generator
-        m ""
-        (bind (lit " a") (lambda (_value) (lit " b")))
-        #:sampler (cars-sampler #:max-attempts 2)
-        #:beta 1.0)))
-    (check-equal? (unbox start-count) before))
+  (test-case "schema mismatch and unsupported PWSG spec fail before sessions"
+    (define weak-model (fit-weak-model calibration))
+    (define before (unbox starts))
+    (check-exn #rx"unsupported PWSG program"
+               (lambda ()
+                 (make-generator model* "" (rx " a")
+                                 #:sampler (cars-sampler #:max-attempts 2
+                                                        #:weak-model weak-model))))
+    (check-exn #rx"incompatible weak model"
+               (lambda ()
+                 (make-generator model* "" (control (text 1) (prefer (lit " a")))
+                                 #:sampler (cars-sampler #:max-attempts 2
+                                                        #:weak-model weak-model))))
+    (check-equal? (unbox starts) before))
 
-  (test-case "attempt exhaustion returns no approximate fallback and closes sessions"
-    (define before-start (unbox start-count))
-    (define before-end (unbox end-count))
+  (test-case "attempt exhaustion returns no approximate fallback"
     (define result
-      (generate m "" (choice '())
+      (generate model* "" (choice '())
                 #:sampler (cars-sampler #:max-attempts 1)
-                #:beta 0.0
-                #:max-tokens 1
-                #:seed 3))
-    (check-equal? (generation-result-status result) 'not-found-attempts)
-    (check-equal? (generation-result-token-ids result) '())
-    (check-equal? (- (unbox start-count) before-start) 1)
-    (check-equal? (- (unbox end-count) before-end) 1)))
+                #:temperature 1.0 #:max-tokens 1 #:seed 3))
+    (check-not-false (member (generation-result-status result)
+                             '(not-found-attempt-budget not-found-support)))
+    (check-false (generation-result-hard-ok? result))))

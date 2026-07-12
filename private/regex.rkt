@@ -1,6 +1,7 @@
 #lang typed/racket/base
 
-(require racket/promise
+(require racket/list
+         racket/promise
          racket/string)
 
 (require/typed "pcre2-ffi.rkt"
@@ -17,15 +18,20 @@
   [pcre-terminal? (-> NativeState Boolean)]
   [pcre-text-match? (-> String String Boolean)])
 
-(provide RegexProgram RegexVocabulary RegexMachine RegexState
+(provide RegexProgram ErePattern RegexVocabulary RegexMachine RegexState
          make-regex-vocabulary regex-vocabulary-texts
          parse-regex-program parse-regex-search-program
+         parse-ere-pattern ere-pattern-source ere-pattern-has-end-anchor?
+         ere-full-program ere-search-program literal-search-program
          instantiate-regex-machine regex-program-text-match?
          regex-initial regex-step regex-token-valid?
          regex-accepting? regex-terminal? regex-allowed-ids regex-accepted-ids)
 
 (struct regex-program
   ([source : String] [search? : Boolean] [restart-safe? : Boolean])
+  #:transparent)
+(struct ere-pattern
+  ([source : String] [compiled : String] [has-end-anchor? : Boolean])
   #:transparent)
 (struct regex-vocabulary
   ([texts : (Vectorof String)]
@@ -35,6 +41,7 @@
 (struct regex-state ([native : NativeState]) #:transparent)
 
 (define-type RegexProgram regex-program)
+(define-type ErePattern ere-pattern)
 (define-type RegexVocabulary regex-vocabulary)
 (define-type RegexMachine regex-machine)
 (define-type RegexState regex-state)
@@ -50,6 +57,149 @@
 (define (parse-regex-search-program source)
   (validate-pattern source)
   (regex-program source #t (restart-safe-source? source)))
+
+;; `ere` is deliberately a small, reproducible language. PCRE2 remains the
+;; execution engine, but user input is parsed through this allowlist first.
+(: parse-ere-pattern (-> String ErePattern))
+(define (parse-ere-pattern source)
+  (define source-length (string-length source))
+  (define out (open-output-string))
+  (define has-end? : Boolean #f)
+  (define group-depth : Natural 0)
+  (define in-class? : Boolean #f)
+  (define class-first? : Boolean #f)
+  (define can-repeat? : Boolean #f)
+  (let loop : Void ([i : Natural 0])
+    (cond
+      [(>= i source-length)
+       (when in-class? (error 'ere "unterminated character class in ~s" source))
+       (unless (zero? group-depth) (error 'ere "unterminated group in ~s" source))
+       (void)]
+      [else
+       (define ch (string-ref source i))
+       (cond
+         [(char=? ch #\\)
+          (when (>= (add1 i) source-length) (error 'ere "trailing escape in ~s" source))
+          (define escaped (string-ref source (add1 i)))
+          (unless (or (memv escaped '(#\n #\r #\t #\\ #\. #\^ #\$ #\| #\(
+                                      #\) #\[ #\] #\{ #\} #\* #\+ #\? #\-))
+                      (and in-class? (char=? escaped #\^)))
+            (error 'ere "unsupported escape \\~a in ~s" escaped source))
+          (write-char #\\ out)
+          (write-char escaped out)
+          (set! can-repeat? #t)
+          (loop (assert (+ i 2) exact-nonnegative-integer?))]
+         [in-class?
+          (cond
+            [(and class-first? (char=? ch #\^))
+             (write-char ch out)
+             (set! class-first? #f)
+             (loop (add1 i))]
+            [(char=? ch #\])
+             (when class-first? (error 'ere "empty character class in ~s" source))
+             (write-char ch out)
+             (set! in-class? #f)
+             (set! can-repeat? #t)
+             (loop (add1 i))]
+            [else
+             (write-char ch out)
+             (set! class-first? #f)
+             (loop (add1 i))])]
+         [(char=? ch #\[)
+          (write-char ch out)
+          (set! in-class? #t)
+          (set! class-first? #t)
+          (set! can-repeat? #f)
+          (loop (add1 i))]
+         [(char=? ch #\()
+          (when (and (< (add1 i) source-length) (char=? (string-ref source (add1 i)) #\?))
+            (error 'ere "PCRE extensions are unsupported in ~s" source))
+          (display "(?:" out)
+          (set! group-depth (add1 group-depth))
+          (set! can-repeat? #f)
+          (loop (add1 i))]
+         [(char=? ch #\))
+          (when (zero? group-depth) (error 'ere "unmatched ')' in ~s" source))
+          (write-char ch out)
+          (set! group-depth (assert (sub1 group-depth) exact-nonnegative-integer?))
+          (set! can-repeat? #t)
+          (loop (add1 i))]
+         [(char=? ch #\^)
+          (display "\\A" out)
+          (set! can-repeat? #f)
+          (loop (add1 i))]
+         [(char=? ch #\$)
+          (display "\\z" out)
+          (set! has-end? #t)
+          (set! can-repeat? #f)
+          (loop (add1 i))]
+         [(or (char=? ch #\*) (char=? ch #\+) (char=? ch #\?))
+          (unless can-repeat? (error 'ere "quantifier has no atom in ~s" source))
+          (write-char ch out)
+          (set! can-repeat? #f)
+          (loop (add1 i))]
+         [(char=? ch #\{)
+          (unless can-repeat? (error 'ere "quantifier has no atom in ~s" source))
+          (define close : (Option Natural)
+            (let find : (Option Natural) ([j : Natural (add1 i)])
+              (cond [(>= j source-length) #f]
+                    [(char=? (string-ref source j) #\}) j]
+                    [else (find (add1 j))])))
+          (unless close (error 'ere "unterminated repeat in ~s" source))
+          (define close* (assert close exact-nonnegative-integer?))
+          (define body (substring source (add1 i) close*))
+          (define parts (string-split body "," #:trim? #f))
+          (unless (and (or (= (length parts) 1) (= (length parts) 2))
+                       (regexp-match? #px"^[0-9]+$" (car parts))
+                       (or (= (length parts) 1)
+                           (string=? (cadr parts) "")
+                           (regexp-match? #px"^[0-9]+$" (cadr parts))))
+            (error 'ere "invalid repeat {~a} in ~s" body source))
+          (when (and (= (length parts) 2) (not (string=? (cadr parts) ""))
+                     (> (assert (string->number (car parts)) exact-nonnegative-integer?)
+                        (assert (string->number (cadr parts)) exact-nonnegative-integer?)))
+            (error 'ere "repeat minimum exceeds maximum in ~s" source))
+          (display (substring source i (add1 close*)) out)
+          (set! can-repeat? #f)
+          (loop (add1 close*))]
+         [(or (char=? ch #\}) (char=? ch #\]))
+          (error 'ere "unmatched '~a' in ~s" ch source)]
+         [(char=? ch #\|)
+          (write-char ch out)
+          (set! can-repeat? #f)
+          (loop (add1 i))]
+         [else
+          (write-char ch out)
+          (set! can-repeat? #t)
+          (loop (add1 i))])]))
+  (define compiled (get-output-string out))
+  (validate-pattern compiled)
+  (ere-pattern source compiled has-end?))
+
+(: ere-full-program (-> ErePattern RegexProgram))
+(define (ere-full-program pattern)
+  (define source (ere-pattern-compiled pattern))
+  (regex-program source #f (restart-safe-source? source)))
+
+(: ere-search-program (-> ErePattern RegexProgram))
+(define (ere-search-program pattern)
+  (define source (ere-pattern-compiled pattern))
+  (regex-program source #t (restart-safe-source? source)))
+
+(: quote-literal (-> String String))
+(define (quote-literal source)
+  (list->string
+   (append-map
+    (lambda ([ch : Char])
+      (if (memv ch '(#\\ #\. #\^ #\$ #\| #\( #\) #\[ #\] #\{ #\} #\* #\+ #\?))
+          (list #\\ ch)
+          (list ch)))
+    (string->list source))))
+
+(: literal-search-program (-> String RegexProgram))
+(define (literal-search-program source)
+  (define quoted (quote-literal source))
+  (regex-program quoted #t (restart-safe-source? quoted)))
 
 ;; PCRE2's restart workspace is a streaming residual only for consuming
 ;; regular constructs. Anything context-sensitive is replayed from the full

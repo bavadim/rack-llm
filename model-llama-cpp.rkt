@@ -15,7 +15,7 @@
 
 (struct native-api
   (model-open model-close vocab-size eog-count eog-ref tokenize detokenize token->piece
-              session-start session-close session-logits session-commit)
+              session-start session-reset session-close session-logits session-commit)
   #:transparent)
 
 (define sessions (make-hash))
@@ -42,6 +42,7 @@
   (define eog-token-ids
     (for/list ([i (in-range ((native-api-eog-count api) handle))])
       ((native-api-eog-ref api) handle i)))
+  (define idle-sessions (box '()))
   (define tok
     (tokenizer
      #:vocab-size size
@@ -60,7 +61,18 @@
      #:eog-token-ids eog-token-ids
      #:start-session
      (lambda (prompt-ids)
-       (native-session-start api handle prompt-ids))
+       (define idle (unbox idle-sessions))
+       (if (null? idle)
+           (native-session-start api handle prompt-ids)
+           (let ([ptr (car idle)])
+             (set-box! idle-sessions (cdr idle))
+             (with-handlers ([exn:fail?
+                              (lambda (exn)
+                                (set-box! idle-sessions
+                                          (cons ptr (unbox idle-sessions)))
+                                (raise exn))])
+               (native-session-reset! api ptr prompt-ids))
+             (register-session! ptr))))
      #:next-logits/session
      (lambda (session)
        (native-session-logits-view api (session-ptr session) size))
@@ -77,11 +89,16 @@
        (void))
      #:end-session!
      (lambda (session)
-       (native-session-close! api session))))
+       (set-box! idle-sessions
+                 (cons (unregister-session! session) (unbox idle-sessions))))))
   (model tok
          llm-provider
          (hash 'name 'llama-cpp 'model-path path-string)
-         (lambda () ((native-api-model-close api) handle))))
+         (lambda ()
+           (for ([ptr (in-list (unbox idle-sessions))])
+             ((native-api-session-close api) ptr))
+           (set-box! idle-sessions '())
+           ((native-api-model-close api) handle))))
 
 (define (load-native-api override)
   (define key (or override 'default))
@@ -106,6 +123,7 @@
    (ffi "rackllm_llama_detokenize" (_fun _pointer _pointer _int32 _bytes _int32 -> _int32))
    (ffi "rackllm_llama_token_to_piece" (_fun _pointer _int32 _bytes _int32 -> _int32))
    (ffi "rackllm_llama_session_start" (_fun _pointer _pointer _int32 _bytes _int64 -> _pointer))
+   (ffi "rackllm_llama_session_reset" (_fun _pointer _pointer _int32 _bytes _int64 -> _int32))
    (ffi "rackllm_llama_session_close" (_fun _pointer -> _void))
    (ffi "rackllm_llama_session_logits" (_fun _pointer _bytes _int64 -> _pointer))
    (ffi "rackllm_llama_session_commit" (_fun _pointer _int32 _bytes _int64 -> _int32))))
@@ -206,10 +224,25 @@
         (length ids)
         err
         err-len))))
+  (register-session! ptr))
+
+(define (register-session! ptr)
   (define id (unbox next-session-id))
   (set-box! next-session-id (add1 id))
   (hash-set! sessions id ptr)
   id)
+
+(define (native-session-reset! api ptr ids)
+  (call/native-error
+   'llama-cpp-reset-session!
+   (lambda (err err-len)
+     (zero? ((native-api-session-reset api)
+             ptr
+             (make-int32-buffer ids)
+             (length ids)
+             err
+             err-len))))
+  (void))
 
 (define (session-ptr session)
   (unless (exact-nonnegative-integer? session)
@@ -219,10 +252,10 @@
             (lambda ()
               (error 'llama-cpp-session "unknown or closed native session id: ~a" session))))
 
-(define (native-session-close! api session)
+(define (unregister-session! session)
   (define ptr (session-ptr session))
-  ((native-api-session-close api) ptr)
-  (hash-remove! sessions session))
+  (hash-remove! sessions session)
+  ptr)
 
 (define (native-session-logits-view api session vocab-size)
   (define logits-ptr

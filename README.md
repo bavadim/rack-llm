@@ -1,134 +1,97 @@
 # rack-llm
 
-`rack-llm` is a typed token-native core for controlled generation.
-
-The public model is:
-
-```text
-Model + prompt text + program -> generation-result
-```
-
-Tokenizer, provider, and logits state are private runtime details supplied by a
-model implementation.
-
-## Public API
-
-Core API:
+`rack-llm` is a token-native Racket library for exact hard-constrained and
+programmatic weak sequence generation. The runtime combines an immutable
+program, a stateful model session and CARS rejection sampling.
 
 ```racket
-(require rack-llm)
-```
+(require rack-llm
+         rack-llm/model-llama-cpp)
 
-Model implementation:
+(define spec
+  (control
+   (text 64)
+   (prefer (ere "US[0-9]+"))
+   (prefer (ere "[0-9]+%"))
+   (avoid  (ere "TODO|unknown"))
+   (ban    (lit "private key"))))
 
-```racket
-(require rack-llm/model-llama-cpp)
-```
+(define observations
+  (for/list ([candidate calibration-corpus])
+    (observe model spec candidate)))
+(define weak-model (fit-weak-model observations))
 
-A model is passed directly to `generate`:
-
-```racket
-(define m
-  (llama-cpp-model
-   #:model-path "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf"))
-```
-
-Programs are immutable descriptions. `generate` compiles them with the model
-tokenizer internally:
-
-```racket
-(define f
-  (choice (list (lit " yes")
-                (lit " no"))))
-
-(define r
-  (generate m
-            "Reply yes or no:"
-            f))
-
-(generation-result-text r)
+(define generator
+  (make-generator
+   model prompt spec
+   #:sampler (cars-sampler #:max-attempts 100
+                           #:weak-model weak-model)
+   #:temperature 0.7
+   #:max-tokens 64
+   #:seed 0))
+(define result (generator-sample! generator))
+(generator-close! generator)
 ```
 
 ## Programs
 
-Atomic programs:
+- `lit` is an exact token sequence.
+- `rx` is the extended PCRE2 hard-regex API.
+- `ere` is the portable case-sensitive Unicode profile used by PWSG.
+- `seq`, `choice`, and bounded `repeat` compose programs.
+- `text` is an open `0..n` token fragment and must be in tail position.
+- `pure` and `bind` remain available for dynamic hard-only programs.
+- `control` scopes `prefer`, `avoid`, and hard `ban` rules.
+
+`prefer` emits `+1` on a match and `0` otherwise. `avoid` emits `-1` on a
+match and `0` otherwise. Non-fire is an observed abstention in the weak model.
+`ban` changes the hard language and never appears in the weak label vector.
+
+The ERE profile supports literals, `.`, alternation, groups, character classes,
+`* + ? {m} {m,n} {m,}`, `^`, `$`, and escaped metacharacters/newlines. It does
+not support flags, shorthand character classes, lookaround, backreferences, or
+other PCRE extensions. A guide uses fullmatch semantics; a control rule uses
+search semantics relative to its scope.
+
+## Weak model
+
+`fit-weak-model` fits a constrained two-component product-Bernoulli model with
+EM. Each rule learns `P(fire | bad)` and `P(fire | good)`; polarity constraints
+orient the latent classes. Fits with fewer than three informative independent
+columns, duplicate columns, non-convergence, or collapse fail closed.
+
+Models and observations carry structural SHA-256 fingerprints. Structural
+schemas intentionally exclude concrete pattern strings so one model can be fit
+across specifications produced by the same parameterized builder. Full spec
+fingerprints retain the concrete patterns. Models can be saved and loaded as
+versioned JSON.
+
+## Exact sampling
+
+With posterior `p(x)` and threshold `tau`, PWSG CARS samples
 
 ```text
-lit   exact token sequence
-rx    token-level regex fullmatch
-pure  accepting value without consuming tokens
-text  open generation for a fixed token budget
+pi(x) proportional to Q_temperature(x) H(x) p(x) 1[p(x) >= tau].
 ```
 
-Combinators:
+The default threshold is zero. Hard-only CARS uses terminal mass one. The
+fractional envelope trie is reused across calls to one generator; random weak
+rejections update a terminal to its posterior mass, never to zero. Temperature
+affects only the model distribution. There are no manual scores, beta, local
+potentials, top-k approximation, or fallback result.
+
+`#:sampler` and its attempt budget are required. Deadline checks occur between
+complete attempts, so one attempt may overrun a deadline without censoring a
+candidate midway.
+
+## Layout
 
 ```text
-seq     ordered composition
-choice  alternatives from a list of programs
-repeat  bounded repetition
-bind    dependent continuation
+main.rkt                 public DSL, observations and exact generator
+private/guidance.rkt     Program AST and token-native residual states
+private/weak.rkt         observations, EM and model persistence
+private/cars.rkt         reusable fractional envelope trie
+private/regex.rkt        ERE parser and PCRE2 runtime facade
+private/model.rkt        tokenizer, provider sessions and model lifetime
+model-llama-cpp.rkt      native stateful llama.cpp model
 ```
-
-Soft constraints:
-
-```text
-score   reward wrapper
-rank    observer that rewards a token sequence inside text
-ban     observer that rejects a token sequence inside text
-rank-rx observer that rewards a regex search match inside text
-ban-rx  observer that rejects a regex search match inside text
-weight  learned weighted observer from labeled string features
-```
-
-Regex patterns use PCRE2 syntax. Consuming regular patterns use restartable DFA
-matching over token pieces; context-sensitive constructs such as lookaround,
-boundaries, atomic groups, `\\R`, and `\\X` use exact full-prefix replay.
-Backreferences and the remaining unsupported constructs are rejected when the
-program is built.
-
-The default local sampler combines model logits and guidance deltas as:
-
-```text
-lm-logit + beta * (delta-score + lambda * delta-potential)
-```
-
-For exact constrained sampling, use CARS:
-
-```racket
-(define g
-  (make-generator m "Reply yes or no:" f
-                  #:sampler (cars-sampler #:max-attempts 100)
-                  #:beta 0.0))
-(define samples (generator-sample-n! g 10))
-(generator-close! g)
-```
-
-CARS samples from the temperature-adjusted model conditioned on the hard
-language. With `beta > 0`, completed outputs are additionally weighted by
-`exp((beta / temperature) * guidance-score)`. Its fractional envelope trie is
-reused across calls to the same generator.
-
-## Modules
-
-```text
-main.rkt              public facade: API types, builders, generate
-private/logits.rkt    logits view abstraction for provider internals
-private/model.rkt     tokenizer/provider/model runtime objects
-private/guidance.rkt  guidance runtime state machines and token selection
-private/regex.rkt     typed PCRE2 DFA/token transition facade
-private/sampling.rkt  Gumbel sampling math for scored candidates
-private/cars.rkt      persistent fractional-envelope CARS trie
-model-llama-cpp.rkt   Qwen GGUF model implementation through llama.cpp
-```
-
-There is no compatibility layer for the old guide/runtime API, no mock provider
-in the library, and no public `make-*` constructors.
-
-## E2E Scenarios
-
-Executable public API scenarios live in `tests/e2e-real-test.rkt` and run
-against the real Qwen model. They cover finite hard choices, regex hard
-constraints, soft open text, and dependent `bind` composition.
-
-The core API boundary is intentionally narrow. Exact full-vocabulary soft
-decoding is measured against the native GGUF backend.

@@ -234,6 +234,31 @@ rackllm_llama_session_start(struct rackllm_llama_model * handle,
     return session;
 }
 
+int32_t rackllm_llama_session_reset(struct rackllm_llama_session * session,
+                                    const int32_t * prompt,
+                                    int32_t n_prompt,
+                                    char * err,
+                                    size_t err_len) {
+    llama_token bos_token = 0;
+    if (session == NULL || session->ctx == NULL) {
+        set_error(err, err_len, "cannot reset a null session");
+        return 1;
+    }
+    if (n_prompt <= 0) {
+        bos_token = llama_vocab_bos(session->owner->vocab);
+        if (bos_token < 0) {
+            set_error(err, err_len, "prompt token ids are empty and model has no BOS token");
+            return 1;
+        }
+        prompt = &bos_token;
+        n_prompt = 1;
+    }
+
+    llama_memory_clear(llama_get_memory(session->ctx), false);
+    session->pos = 0;
+    return decode_tokens(session, prompt, n_prompt, err, err_len);
+}
+
 void rackllm_llama_session_close(struct rackllm_llama_session * session) {
     if (session == NULL) {
         return;

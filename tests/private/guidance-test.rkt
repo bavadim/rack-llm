@@ -1,111 +1,72 @@
 #lang racket/base
 
 (require rackunit
+         "../../main.rkt"
          "../../private/guidance.rkt"
-         (only-in "../../private/model.rkt"
-                  tokenize
-                  tokenizer)
-         (only-in "../../private/regex.rkt"
-                  make-regex-vocabulary
-                  parse-regex-search-program))
+         "../../private/regex.rkt")
 
-(define vocab
-  (list " yes" " no" " refund" " TODO" " cat" " small"))
-
-(define vocab-vector (list->vector vocab))
-
-(define (token-id text)
-  (let loop ([id 0])
-    (cond
-      [(= id (vector-length vocab-vector))
-       (error 'token-id "missing token text: ~s" text)]
-      [(equal? (vector-ref vocab-vector id) text) id]
-      [else (loop (add1 id))])))
-
-(define tok
-  (tokenizer
-   #:vocab-size (vector-length vocab-vector)
-   #:token-ref (lambda (id) (vector-ref vocab-vector id))
-   #:tokenize
-   (lambda (text)
-     (list (token-id text)))
-   #:detokenize
-   (lambda (ids)
-     (apply string-append (map (lambda (id) (vector-ref vocab-vector id)) ids)))))
-
-(define (compile program)
-  (compile-guidance program
-                    (lambda (text) (tokenize tok text))
-                    (make-regex-vocabulary vocab-vector)))
+(define pieces (vector "a" "b" "x" "!" "\n"))
+(define (encode text)
+  (for/list ([ch (in-string text)])
+    (or (for/first ([piece (in-vector pieces)] [i (in-naturals)]
+                    #:when (string=? piece (string ch))) i)
+        (error 'encode "unknown character ~s" ch))))
+(define vocabulary (make-regex-vocabulary pieces))
+(define (compile program) (compile-guidance program encode vocabulary))
+(define (run program ids)
+  (define guidance (compile program))
+  (values guidance
+          (for/fold ([state (guidance-initial guidance)]) ([id (in-list ids)])
+            (guidance-step guidance state id))))
 
 (module+ test
-  (test-case "score wraps a hard literal program"
-    (define g
-      (compile
-       (make-score-program 5.0 (make-lit-program " yes"))))
-    (define st (guidance-step g (guidance-initial g) (token-id " yes")))
-    (check-true (guidance-accepting? st))
-    (check-equal? (guidance-score st) 5.0))
+  (test-case "control emits scoped prefer/avoid labels in structural order"
+    (define program
+      (control (text 4)
+               (prefer (ere "ab"))
+               (avoid (lit "x"))))
+    (define-values (_ state) (run program '(0 1 3)))
+    (check-true (guidance-accepting? state))
+    (define matches (guidance-weak-matches state))
+    (check-equal? (map weak-match-path matches)
+                  '("root/control/rule[0]" "root/control/rule[1]"))
+    (check-equal? (map weak-match-matched? matches) '(#t #f))
+    (check-equal? (map weak-match-start-token matches) '(0 0))
+    (check-equal? (map weak-match-end-token matches) '(3 3)))
 
-  (test-case "text can mix rank reward and hard ban observers"
-    (define g
-      (compile
-       (make-text-program
-        1
-        (list (make-rank-observer 3.0 " refund")
-              (make-ban-observer " TODO")))))
-    (define rewarded (guidance-step g (guidance-initial g) (token-id " refund")))
-    (define banned (guidance-step g (guidance-initial g) (token-id " TODO")))
-    (check-true (guidance-accepting? rewarded))
-    (check-equal? (guidance-score rewarded) 3.0)
-    (check-true (guidance-dead? banned)))
+  (test-case "end-anchored ban blocks only the current scope boundary"
+    (define program (control (text 3) (ban (ere "x$"))))
+    (define-values (guidance at-x) (run program '(2)))
+    (check-false (guidance-accepting? at-x))
+    (define extended (guidance-step guidance at-x 0))
+    (check-true (guidance-accepting? extended))
+    (check-false (guidance-dead? extended)))
 
-  (test-case "text can mix regex reward and regex hard ban observers"
-    (define g
-      (compile
-       (make-text-program
-        1
-        (list (make-rx-rank-observer 4.0 (parse-regex-search-program "(?i)refund"))
-              (make-rx-ban-observer (parse-regex-search-program "(?i)todo"))))))
-    (define rewarded (guidance-step g (guidance-initial g) (token-id " refund")))
-    (define banned (guidance-step g (guidance-initial g) (token-id " TODO")))
-    (check-true (guidance-accepting? rewarded))
-    (check-equal? (guidance-score rewarded) 4.0)
-    (check-true (guidance-dead? banned)))
+  (test-case "unanchored ban is latched immediately"
+    (define program (control (text 3) (ban (ere "x"))))
+    (define-values (_ state) (run program '(0 2)))
+    (check-true (guidance-dead? state)))
 
-  (test-case "seq preserves value and accumulated guidance score"
-    (define g
-      (compile
-       (make-seq-program
-        (list (make-score-program 2.0 (make-lit-program " yes"))
-              (make-pure-program 'ok)))))
-    (define st (guidance-step g (guidance-initial g) (token-id " yes")))
-    (check-true (guidance-accepting? st))
-    (check-equal? (guidance-value st) 'ok)
-    (check-equal? (guidance-score st) 2.0))
+  (test-case "text accepts from zero through its bound and then becomes terminal"
+    (define program (text 2))
+    (define-values (guidance empty) (run program '()))
+    (check-true (guidance-accepting? empty))
+    (check-false (guidance-terminal? guidance empty))
+    (define full (guidance-step guidance (guidance-step guidance empty 0) 1))
+    (check-true (guidance-accepting? full))
+    (check-true (guidance-terminal? guidance full))
+    (check-true (guidance-dead? (guidance-step guidance full 0))))
 
-  (test-case "bind selects a value and continues with another program"
-    (define g
-      (compile
-       (make-bind-program
-        (make-seq-program (list (make-lit-program " small")
-                                (make-pure-program 'small)))
-        (lambda (value)
-          (case value
-            [(small) (make-lit-program " cat")]
-            [else (error 'guidance-test "unexpected value: ~a" value)])))))
-    (define st1 (guidance-step g (guidance-initial g) (token-id " small")))
-    (check-false (guidance-accepting? st1))
-    (define st2 (guidance-step g st1 (token-id " cat")))
-    (check-true (guidance-accepting? st2)))
+  (test-case "repeat does not accept while another item is partial"
+    (define program (repeat 1 2 (seq (list (lit "a") (lit "b")))))
+    (define-values (guidance one) (run program '(0 1)))
+    (check-true (guidance-accepting? one))
+    (define partial (guidance-step guidance one 0))
+    (check-false (guidance-accepting? partial))
+    (check-true (guidance-accepting? (guidance-step guidance partial 1))))
 
-  (test-case "repeat does not accept a partially started invalid item"
-    (define g (compile (make-repeat-program 1 3 (make-lit-program " yes"))))
-    (define boundary (guidance-step g (guidance-initial g) (token-id " yes")))
-    (check-true (guidance-accepting? boundary))
-    (define invalid (guidance-step g boundary (token-id " no")))
-    (check-true (guidance-dead? invalid)))
-
-  (test-case "repeat rejects nullable items"
-    (check-exn #rx"nullable repeated programs"
-               (lambda () (compile (make-repeat-program 0 2 (make-pure-program 'x)))))))
+  (test-case "PWSG profile rejects advanced and ambiguous constructs"
+    (check-true (pwsg-compatible? (control (text 4) (prefer (ere "a")))))
+    (check-false (pwsg-compatible? (rx "a+")))
+    (check-false (pwsg-compatible? (seq (list (text 2) (lit "x")))))
+    (check-false (pwsg-compatible? (repeat 1 2 (text 2))))))

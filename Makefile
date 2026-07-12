@@ -23,7 +23,7 @@ install:
 	$(RACO) pkg install --auto
 
 compile:
-	$(RACO) make main.rkt model-llama-cpp.rkt tests/contract-test.rkt tests/e2e-real-test.rkt tests/e2e-sampler-test.rkt tests/private/regex-test.rkt tests/private/sampling-test.rkt tests/private/cars-test.rkt tests/private/runtime-test.rkt tests/private/logits-test.rkt tests/private/llama-cpp-test.rkt
+	$(RACO) make main.rkt model-llama-cpp.rkt tests/contract-test.rkt tests/e2e-real-test.rkt tests/e2e-sampler-test.rkt tests/private/regex-test.rkt tests/private/sampling-test.rkt tests/private/cars-test.rkt tests/private/guidance-test.rkt tests/private/weak-test.rkt tests/private/runtime-test.rkt tests/private/logits-test.rkt tests/private/llama-cpp-test.rkt
 
 native-llama:
 	$(MAKE) -C native/llama \
