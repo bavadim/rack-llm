@@ -10,6 +10,7 @@ jobs:
       - uses: Bogdanp/setup-racket@v1.14
         with:
           version: stable
-      - run: sudo apt-get update && sudo apt-get install -y libpcre2-dev
-      - run: raco pkg install --auto --name rack-llm --link .
+      - run: sudo apt-get update && sudo apt-get install -y build-essential libpcre2-dev
+      - run: make native-regex
+      - run: raco pkg install --auto --name rack-llm --link "$PWD"
       - run: make unit-ci

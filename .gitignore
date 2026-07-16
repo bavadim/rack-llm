@@ -18,4 +18,5 @@ __pycache__/
 .pytest_cache/
 bench/results/
 native/llama/build/
+native/regex/build/
 .DS_Store

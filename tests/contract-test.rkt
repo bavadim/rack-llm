@@ -22,7 +22,8 @@
                    weak-observation-labels weak-model-fingerprint
                    generation-result-weak generation-result-tokenizer-fingerprint
                    generation-result-distribution-guarantee
-                   generation-metrics-hard-proposals generation-metrics-weak-rejections))])
+                   generation-metrics-hard-proposals generation-metrics-weak-rejections
+                   generation-metrics-weak-policy))])
       (check-not-equal? (exported-value core-module name) 'missing
                         (format "~a should be exported" name)))
     (for ([name (in-list '(score rank rank-rx weight ban-rx local-sampler

@@ -55,6 +55,76 @@
    (make-list 380 (observe compiled " d"))))
 
 (module+ test
+  (test-case "prefix-overlapping sequence samples the hard language exactly"
+    (define prefix
+      (compile-spec
+       model*
+       (seq (list (choice (list (lit " a")
+                                (seq (list (lit " a") (lit " b")))))
+                  (lit " c")))))
+    (define generator
+      (make-generator prefix ""
+                      #:sampler (cars-sampler #:max-attempts 100)
+                      #:temperature 1.0 #:max-tokens 4 #:seed 101))
+    (define results (generator-sample-n! generator 4000))
+    (define outcomes '(" a c" " a b c"))
+    (define raw (vector (* 0.4 0.15) (* 0.4 0.3 0.15)))
+    (define z (for/sum ([x (in-vector raw)]) x))
+    (define tv
+      (* 0.5
+         (for/sum ([text (in-list outcomes)] [weight (in-vector raw)])
+           (abs (- (/ (count (lambda (result)
+                              (string=? text (generation-result-text result)))
+                            results)
+                      (length results))
+                   (/ weight z))))))
+    (check-true (< tv 0.035)
+                (format "tv=~a counts=~a"
+                        tv
+                        (map (lambda (text)
+                               (count (lambda (result)
+                                        (string=? text (generation-result-text result)))
+                                      results))
+                             outcomes)))
+    (generator-close! generator)
+    (compiled-spec-close! prefix))
+
+  (test-case "ambiguous repeat derivations do not multiply terminal mass"
+    (define ambiguous
+      (compile-spec
+       model*
+       (repeat 1 2
+               (choice (list (lit " a")
+                             (seq (list (lit " a") (lit " a"))))))))
+    (define generator
+      (make-generator ambiguous ""
+                      #:sampler (cars-sampler #:max-attempts 100)
+                      #:temperature 1.0 #:max-tokens 5 #:seed 203))
+    (define results (generator-sample-n! generator 5000))
+    (define outcomes
+      (for/list ([n (in-range 1 5)])
+        (apply string-append (make-list n " a"))))
+    (define raw (for/vector ([n (in-range 1 5)]) (expt 0.4 n)))
+    (define z (for/sum ([x (in-vector raw)]) x))
+    (define tv
+      (* 0.5
+         (for/sum ([text (in-list outcomes)] [weight (in-vector raw)])
+           (abs (- (/ (count (lambda (result)
+                              (string=? text (generation-result-text result)))
+                            results)
+                      (length results))
+                   (/ weight z))))))
+    (check-true (< tv 0.035)
+                (format "tv=~a counts=~a"
+                        tv
+                        (map (lambda (text)
+                               (count (lambda (result)
+                                        (string=? text (generation-result-text result)))
+                                      results))
+                             outcomes)))
+    (generator-close! generator)
+    (compiled-spec-close! ambiguous))
+
   (test-case "multi-token shared prefixes stay exact with a frozen reused trie"
     (define multi
       (compile-spec
@@ -137,12 +207,62 @@
     (check-true (< tv 0.035))
     (generator-close! threshold-generator))
 
+  (test-case "terminal cache survives CarsNode envelope mutation"
+    (define one-path-provider
+      (provider
+       #:vocab-size 5
+       #:eog-token-ids '(4)
+       #:start-session (lambda (_prompt) 'one-path-session)
+       #:next-logits/session
+       (lambda (_session)
+         (vector->logits-view (vector 0.0 -inf.0 -inf.0 -inf.0 0.0)))
+       #:commit-token! (lambda (_session _id) (void))
+       #:end-session! (lambda (_session) (void))))
+    (define one-path-model (model tok one-path-provider (hash 'name 'one-path) void))
+    (define one-path-compiled (compile-spec one-path-model spec))
+    (define weak-model (fit-weak-model calibration))
+    (define generator
+      (make-generator one-path-compiled ""
+                      #:sampler (cars-sampler #:max-attempts 10
+                                               #:weak-model weak-model)
+                      #:temperature 1.0 #:max-tokens 1 #:seed 1))
+    (dynamic-wind
+      void
+      (lambda ()
+        (define first (generator-sample! generator))
+        (define second (generator-sample! generator))
+        (check-equal? (generation-result-status first) 'found)
+        (check-equal? (generation-result-status second) 'found)
+        (check-equal? (generation-result-token-ids first) '(0))
+        (check-equal? (generation-result-token-ids second) '(0))
+        (define first-metrics (generation-result-metrics first))
+        (define second-metrics (generation-result-metrics second))
+        (check-equal? (generation-metrics-weak-evaluations first-metrics) 1)
+        (check-equal? (generation-metrics-attempts second-metrics) 1)
+        (check-equal? (generation-metrics-weak-evaluations second-metrics) 0)
+        (check-equal? (generation-metrics-weak-cache-hits second-metrics) 1)
+        (check-eq?
+         (weak-result-observation (generation-result-weak first))
+         (weak-result-observation (generation-result-weak second))))
+      (lambda ()
+        (generator-close! generator)
+        (compiled-spec-close! one-path-compiled)
+        (model-close! one-path-model))))
+
   (test-case "schema mismatch and unsupported PWSG spec fail before sessions"
     (define weak-model (fit-weak-model calibration))
     (define before (unbox starts))
     (check-exn #rx"unsupported PWSG program"
                (lambda ()
-                 (define bad (compile-spec model* (rx " a")))
+                 (define bad
+                   (compile-spec
+                    model*
+                    (control
+                     (rx " a")
+                     (prefer (lit " a"))
+                     (prefer (lit " b"))
+                     (avoid (lit " c"))
+                     (avoid (lit " d")))))
                  (dynamic-wind void
                                (lambda ()
                                  (make-generator bad ""

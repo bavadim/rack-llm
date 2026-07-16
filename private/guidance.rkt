@@ -107,6 +107,7 @@
 (struct lit-state ([pos : Natural] [len : Natural]) #:transparent)
 (struct regex-state ([state : RegexState] [accepting? : Boolean]) #:transparent)
 (struct (A) choice-state ([children : (Vectorof A)]) #:transparent)
+(struct (A) alternatives-state ([branches : (Vectorof A)]) #:transparent)
 (struct (A) seq-state
   ([index : Natural] [children-count : Natural] [child : A]
    [capture-chunks : (Listof (Listof weak-match))] [start : Natural]
@@ -128,7 +129,7 @@
 (struct dead-state ([trace : (Listof Any)]) #:transparent)
 
 (define-type GuidanceState
-  (Rec S (U lit-state regex-state (choice-state S) (seq-state S)
+  (Rec S (U lit-state regex-state (choice-state S) (alternatives-state S) (seq-state S)
             (repeat-state S) text-state (control-state S) dead-state)))
 
 (: path-child (-> String Symbol Natural String))
@@ -223,9 +224,14 @@
 
 (: guidance-step (-> Guidance GuidanceState TokenId GuidanceState))
 (define (guidance-step f st id)
-  (if (guidance-dead? st)
-      st
-      (normalize f (step-raw f st id))))
+  (cond
+    [(alternatives-state? st)
+     (make-alternatives-state
+      (for/list : (Listof GuidanceState)
+                ([branch (in-vector (alternatives-state-branches st))])
+        (guidance-step f branch id)))]
+    [(guidance-dead? st) st]
+    [else (normalize f (step-raw f st id))]))
 
 (: step-raw (-> Guidance GuidanceState TokenId GuidanceState))
 (define (step-raw f st id)
@@ -302,28 +308,31 @@
 (: normalize (-> Guidance GuidanceState GuidanceState))
 (define (normalize f st)
   (cond
+    [(guidance-dead? st) st]
+    [(alternatives-state? st) st]
     [(%seq? f) (normalize-seq f (assert st seq-state?))]
     [(%repeat? f) (normalize-repeat f (assert st repeat-state?))]
     [else st]))
 
 (: normalize-seq (-> (%seq Guidance) (seq-state GuidanceState) GuidanceState))
 (define (normalize-seq f st0)
-  (let loop : GuidanceState ([st : (seq-state GuidanceState) st0])
-    (define children (%seq-children f))
-    (define child (seq-state-child st))
-    (cond
-      [(guidance-dead? child) child]
-      [(and (guidance-accepting? child)
-            (< (add1 (seq-state-index st)) (vector-length children)))
-       (define next-index (add1 (seq-state-index st)))
-       (loop (seq-state next-index (seq-state-children-count st)
-                        (guidance-initial (vector-ref children next-index)
-                                          (+ (seq-state-start st) (seq-state-consumed st))
-                                          #:weak? (seq-state-weak? st))
-                        (cons (guidance-weak-matches child)
-                              (seq-state-capture-chunks st))
-                        (seq-state-start st) (seq-state-consumed st) (seq-state-weak? st)))]
-      [else st])))
+  (define children (%seq-children f))
+  (define child (seq-state-child st0))
+  (cond
+    [(guidance-dead? child) child]
+    [(and (guidance-accepting? child)
+          (< (add1 (seq-state-index st0)) (vector-length children)))
+     (define next-index (add1 (seq-state-index st0)))
+     (define advanced
+       (seq-state next-index (seq-state-children-count st0)
+                  (guidance-initial (vector-ref children next-index)
+                                    (+ (seq-state-start st0) (seq-state-consumed st0))
+                                    #:weak? (seq-state-weak? st0))
+                  (cons (guidance-weak-matches child)
+                        (seq-state-capture-chunks st0))
+                  (seq-state-start st0) (seq-state-consumed st0) (seq-state-weak? st0)))
+     (make-alternatives-state (list st0 (normalize-seq f advanced)))]
+    [else st0]))
 
 (: normalize-repeat (-> (%repeat Guidance) (repeat-state GuidanceState) GuidanceState))
 (define (normalize-repeat f st)
@@ -334,16 +343,18 @@
      (define count (add1 (repeat-state-count st)))
      (define captures (cons (guidance-weak-matches child)
                             (repeat-state-capture-chunks st)))
-     (if (>= count (repeat-state-max-count st))
-         (repeat-state count (repeat-state-min-count st) (repeat-state-max-count st)
-                       child #f captures (repeat-state-start st)
-                       (repeat-state-consumed st) (repeat-state-weak? st))
-         (repeat-state count (repeat-state-min-count st) (repeat-state-max-count st)
-                       (guidance-initial (%repeat-item f)
-                                         (+ (repeat-state-start st) (repeat-state-consumed st))
-                                         #:weak? (repeat-state-weak? st))
-                       #f captures (repeat-state-start st)
-                       (repeat-state-consumed st) (repeat-state-weak? st)))]
+     (define completed
+       (if (>= count (repeat-state-max-count st))
+           (repeat-state count (repeat-state-min-count st) (repeat-state-max-count st)
+                         child #f captures (repeat-state-start st)
+                         (repeat-state-consumed st) (repeat-state-weak? st))
+           (repeat-state count (repeat-state-min-count st) (repeat-state-max-count st)
+                         (guidance-initial (%repeat-item f)
+                                           (+ (repeat-state-start st) (repeat-state-consumed st))
+                                           #:weak? (repeat-state-weak? st))
+                         #f captures (repeat-state-start st)
+                         (repeat-state-consumed st) (repeat-state-weak? st))))
+     (make-alternatives-state (list st completed))]
     [else st]))
 
 
@@ -364,6 +375,9 @@
     [(regex-state? st) (regex-state-accepting? st)]
     [(choice-state? st) (for/or : Boolean ([child (in-vector (choice-state-children st))])
                           (guidance-accepting? child))]
+    [(alternatives-state? st)
+     (for/or : Boolean ([branch (in-vector (alternatives-state-branches st))])
+       (guidance-accepting? branch))]
     [(seq-state? st)
      (and (= (seq-state-index st) (sub1 (seq-state-children-count st)))
           (guidance-accepting? (seq-state-child st)))]
@@ -382,13 +396,31 @@
   (cond [(dead-state? st) #t]
         [(choice-state? st) (for/and : Boolean ([child (in-vector (choice-state-children st))])
                               (guidance-dead? child))]
+        [(alternatives-state? st)
+         (for/and : Boolean ([branch (in-vector (alternatives-state-branches st))])
+           (guidance-dead? branch))]
         [(control-state? st) (or (control-state-hard-dead? st)
                                  (guidance-dead? (control-state-child st)))]
         [else #f]))
 
-(: first-live-or-accepting (-> (Listof GuidanceState) (Option GuidanceState)))
-(define (first-live-or-accepting xs)
-  (or (findf guidance-accepting? xs) (findf (lambda ([x : GuidanceState]) (not (guidance-dead? x))) xs)))
+(: flatten-alternatives (-> GuidanceState (Listof GuidanceState)))
+(define (flatten-alternatives st)
+  (if (alternatives-state? st)
+      (append-map flatten-alternatives
+                  (vector->list (alternatives-state-branches st)))
+      (list st)))
+
+(: make-alternatives-state (-> (Listof GuidanceState) GuidanceState))
+(define (make-alternatives-state states)
+  (define branches
+    (remove-duplicates
+     (filter (lambda ([st : GuidanceState]) (not (guidance-dead? st)))
+             (append-map flatten-alternatives states))
+     equal?))
+  (cond
+    [(null? branches) (dead-state (list 'alternatives-dead))]
+    [(null? (cdr branches)) (car branches)]
+    [else (alternatives-state (list->vector branches))]))
 
 (: regex-match-ids? (-> RegexMachine TokenIds Boolean))
 (define (regex-match-ids? machine ids)
@@ -412,12 +444,20 @@
 (: flatten-chunks (-> (Listof (Listof weak-match)) (Listof weak-match)))
 (define (flatten-chunks chunks) (append* (reverse chunks)))
 
+(: accepting-matches (-> (Listof GuidanceState) (Listof weak-match)))
+(define (accepting-matches states)
+  (remove-duplicates
+   (append-map guidance-weak-matches
+               (filter guidance-accepting? states))
+   equal?))
+
 (: guidance-weak-matches (-> GuidanceState (Listof weak-match)))
 (define (guidance-weak-matches st)
   (cond
+    [(alternatives-state? st)
+     (accepting-matches (vector->list (alternatives-state-branches st)))]
     [(choice-state? st)
-     (define child (first-live-or-accepting (vector->list (choice-state-children st))))
-     (if child (guidance-weak-matches child) '())]
+     (accepting-matches (vector->list (choice-state-children st)))]
     [(seq-state? st) (append (flatten-chunks (seq-state-capture-chunks st))
                              (guidance-weak-matches (seq-state-child st)))]
     [(repeat-state? st) (append (flatten-chunks (repeat-state-capture-chunks st))
@@ -430,6 +470,10 @@
 (define (guidance-token-domain f st)
   (cond
     [(guidance-dead? st) domain-none]
+    [(alternatives-state? st)
+     (for/fold ([domain : TokenDomain domain-none])
+               ([branch (in-vector (alternatives-state-branches st))])
+       (domain-union domain (guidance-token-domain f branch)))]
     [(%lit? f)
      (define s (assert st lit-state?))
      (if (< (lit-state-pos s) (lit-state-len s))

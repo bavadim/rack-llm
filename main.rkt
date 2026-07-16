@@ -116,7 +116,8 @@
    [vocab-size : Natural]
    [trie-nodes : Natural]
    [root-envelope : Real]
-   [trie-frozen? : Boolean])
+   [trie-frozen? : Boolean]
+   [weak-policy : Symbol])
   #:transparent)
 
 (struct generation-result
@@ -144,6 +145,7 @@
 (struct compiled-spec-impl
   ([model : Model] [program : Program] [guidance : Guidance] [schema : WeakSchema]
    [spec-fingerprint : String] [tokenizer-fingerprint : String]
+   [has-weak-rules? : Boolean]
    [closed? : (Boxof Boolean)])
   #:transparent)
 (define-type CompiledSpec compiled-spec-impl)
@@ -174,15 +176,17 @@
     (define context (model-compilation-context model))
     (define tokenizer (model-tokenizer model))
     (define canonical (program-canonical-form program))
+    (define descriptors (program-schema-descriptors program))
     (compiled-spec-impl
      model program
      (compile-guidance program (lambda ([source : String]) (tokenize tokenizer source))
                        (compilation-context-vocabulary context))
-     (make-weak-schema (program-schema-descriptors program)
+     (make-weak-schema descriptors
                        (compilation-context-tokenizer-fingerprint context)
                        (program-shape-form program))
-     (fingerprint-datum (list 'rack-llm-spec 2 canonical))
+     (fingerprint-datum (list 'rack-llm-spec 3 canonical))
      (compilation-context-tokenizer-fingerprint context)
+     (not (null? descriptors))
      (box #f))))
 
 (: compiled-spec-close! (-> CompiledSpec Void))
@@ -253,7 +257,8 @@
   ([max-attempts : Positive-Integer]
    [max-trie-nodes : (Option Natural)]
    [weak-model : (Option WeakModel)]
-   [min-posterior : Real])
+   [min-posterior : Real]
+   [ignore-weak? : Boolean])
   #:transparent)
 (define-type Sampler cars-sampler-config)
 
@@ -261,19 +266,23 @@
    (->* (#:max-attempts Positive-Integer)
         (#:max-trie-nodes (Option Natural)
          #:weak-model (Option WeakModel)
-         #:min-posterior Real)
+         #:min-posterior Real
+         #:ignore-weak? Boolean)
         Sampler))
 (define (cars-sampler #:max-attempts max-attempts
                       #:max-trie-nodes [max-nodes #f]
                       #:weak-model [model #f]
-                      #:min-posterior [min-posterior 0.0])
+                      #:min-posterior [min-posterior 0.0]
+                      #:ignore-weak? [ignore-weak? #f])
   (when (and max-nodes (zero? max-nodes))
     (raise-argument-error 'cars-sampler "positive max-trie-nodes or #f" max-nodes))
   (unless (and (<= 0.0 min-posterior 1.0) (= min-posterior min-posterior))
     (raise-argument-error 'cars-sampler "real in [0,1]" min-posterior))
   (when (and (not model) (not (zero? min-posterior)))
     (error 'cars-sampler "min-posterior requires a weak model"))
-  (cars-sampler-config max-attempts max-nodes model min-posterior))
+  (when (and model ignore-weak?)
+    (error 'cars-sampler "weak-model and ignore-weak? are mutually exclusive"))
+  (cars-sampler-config max-attempts max-nodes model min-posterior ignore-weak?))
 
 (struct terminal-evaluation
   ([observation : (Option WeakObservation)] [posterior : Real] [mass : Real])
@@ -291,6 +300,7 @@
    [rng : Pseudo-Random-Generator]
    [trie : CarsTrie]
    [terminal-cache : (HashTable CarsNode terminal-evaluation)]
+   [weak-policy : Symbol]
    [closed? : (Boxof Boolean)]
    [busy? : (Boxof Boolean)]
    [valid? : (Boxof Boolean)])
@@ -312,6 +322,17 @@
   (define model (compiled-spec-impl-model compiled))
   (define program (compiled-spec-impl-program compiled))
   (define weak-model (cars-sampler-config-weak-model sampler))
+  (define has-weak-rules? (compiled-spec-impl-has-weak-rules? compiled))
+  (define ignore-weak? (cars-sampler-config-ignore-weak? sampler))
+  (when (and has-weak-rules? (not weak-model) (not ignore-weak?))
+    (error 'make-generator
+           "weak-model-required: program contains prefer/avoid rules; provide a weak model or set #:ignore-weak? #t"))
+  (when (and weak-model (not has-weak-rules?))
+    (error 'make-generator "weak model requires a program with prefer/avoid rules"))
+  (define weak-policy
+    (cond [weak-model 'applied]
+          [(and has-weak-rules? ignore-weak?) 'ignored-explicitly]
+          [else 'not-present]))
   (when weak-model
     (define profile-errors (program-pwsg-errors program))
     (unless (null? profile-errors)
@@ -328,7 +349,7 @@
                     (compiled-spec-impl-guidance compiled)
                     sampler temperature max-tokens (make-rng seed)
                     (make-cars-trie (cars-sampler-config-max-trie-nodes sampler))
-                    (make-hash) (box #f) (box #f) (box #t))))
+                    (make-hasheq) weak-policy (box #f) (box #f) (box #t))))
 
 (: generator-close! (-> Generator Void))
 (define (generator-close! generator)
@@ -496,7 +517,8 @@
                       weak-evaluations weak-cache-hits proposed llm-calls
                       (provider-vocab-size (generator-impl-provider generator))
                       (cars-trie-node-count trie) (cars-node-mass (cars-trie-root trie))
-                      (cars-trie-frozen? trie)))
+                      (cars-trie-frozen? trie)
+                      (generator-impl-weak-policy generator)))
 
 (: failure-result
    (-> Generator CarsTrie Symbol String Real Natural Natural Natural Natural Natural Natural Natural Natural Natural Natural

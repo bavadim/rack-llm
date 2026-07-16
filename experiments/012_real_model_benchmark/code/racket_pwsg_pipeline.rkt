@@ -81,7 +81,7 @@
   (define compiled (compile-spec backend spec))
   (define generator
     (make-generator compiled (field row 'prompt)
-                    #:sampler (cars-sampler #:max-attempts 100)
+                    #:sampler (cars-sampler #:max-attempts 100 #:ignore-weak? #t)
                     #:temperature (temperature) #:max-tokens (max-tokens) #:seed seed))
   (dynamic-wind
     void
@@ -140,6 +140,7 @@
         (weak-observation-schema-fingerprint observation)
         'distribution_guarantee
         (symbol->string (generation-result-distribution-guarantee result))
+        'weak_policy (symbol->string (generation-metrics-weak-policy metrics))
         'attempts (generation-metrics-attempts metrics)
         'hard_invalid_attempts (generation-metrics-hard-invalid-attempts metrics)
         'weak_rejections (generation-metrics-weak-rejections metrics)
@@ -152,7 +153,7 @@
   (define compiled (compile-spec backend spec))
   (define (one-hard offset)
     (generate compiled (field row 'prompt)
-              #:sampler (cars-sampler #:max-attempts 100)
+              #:sampler (cars-sampler #:max-attempts 100 #:ignore-weak? #t)
               #:temperature (temperature) #:max-tokens (max-tokens) #:seed (+ seed offset)))
   (dynamic-wind
     void

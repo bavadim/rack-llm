@@ -1,6 +1,7 @@
 #lang racket/base
 
-(require rackunit
+(require json
+         rackunit
          racket/file
          "../../private/guidance.rkt"
          "../../private/weak.rkt")
@@ -81,4 +82,23 @@
         (check-equal? (weak-model-fingerprint loaded) (weak-model-fingerprint model))
         (check-= (weak-posterior loaded (observation '(#t #f #f #f)))
                  (weak-posterior model (observation '(#t #f #f #f))) 1e-12))
+      (lambda () (when (file-exists? path) (delete-file path)))))
+
+  (test-case "v2 weak models are rejected after accepting-parse semantics change"
+    (define path (make-temporary-file "rack-llm-weak-v2-~a.json"))
+    (dynamic-wind
+      void
+      (lambda ()
+        (call-with-output-file
+         path
+         #:exists 'truncate
+         (lambda (out)
+           (write-json
+            (hash 'format "rack-llm-weak-model"
+                  'version 2
+                  'model "independent-polarity-bernoulli"
+                  'observation_semantics "match-or-zero-v1")
+            out)))
+        (check-exn #rx"unsupported weak-model format or version"
+                   (lambda () (load-weak-model path))))
       (lambda () (when (file-exists? path) (delete-file path))))))

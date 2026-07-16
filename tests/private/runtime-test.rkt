@@ -6,6 +6,7 @@
          "../../private/model.rkt")
 
 (define pieces (vector " a" " b" " x" "<eog>"))
+(define sessions-started (box 0))
 (define tokenizer*
   (tokenizer
    #:vocab-size 4
@@ -21,7 +22,9 @@
 (define provider*
   (provider
    #:vocab-size 4 #:eog-token-ids '(3)
-   #:start-session (lambda (_prompt) 'session)
+   #:start-session (lambda (_prompt)
+                     (set-box! sessions-started (add1 (unbox sessions-started)))
+                     'session)
    #:next-logits/session (lambda (_session) (vector->logits-view (vector 3.0 2.0 1.0 0.0)))
    #:commit-token! (lambda (_session _id) (void))
    #:end-session! (lambda (_session) (void))))
@@ -66,6 +69,8 @@
     (check-equal? (generation-result-status result) 'found)
     (check-not-false (member (generation-result-text result) '(" a" " b")))
     (check-equal? (generation-result-distribution-guarantee result) 'exact-hard)
+    (check-equal? (generation-metrics-weak-policy (generation-result-metrics result))
+                  'not-present)
     (compiled-spec-close! compiled))
 
   (test-case "scoped literal ban removes an otherwise likely token"
@@ -95,13 +100,64 @@
                (avoid (ere "x$"))))
     (define compiled (compile-spec model* spec))
     (define result
-      (generate compiled "" #:sampler (cars-sampler #:max-attempts 10)
+      (generate compiled "" #:sampler (cars-sampler #:max-attempts 10 #:ignore-weak? #t)
                 #:temperature 1.0 #:max-tokens 1 #:seed 8))
     (check-false (generation-result-weak result))
     (check-equal? (generation-metrics-weak-evaluations
                    (generation-result-metrics result)) 0)
+    (check-equal? (generation-metrics-weak-policy
+                   (generation-result-metrics result))
+                  'ignored-explicitly)
     (define observation (observe compiled result))
     (check-equal? (vector-length (weak-observation-labels observation)) 2)
     (check-equal? (vector->list (weak-observation-rule-paths observation))
                   '("root/control/rule[0]" "root/control/rule[1]"))
+    (compiled-spec-close! compiled))
+
+  (test-case "soft rules require an explicit weak policy before opening a session"
+    (define compiled
+      (compile-spec model* (control (text 1) (prefer (lit " a")))))
+    (define before (unbox sessions-started))
+    (check-exn #rx"weak-model-required"
+               (lambda ()
+                 (make-generator compiled ""
+                                 #:sampler (cars-sampler #:max-attempts 1))))
+    (check-equal? (unbox sessions-started) before)
+    (compiled-spec-close! compiled))
+
+  (test-case "active weak model is reported in metrics"
+    (define compiled
+      (compile-spec model*
+                    (control (text 1)
+                             (prefer (lit " a"))
+                             (avoid (lit " b"))
+                             (prefer (lit " x")))))
+    (define weak-model
+      (fit-weak-model
+       (for/list ([i (in-range 60)])
+         (observe compiled (list-ref '(" a" " b" " x") (remainder i 3))))
+                      #:seed 7))
+    (check-exn #rx"mutually exclusive"
+               (lambda ()
+                 (cars-sampler #:max-attempts 1
+                               #:weak-model weak-model
+                               #:ignore-weak? #t)))
+    (define result
+      (generate compiled ""
+                #:sampler (cars-sampler #:max-attempts 20 #:weak-model weak-model)
+                #:temperature 1.0 #:max-tokens 1 #:seed 3))
+    (check-equal? (generation-metrics-weak-policy (generation-result-metrics result))
+                  'applied)
+    (compiled-spec-close! compiled))
+
+  (test-case "failure metrics preserve explicit ignored policy"
+    (define compiled
+      (compile-spec model* (control (lit " a") (prefer (lit " a")))))
+    (define result
+      (generate compiled ""
+                #:sampler (cars-sampler #:max-attempts 1 #:ignore-weak? #t)
+                #:temperature 1.0 #:max-tokens 0 #:seed 1))
+    (check-equal? (generation-result-status result) 'not-found-attempt-budget)
+    (check-equal? (generation-metrics-weak-policy (generation-result-metrics result))
+                  'ignored-explicitly)
     (compiled-spec-close! compiled)))

@@ -108,7 +108,8 @@
   (define shape (fingerprint-datum (list 'rack-llm-shape 2 shape-form)))
   (define fp
     (fingerprint-datum
-     (list 'rack-llm-weak-schema 2 'match-or-zero-v1 tokenizer-fingerprint shape descriptors)))
+     (list 'rack-llm-weak-schema 3 'match-or-zero-accepting-parses-v2
+           tokenizer-fingerprint shape descriptors)))
   (weak-schema (vector->immutable-vector paths)
                (vector->immutable-vector polarities)
                (vector->immutable-vector kinds)
@@ -134,7 +135,7 @@
       (vector-set! labels i (if (eq? polarity 'prefer) 1 -1))))
   (weak-observation (vector->immutable-vector labels)
                     schema
-                    (fingerprint-datum (list 'rack-llm-spec 2 spec-form))
+                    (fingerprint-datum (list 'rack-llm-spec 3 spec-form))
                     (and trace? (vector->immutable-vector spans))
                     (and trace? ids)))
 
@@ -373,7 +374,7 @@
   (when (< active 3)
     (error 'fit-weak-model "unidentifiable weak model: fitted solution collapsed"))
   (define model-form
-    (list 'rack-llm-weak-model 2 schema (fit-result-prior best)
+    (list 'rack-llm-weak-model 3 schema (fit-result-prior best)
           (vector->list (fit-result-bad best)) (vector->list (fit-result-good best))))
   (define diagnostics
     (for/fold ([d : (Immutable-HashTable Symbol Any) (corpus-diagnostics rows paths)])
@@ -411,9 +412,9 @@
 (define (model->jsexpr model)
   (define schema (weak-model-schema model))
   (hash 'format "rack-llm-weak-model"
-        'version 2
+        'version 3
         'model "independent-polarity-bernoulli"
-        'observation_semantics "match-or-zero-v1"
+        'observation_semantics "match-or-zero-accepting-parses-v2"
         'schema_fingerprint (weak-model-schema-fingerprint model)
         'fingerprint (weak-model-fingerprint model)
         'tokenizer_fingerprint (weak-schema-tokenizer-fingerprint schema)
@@ -454,9 +455,10 @@
   (define table (assert payload hash?))
   (define (field [key : Symbol]) (hash-ref table key (lambda () (error 'load-weak-model "missing ~a" key))))
   (unless (and (equal? (field 'format) "rack-llm-weak-model")
-               (equal? (field 'version) 2)
+               (equal? (field 'version) 3)
                (equal? (field 'model) "independent-polarity-bernoulli")
-               (equal? (field 'observation_semantics) "match-or-zero-v1"))
+               (equal? (field 'observation_semantics)
+                       "match-or-zero-accepting-parses-v2"))
     (error 'load-weak-model "unsupported weak-model format or version"))
   (define paths-list (field 'paths))
   (define polarities-list (field 'polarities))
@@ -489,14 +491,16 @@
       (list p polarity kind)))
   (define computed-schema
     (fingerprint-datum
-     (list 'rack-llm-weak-schema 2 'match-or-zero-v1 tokenizer-fp shape-fp descriptors)))
+     (list 'rack-llm-weak-schema 3 'match-or-zero-accepting-parses-v2
+           tokenizer-fp shape-fp descriptors)))
   (unless (string=? computed-schema schema-fp)
     (error 'load-weak-model "weak schema fingerprint mismatch"))
   (define schema* (weak-schema (vector->immutable-vector paths)
                                (vector->immutable-vector polarities)
                                (vector->immutable-vector kinds)
                                tokenizer-fp shape-fp schema-fp))
-  (define form (list 'rack-llm-weak-model 2 schema-fp prior (vector->list bad) (vector->list good)))
+  (define form (list 'rack-llm-weak-model 3 schema-fp prior
+                     (vector->list bad) (vector->list good)))
   (define fingerprint (fingerprint-datum form))
   (unless (string=? fingerprint (assert (field 'fingerprint) string?))
     (error 'load-weak-model "weak-model fingerprint mismatch"))
