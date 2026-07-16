@@ -15,15 +15,16 @@ program, a stateful model session and CARS rejection sampling.
    (prefer (ere "[0-9]+%"))
    (avoid  (ere "TODO|unknown"))
    (ban    (lit "private key"))))
+(define compiled (compile-spec model spec))
 
 (define observations
   (for/list ([candidate calibration-corpus])
-    (observe model spec candidate)))
+    (observe compiled candidate)))
 (define weak-model (fit-weak-model observations))
 
 (define generator
   (make-generator
-   model prompt spec
+   compiled prompt
    #:sampler (cars-sampler #:max-attempts 100
                            #:weak-model weak-model)
    #:temperature 0.7
@@ -31,6 +32,7 @@ program, a stateful model session and CARS rejection sampling.
    #:seed 0))
 (define result (generator-sample! generator))
 (generator-close! generator)
+(compiled-spec-close! compiled)
 ```
 
 ## Programs
@@ -40,12 +42,13 @@ program, a stateful model session and CARS rejection sampling.
 - `ere` is the portable case-sensitive Unicode profile used by PWSG.
 - `seq`, `choice`, and bounded `repeat` compose programs.
 - `text` is an open `0..n` token fragment and must be in tail position.
-- `pure` and `bind` remain available for dynamic hard-only programs.
 - `control` scopes `prefer`, `avoid`, and hard `ban` rules.
 
 `prefer` emits `+1` on a match and `0` otherwise. `avoid` emits `-1` on a
 match and `0` otherwise. Non-fire is an observed abstention in the weak model.
 `ban` changes the hard language and never appears in the weak label vector.
+Abstain is not the opposite vote, although its calibrated frequency can still
+be informative in the generative model.
 
 The ERE profile supports literals, `.`, alternation, groups, character classes,
 `* + ? {m} {m,n} {m,}`, `^`, `$`, and escaped metacharacters/newlines. It does
@@ -57,14 +60,20 @@ search semantics relative to its scope.
 
 `fit-weak-model` fits a constrained two-component product-Bernoulli model with
 EM. Each rule learns `P(fire | bad)` and `P(fire | good)`; polarity constraints
-orient the latent classes. Fits with fewer than three informative independent
-columns, duplicate columns, non-convergence, or collapse fail closed.
+orient the latent classes. Fits with fewer than three informative non-duplicate
+rules, non-convergence, or collapse fail closed under a conditional-independence
+model. Diagnostics report coverage, pairwise agreement/Jaccard/phi correlation,
+high-correlation warnings, and effective rank.
 
 Models and observations carry structural SHA-256 fingerprints. Structural
 schemas intentionally exclude concrete pattern strings so one model can be fit
 across specifications produced by the same parameterized builder. Full spec
 fingerprints retain the concrete patterns. Models can be saved and loaded as
 versioned JSON.
+
+`compile-spec` builds the regex vocabulary and hard/weak runtimes once.
+`observe-many` therefore scales with candidate tokens rather than vocabulary
+size. String observation is strict; datasets may use `observe-token-ids`.
 
 ## Exact sampling
 
@@ -90,8 +99,10 @@ candidate midway.
 main.rkt                 public DSL, observations and exact generator
 private/guidance.rkt     Program AST and token-native residual states
 private/weak.rkt         observations, EM and model persistence
+private/weak-json.rkt    untyped JSON file boundary
 private/cars.rkt         reusable fractional envelope trie
+private/domain.rkt       compact all/only/except token domains
 private/regex.rkt        ERE parser and PCRE2 runtime facade
 private/model.rkt        tokenizer, provider sessions and model lifetime
-model-llama-cpp.rkt      native stateful llama.cpp model
+model-llama-cpp.rkt      native stateful llama.cpp model and CARS scan
 ```

@@ -1,17 +1,18 @@
-#lang typed/racket/base/no-check
+#lang typed/racket/base
 
-(require json
-         racket/file
-         racket/list
+(require racket/list
          racket/match
-         racket/path
          racket/port
          (only-in "guidance.rkt" weak-match weak-match-path weak-match-polarity
-                  weak-match-matched? weak-match-start-token weak-match-end-token
-                  weak-match-token-ids))
+                  weak-match-matched? weak-match-start-token weak-match-end-token))
+(require/typed "weak-json.rkt"
+  [read-json-file (-> Path-String Any)]
+  [write-json-file (-> Any Path-String Void)])
 
-(provide WeakObservation WeakModel
+(provide WeakSchema WeakObservation WeakModel
          (struct-out token-span)
+         make-weak-schema weak-schema-fingerprint weak-schema-shape-fingerprint
+         weak-schema-tokenizer-fingerprint
          weak-observation? weak-observation-labels weak-observation-rule-paths
          weak-observation-polarities weak-observation-scope-spans
          weak-observation-schema-fingerprint weak-observation-spec-fingerprint
@@ -24,30 +25,42 @@
 (define-type TokenIds (Listof Natural))
 
 (struct token-span
-  ([start-token : Natural] [end-token : Natural] [token-ids : TokenIds])
+  ([start-token : Natural] [end-token : Natural])
   #:transparent)
+
+(struct weak-schema
+  ([paths : (Vectorof String)]
+   [polarities : (Vectorof Symbol)]
+   [kinds : (Vectorof Symbol)]
+   [tokenizer-fingerprint : String]
+   [shape-fingerprint : String]
+   [fingerprint : String])
+  #:transparent)
+(define-type WeakSchema weak-schema)
 
 (struct weak-observation
   ([labels : (Vectorof Label)]
-   [paths : (Vectorof String)]
-   [polarities : (Vectorof Symbol)]
-   [kinds : (Vectorof Symbol)]
-   [spans : (Vectorof (Listof token-span))]
-   [schema-fingerprint : String]
-   [spec-fingerprint : String])
+   [schema : WeakSchema]
+   [spec-fingerprint : String]
+   [spans : (Option (Vectorof (Listof token-span)))]
+   [token-ids : (Option TokenIds)])
   #:transparent)
 (define-type WeakObservation weak-observation)
 
 (: weak-observation-rule-paths (-> WeakObservation (Vectorof String)))
-(define (weak-observation-rule-paths observation) (weak-observation-paths observation))
-(: weak-observation-scope-spans (-> WeakObservation (Vectorof (Listof token-span))))
+(define (weak-observation-rule-paths observation)
+  (weak-schema-paths (weak-observation-schema observation)))
+(: weak-observation-polarities (-> WeakObservation (Vectorof Symbol)))
+(define (weak-observation-polarities observation)
+  (weak-schema-polarities (weak-observation-schema observation)))
+(: weak-observation-scope-spans (-> WeakObservation (Option (Vectorof (Listof token-span)))))
 (define (weak-observation-scope-spans observation) (weak-observation-spans observation))
+(: weak-observation-schema-fingerprint (-> WeakObservation String))
+(define (weak-observation-schema-fingerprint observation)
+  (weak-schema-fingerprint (weak-observation-schema observation)))
 
 (struct weak-model
-  ([paths : (Vectorof String)]
-   [polarities : (Vectorof Symbol)]
-   [kinds : (Vectorof Symbol)]
-   [schema-fingerprint : String]
+  ([schema : WeakSchema]
    [prior-good : Real]
    [p-fire-bad : (Vectorof Real)]
    [p-fire-good : (Vectorof Real)]
@@ -55,6 +68,10 @@
    [diagnostics : (Immutable-HashTable Symbol Any)])
   #:transparent)
 (define-type WeakModel weak-model)
+
+(: weak-model-schema-fingerprint (-> WeakModel String))
+(define (weak-model-schema-fingerprint model)
+  (weak-schema-fingerprint (weak-model-schema model)))
 
 (: fingerprint-datum (-> Any String))
 (define (fingerprint-datum datum)
@@ -77,38 +94,49 @@
                              "(list path-string polarity-symbol matcher-kind-symbol)"
                              descriptor)]))
 
-(: schema-fingerprint (-> (Listof Any) String))
-(define (schema-fingerprint descriptors)
-  (fingerprint-datum (list 'rack-llm-weak-schema 1 'match-or-zero-v1 descriptors)))
-
-(: make-weak-observation (-> (Listof Any) Any (Listof weak-match) WeakObservation))
-(define (make-weak-observation descriptors spec-form matches)
+(: make-weak-schema (-> (Listof Any) String Any WeakSchema))
+(define (make-weak-schema descriptors tokenizer-fingerprint shape-form)
   (define count (length descriptors))
-  (define labels : (Vectorof Label) (make-vector count 0))
   (define paths : (Vectorof String) (make-vector count ""))
   (define polarities : (Vectorof Symbol) (make-vector count 'prefer))
   (define kinds : (Vectorof Symbol) (make-vector count 'ere))
-  (define spans : (Vectorof (Listof token-span)) (make-vector count '()))
   (for ([descriptor (in-list descriptors)] [i : Natural (in-naturals)])
     (define-values (path polarity kind) (descriptor-parts descriptor))
     (vector-set! paths i path)
     (vector-set! polarities i polarity)
-    (vector-set! kinds i kind)
+    (vector-set! kinds i kind))
+  (define shape (fingerprint-datum (list 'rack-llm-shape 2 shape-form)))
+  (define fp
+    (fingerprint-datum
+     (list 'rack-llm-weak-schema 2 'match-or-zero-v1 tokenizer-fingerprint shape descriptors)))
+  (weak-schema (vector->immutable-vector paths)
+               (vector->immutable-vector polarities)
+               (vector->immutable-vector kinds)
+               tokenizer-fingerprint shape fp))
+
+(: make-weak-observation
+   (->* (WeakSchema Any (Listof weak-match)) (#:trace? Boolean #:token-ids TokenIds)
+        WeakObservation))
+(define (make-weak-observation schema spec-form matches #:trace? [trace? #f] #:token-ids [ids '()])
+  (define paths (weak-schema-paths schema))
+  (define polarities (weak-schema-polarities schema))
+  (define count (vector-length paths))
+  (define labels : (Vectorof Label) (make-vector count 0))
+  (define spans : (Vectorof (Listof token-span)) (make-vector count '()))
+  (for ([path (in-vector paths)] [polarity (in-vector polarities)] [i : Natural (in-naturals)])
     (define occurrences
       (filter (lambda ([m : weak-match]) (string=? path (weak-match-path m))) matches))
-    (vector-set! spans i
-                 (for/list : (Listof token-span) ([m (in-list occurrences)])
-                   (token-span (weak-match-start-token m) (weak-match-end-token m)
-                               (weak-match-token-ids m))))
+    (when trace?
+      (vector-set! spans i
+                   (for/list : (Listof token-span) ([m (in-list occurrences)])
+                     (token-span (weak-match-start-token m) (weak-match-end-token m)))))
     (when (ormap weak-match-matched? occurrences)
       (vector-set! labels i (if (eq? polarity 'prefer) 1 -1))))
   (weak-observation (vector->immutable-vector labels)
-                    (vector->immutable-vector paths)
-                    (vector->immutable-vector polarities)
-                    (vector->immutable-vector kinds)
-                    (vector->immutable-vector spans)
-                    (schema-fingerprint descriptors)
-                    (fingerprint-datum (list 'rack-llm-spec 1 spec-form))))
+                    schema
+                    (fingerprint-datum (list 'rack-llm-spec 2 spec-form))
+                    (and trace? (vector->immutable-vector spans))
+                    (and trace? ids)))
 
 (: clamp-prob (-> Real Real))
 (define (clamp-prob x) (max 1e-12 (min (- 1.0 1e-12) x)))
@@ -124,9 +152,16 @@
       (/ 1.0 (+ 1.0 (exp (- x))))
       (let ([e (exp x)]) (/ e (+ 1.0 e)))))
 
-(: finite-prob? (-> Any Boolean : Real))
+(: real-log (-> Real Real))
+(define (real-log x) (assert (log x) real?))
+
+(: finite-prob? (-> Any Boolean))
 (define (finite-prob? x)
-  (and (real? x) (= x x) (> x 0.0) (< x 1.0)
+  (and (real? x) (finite-prob-real? x)))
+
+(: finite-prob-real? (-> Real Boolean))
+(define (finite-prob-real? x)
+  (and (= x x) (> x 0.0) (< x 1.0)
        (not (eqv? x +inf.0)) (not (eqv? x -inf.0))))
 
 (: observation-fires (-> WeakObservation (Vectorof Boolean)))
@@ -139,32 +174,77 @@
   (for/and : Boolean ([row (in-list rows)])
     (eq? (vector-ref row left) (vector-ref row right))))
 
+(: corpus-diagnostics
+   (-> (Listof (Vectorof Boolean)) (Vectorof String) (Immutable-HashTable Symbol Any)))
+(define (corpus-diagnostics rows paths)
+  (define n (length rows))
+  (define m (vector-length paths))
+  (define coverage
+    (for/vector : (Vectorof Real) ([i (in-range m)])
+      (/ (for/sum : Natural ([row (in-list rows)]) (if (vector-ref row i) 1 0)) n)))
+  (define pairs
+    (for*/list : (Listof Any) ([i (in-range m)] [j (in-range (add1 i) m)])
+      (define-values (n11 n10 n01 n00)
+        (for/fold ([n11 : Natural 0] [n10 : Natural 0]
+                   [n01 : Natural 0] [n00 : Natural 0]) ([row (in-list rows)])
+          (case (+ (if (vector-ref row i) 2 0) (if (vector-ref row j) 1 0))
+            [(3) (values (add1 n11) n10 n01 n00)]
+            [(2) (values n11 (add1 n10) n01 n00)]
+            [(1) (values n11 n10 (add1 n01) n00)]
+            [else (values n11 n10 n01 (add1 n00))])))
+      (define union (+ n11 n10 n01))
+      (define denominator
+        (sqrt (* (+ n11 n10) (+ n01 n00) (+ n11 n01) (+ n10 n00))))
+      (define phi (and (> denominator 0.0)
+                       (/ (- (* n11 n00) (* n10 n01)) denominator)))
+      (hash 'left (vector-ref paths i) 'right (vector-ref paths j)
+            'agreement (/ (+ n11 n00) n)
+            'jaccard (and (> union 0) (/ n11 union))
+            'phi phi
+            'warning (and phi (>= (abs phi) 0.9)))))
+  ;; Participation ratio of the centered fire covariance eigenvalues.
+  (define covariance
+    (for/vector : (Vectorof (Vectorof Real)) ([i (in-range m)])
+      (for/vector : (Vectorof Real) ([j (in-range m)])
+        (/ (for/sum : Real ([row (in-list rows)])
+             (* (- (if (vector-ref row i) 1.0 0.0) (vector-ref coverage i))
+                (- (if (vector-ref row j) 1.0 0.0) (vector-ref coverage j))))
+           n))))
+  (define trace (for/sum : Real ([i (in-range m)]) (vector-ref (vector-ref covariance i) i)))
+  (define frobenius2
+    (for*/sum : Real ([row (in-vector covariance)] [x (in-vector row)]) (* x x)))
+  (hash 'coverage (vector->list coverage)
+        'pairs pairs
+        'high-correlation-warnings
+        (count (lambda ([pair : Any]) (and (hash? pair) (hash-ref pair 'warning #f))) pairs)
+        'effective-rank (if (zero? frobenius2) 0.0 (/ (* trace trace) frobenius2))))
+
 (: objective (-> (Listof (Vectorof Boolean)) Real (Vectorof Real) (Vectorof Real) Real))
 (define (objective rows prior bad good)
   (for/sum : Real ([row (in-list rows)])
     (define l0
-      (+ (log (- 1.0 prior))
+      (+ (real-log (- 1.0 prior))
          (for/sum : Real ([fire? (in-vector row)] [p (in-vector bad)])
-           (log (if fire? p (- 1.0 p))))))
+           (real-log (if fire? p (- 1.0 p))))))
     (define l1
-      (+ (log prior)
+      (+ (real-log prior)
          (for/sum : Real ([fire? (in-vector row)] [p (in-vector good)])
-           (log (if fire? p (- 1.0 p))))))
+           (real-log (if fire? p (- 1.0 p))))))
     (define top (max l0 l1))
-    (+ top (log (+ (exp (- l0 top)) (exp (- l1 top)))))))
+    (+ top (real-log (+ (exp (- l0 top)) (exp (- l1 top)))))))
 
 (: responsibilities
    (-> (Listof (Vectorof Boolean)) Real (Vectorof Real) (Vectorof Real) (Vectorof Real)))
 (define (responsibilities rows prior bad good)
   (for/vector : (Vectorof Real) ([row (in-list rows)])
     (define l0
-      (+ (log (- 1.0 prior))
+      (+ (real-log (- 1.0 prior))
          (for/sum : Real ([fire? (in-vector row)] [p (in-vector bad)])
-           (log (if fire? p (- 1.0 p))))))
+           (real-log (if fire? p (- 1.0 p))))))
     (define l1
-      (+ (log prior)
+      (+ (real-log prior)
          (for/sum : Real ([fire? (in-vector row)] [p (in-vector good)])
-           (log (if fire? p (- 1.0 p))))))
+           (real-log (if fire? p (- 1.0 p))))))
     (logistic (- l1 l0))))
 
 (struct fit-result
@@ -254,8 +334,9 @@
     (raise-arguments-error 'fit-weak-model "tolerance and pseudocount must be positive"))
   (define first (car observations))
   (define schema (weak-observation-schema-fingerprint first))
-  (define paths (weak-observation-paths first))
-  (define polarities (weak-observation-polarities first))
+  (define schema* (weak-observation-schema first))
+  (define paths (weak-schema-paths schema*))
+  (define polarities (weak-schema-polarities schema*))
   (define m (vector-length paths))
   (when (zero? m) (error 'fit-weak-model "weak schema has no prefer/avoid rules"))
   (for ([observation (in-list observations)])
@@ -264,7 +345,7 @@
       (error 'fit-weak-model "incompatible weak-observation schema")))
   (define rows (map observation-fires observations))
   (define informative
-    (for/list : (Listof Natural) ([i (in-range m)]
+    (for/list : (Listof Natural) ([i : Natural (in-range m)]
                                   #:when (let ([fires (count (lambda ([row : (Vectorof Boolean)])
                                                               (vector-ref row i)) rows)])
                                            (and (> fires 0) (< fires (length rows)))))
@@ -276,10 +357,10 @@
       (error 'fit-weak-model "unidentifiable weak model: duplicate rule columns ~a and ~a"
              (vector-ref paths left) (vector-ref paths right))))
   (define fits
-    (for/list : (Listof fit-result) ([restart (in-range restarts)])
+    (for/list : (Listof fit-result) ([restart : Natural (in-range restarts)])
       (define rng (make-pseudo-random-generator))
       (parameterize ([current-pseudo-random-generator rng])
-        (random-seed (+ seed restart)))
+        (random-seed (add1 (abs (+ seed restart)))))
       (one-fit rows polarities max-iterations tolerance pseudocount
                (+ 0.75 (* 0.05 restart)) rng)))
   (define converged (filter fit-result-converged? fits))
@@ -291,23 +372,23 @@
       (if (>= (abs (- g b)) 1e-3) 1 0)))
   (when (< active 3)
     (error 'fit-weak-model "unidentifiable weak model: fitted solution collapsed"))
-  (define kinds (weak-observation-kinds first))
-  (define descriptors
-    (for/list : (Listof Any) ([path (in-vector paths)] [polarity (in-vector polarities)]
-                              [kind (in-vector kinds)])
-      (list path polarity kind)))
   (define model-form
-    (list 'rack-llm-weak-model 1 schema (fit-result-prior best)
+    (list 'rack-llm-weak-model 2 schema (fit-result-prior best)
           (vector->list (fit-result-bad best)) (vector->list (fit-result-good best))))
-  (weak-model paths polarities kinds schema (fit-result-prior best)
+  (define diagnostics
+    (for/fold ([d : (Immutable-HashTable Symbol Any) (corpus-diagnostics rows paths)])
+              ([entry (in-list
+                       (list (cons 'iterations (fit-result-iterations best))
+                             (cons 'objective (fit-result-objective best))
+                             (cons 'observations (length observations))
+                             (cons 'rules m)
+                             (cons 'active-rules active)))])
+      (hash-set d (car entry) (cdr entry))))
+  (weak-model schema* (fit-result-prior best)
               (vector->immutable-vector (fit-result-bad best))
               (vector->immutable-vector (fit-result-good best))
               (fingerprint-datum model-form)
-              (hash 'iterations (fit-result-iterations best)
-                    'objective (fit-result-objective best)
-                    'observations (length observations)
-                    'rules m
-                    'active-rules active)))
+              diagnostics))
 
 (: weak-posterior (-> WeakModel WeakObservation Real))
 (define (weak-posterior model observation)
@@ -322,54 +403,58 @@
                         [bad (in-vector (weak-model-p-fire-bad model))]
                         [good (in-vector (weak-model-p-fire-good model))])
          (if fire?
-             (log (/ good bad))
-             (log (/ (- 1.0 good) (- 1.0 bad)))))))
+             (real-log (/ good bad))
+             (real-log (/ (- 1.0 good) (- 1.0 bad)))))))
   (logistic log-odds))
 
 (: model->jsexpr (-> WeakModel Any))
 (define (model->jsexpr model)
+  (define schema (weak-model-schema model))
   (hash 'format "rack-llm-weak-model"
-        'version 1
+        'version 2
         'model "independent-polarity-bernoulli"
         'observation_semantics "match-or-zero-v1"
         'schema_fingerprint (weak-model-schema-fingerprint model)
         'fingerprint (weak-model-fingerprint model)
-        'paths (vector->list (weak-model-paths model))
-        'polarities (map symbol->string (vector->list (weak-model-polarities model)))
-        'kinds (map symbol->string (vector->list (weak-model-kinds model)))
+        'tokenizer_fingerprint (weak-schema-tokenizer-fingerprint schema)
+        'shape_fingerprint (weak-schema-shape-fingerprint schema)
+        'paths (vector->list (weak-schema-paths schema))
+        'polarities (map symbol->string (vector->list (weak-schema-polarities schema)))
+        'kinds (map symbol->string (vector->list (weak-schema-kinds schema)))
         'prior_good (weak-model-prior-good model)
         'p_fire_bad (vector->list (weak-model-p-fire-bad model))
         'p_fire_good (vector->list (weak-model-p-fire-good model))
-        'diagnostics (weak-model-diagnostics model)))
+        'diagnostics (json-safe (weak-model-diagnostics model))))
+
+(: json-safe (-> Any Any))
+(define (json-safe value)
+  (cond
+    [(and (real? value) (exact? value)) (exact->inexact value)]
+    [(hash? value)
+     (for/hash ([(key item) (in-hash value)])
+       (values key (json-safe item)))]
+    [(list? value) (map json-safe value)]
+    [(vector? value) (map json-safe (vector->list value))]
+    [else value]))
 
 (: save-weak-model (-> WeakModel Path-String Void))
 (define (save-weak-model model path)
-  (define target (path->complete-path path))
-  (define parent (or (path-only target) (current-directory)))
-  (make-directory* parent)
-  (define temporary (make-temporary-file "weak-model-~a.json" #f parent))
-  (with-handlers ([exn:fail? (lambda ([exn : exn:fail])
-                               (when (file-exists? temporary) (delete-file temporary))
-                               (raise exn))])
-    (call-with-output-file temporary
-      (lambda ([out : Output-Port]) (write-json (model->jsexpr model) out) (newline out))
-      #:exists 'truncate/replace)
-    (rename-file-or-directory temporary target #t)))
+  (write-json-file (model->jsexpr model) path))
 
 (: list->real-vector (-> Symbol Any (Vectorof Real)))
 (define (list->real-vector who value)
   (unless (and (list? value) (andmap finite-prob? value))
     (raise-argument-error who "list of finite probabilities strictly between zero and one" value))
-  (list->vector (map (lambda ([x : Any]) (assert x finite-prob?)) (assert value list?))))
+  (list->vector (map (lambda ([x : Any]) (assert x real?)) (assert value list?))))
 
 (: load-weak-model (-> Path-String WeakModel))
 (define (load-weak-model path)
-  (define payload (call-with-input-file path read-json))
+  (define payload (read-json-file path))
   (unless (hash? payload) (error 'load-weak-model "model file is not a JSON object"))
   (define table (assert payload hash?))
   (define (field [key : Symbol]) (hash-ref table key (lambda () (error 'load-weak-model "missing ~a" key))))
   (unless (and (equal? (field 'format) "rack-llm-weak-model")
-               (equal? (field 'version) 1)
+               (equal? (field 'version) 2)
                (equal? (field 'model) "independent-polarity-bernoulli")
                (equal? (field 'observation_semantics) "match-or-zero-v1"))
     (error 'load-weak-model "unsupported weak-model format or version"))
@@ -395,14 +480,35 @@
     (unless (or (and (eq? polarity 'prefer) (>= g b))
                 (and (eq? polarity 'avoid) (<= g b)))
       (error 'load-weak-model "weak-model violates polarity constraints")))
-  (define schema (assert (field 'schema_fingerprint) string?))
-  (define form (list 'rack-llm-weak-model 1 schema prior (vector->list bad) (vector->list good)))
+  (define schema-fp (assert (field 'schema_fingerprint) string?))
+  (define tokenizer-fp (assert (field 'tokenizer_fingerprint) string?))
+  (define shape-fp (assert (field 'shape_fingerprint) string?))
+  (define descriptors
+    (for/list : (Listof Any) ([p (in-vector paths)] [polarity (in-vector polarities)]
+                              [kind (in-vector kinds)])
+      (list p polarity kind)))
+  (define computed-schema
+    (fingerprint-datum
+     (list 'rack-llm-weak-schema 2 'match-or-zero-v1 tokenizer-fp shape-fp descriptors)))
+  (unless (string=? computed-schema schema-fp)
+    (error 'load-weak-model "weak schema fingerprint mismatch"))
+  (define schema* (weak-schema (vector->immutable-vector paths)
+                               (vector->immutable-vector polarities)
+                               (vector->immutable-vector kinds)
+                               tokenizer-fp shape-fp schema-fp))
+  (define form (list 'rack-llm-weak-model 2 schema-fp prior (vector->list bad) (vector->list good)))
   (define fingerprint (fingerprint-datum form))
   (unless (string=? fingerprint (assert (field 'fingerprint) string?))
     (error 'load-weak-model "weak-model fingerprint mismatch"))
-  (weak-model (vector->immutable-vector paths)
-              (vector->immutable-vector polarities)
-              (vector->immutable-vector kinds)
-              schema (assert prior real?)
+  (define raw-diagnostics (field 'diagnostics))
+  (define diagnostics : (Immutable-HashTable Symbol Any)
+    (if (hash? raw-diagnostics)
+        (for/hash : (Immutable-HashTable Symbol Any)
+                  ([(key value) (in-hash raw-diagnostics)] #:when (symbol? key))
+          (values key value))
+        (hash)))
+  (weak-model schema* (assert prior real?)
               (vector->immutable-vector bad) (vector->immutable-vector good)
-              fingerprint (hash 'loaded-from (path->string (path->complete-path path)))))
+              fingerprint
+              (hash-set diagnostics 'loaded-from
+                        (path->string (path->complete-path path)))))

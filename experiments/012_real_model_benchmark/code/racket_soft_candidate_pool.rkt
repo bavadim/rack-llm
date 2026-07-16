@@ -101,7 +101,7 @@
         'ids (generation-result-token-ids result)
         'lm_logprob (json-number (generation-result-lm-logprob result))
         'latency_ms (generation-result-latency-ms result)
-        'generated_tokens (generation-result-generated-tokens result)
+        'generated_tokens (length (generation-result-token-ids result))
         'finish_reason (symbol->string (generation-result-status result))
         'generation_metadata
         (hash 'model (model-path)
@@ -125,6 +125,7 @@
   (if (limit-rows)
       (take all-rows (min (limit-rows) (length all-rows)))
       all-rows))
+(define compiled (compile-spec model (text (max-tokens))))
 
 (call-with-output-file (output-path)
   (lambda (out)
@@ -136,9 +137,9 @@
         (define count (cdr seed-count))
         (for ([batch-index (in-range count)])
           (define result
-            (generate model
+            (generate compiled
                       (prompt-for row (prompt-mode))
-                      (text (max-tokens) '())
+                      #:sampler (cars-sampler #:max-attempts 100)
                       #:seed (+ seed batch-index)
                       #:temperature (temperature)
                       #:max-tokens (max-tokens)))
@@ -148,6 +149,7 @@
           (set! candidate-index (add1 candidate-index))))))
   #:exists 'replace)
 
+(compiled-spec-close! compiled)
 (model-close! model)
 (displayln
  (jsexpr->string

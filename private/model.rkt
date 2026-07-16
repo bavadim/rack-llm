@@ -1,12 +1,14 @@
 #lang typed/racket/base
 
 (require racket/list
-         (only-in "logits.rkt" LogitsView check-logits-view))
+         (only-in "logits.rkt" LogitsView check-logits-view)
+         (only-in "domain.rkt" TokenDomain)
+         (only-in "sampling.rkt" factor-selection))
 
 (provide TokenId TokenIds Tokenizer Provider Model
          tokenizer tokenize detokenize token-ref vocab-size
          provider provider-vocab-size provider-eog-token-ids provider-start-session
-         provider-next-logits provider-commit-token! provider-end-session!
+         provider-next-logits provider-factor-sampler provider-commit-token! provider-end-session!
          model model-tokenizer model-provider model-metadata model-close!
          model-acquire! model-release!)
 
@@ -59,27 +61,35 @@
    [eog-token-ids : TokenIds]
    [start : (-> TokenIds Any)]
    [logits : (-> Any LogitsView)]
+   [factor-sampler : (Option (-> Any Real TokenDomain Boolean
+                                (Listof (Pairof TokenId Real)) Real
+                                (Option factor-selection)))]
    [commit : (-> Any TokenId Void)]
    [end : (-> Any Void)])
   #:transparent)
 (define-type Provider provider-impl)
 
 (: provider
-   (-> #:vocab-size Natural
-       #:eog-token-ids TokenIds
-       #:start-session (-> TokenIds Any)
-       #:next-logits/session (-> Any LogitsView)
-       #:commit-token! (-> Any TokenId Void)
-       #:end-session! (-> Any Void)
-       Provider))
+   (->* (#:vocab-size Natural
+         #:eog-token-ids TokenIds
+         #:start-session (-> TokenIds Any)
+         #:next-logits/session (-> Any LogitsView)
+         #:commit-token! (-> Any TokenId Void)
+         #:end-session! (-> Any Void))
+        (#:sample-factor/session
+         (Option (-> Any Real TokenDomain Boolean
+                     (Listof (Pairof TokenId Real)) Real
+                     (Option factor-selection))))
+        Provider))
 (define (provider #:vocab-size size #:eog-token-ids eog-token-ids #:start-session start
-                  #:next-logits/session logits #:commit-token! commit #:end-session! end)
+                  #:next-logits/session logits #:sample-factor/session [factor-sampler #f]
+                  #:commit-token! commit #:end-session! end)
   (check-ids 'provider eog-token-ids size)
   (when (null? eog-token-ids)
     (raise-argument-error 'provider "non-empty list of EOG token ids" eog-token-ids))
   (unless (= (length eog-token-ids) (length (remove-duplicates eog-token-ids)))
     (raise-argument-error 'provider "distinct EOG token ids" eog-token-ids))
-  (provider-impl size eog-token-ids start logits commit end))
+  (provider-impl size eog-token-ids start logits factor-sampler commit end))
 
 (: provider-vocab-size (-> Provider Natural))
 (define (provider-vocab-size p) (provider-impl-vocab-size p))
@@ -92,6 +102,11 @@
   (define logits ((provider-impl-logits p) session))
   (check-logits-view 'provider-next-logits logits (provider-vocab-size p))
   logits)
+(: provider-factor-sampler
+   (-> Provider (Option (-> Any Real TokenDomain Boolean
+                           (Listof (Pairof TokenId Real)) Real
+                           (Option factor-selection)))))
+(define (provider-factor-sampler p) (provider-impl-factor-sampler p))
 (: provider-commit-token! (-> Provider Any TokenId Void))
 (define (provider-commit-token! p session id) ((provider-impl-commit p) session id))
 (: provider-end-session! (-> Provider Any Void))
@@ -108,7 +123,8 @@
 (define-type Model model-impl)
 
 (: model (-> Tokenizer Provider (HashTable Symbol Any) (-> Void) Model))
-(define (model tok p metadata close!) (model-impl tok p metadata close! (box #f) (box 0)))
+(define (model tok p metadata close!)
+  (model-impl tok p metadata close! (box #f) (box 0)))
 
 (: model-acquire! (-> Model Void))
 (define (model-acquire! m)

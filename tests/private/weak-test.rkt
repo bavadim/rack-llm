@@ -10,12 +10,13 @@
     ("root/control/rule[1]" prefer literal)
     ("root/control/rule[2]" avoid ere)
     ("root/control/rule[3]" avoid literal)))
+(define schema (make-weak-schema descriptors "test-tokenizer" 'test-shape))
 
 (define (observation fires [spec 'template-a])
   (make-weak-observation
-   descriptors spec
+   schema spec
    (for/list ([descriptor (in-list descriptors)] [fire? (in-list fires)] #:when fire?)
-     (weak-match (car descriptor) (cadr descriptor) #t 0 1 '(0)))))
+     (weak-match (car descriptor) (cadr descriptor) #t 0 1))))
 
 (define (synthetic-observations count seed)
   (define rng (make-pseudo-random-generator))
@@ -45,6 +46,23 @@
     (check-true (> positive 0.8))
     (check-true (< negative 0.2))
     (check-equal? (hash-ref (weak-model-diagnostics model) 'active-rules) 4))
+
+  (test-case "diagnostics expose strongly correlated non-duplicate rules"
+    (define rng (make-pseudo-random-generator))
+    (parameterize ([current-pseudo-random-generator rng]) (random-seed 404))
+    (define observations
+      (parameterize ([current-pseudo-random-generator rng])
+        (for/list ([i (in-range 2500)])
+          (define good? (< (random) 0.5))
+          (define shared (< (random) (if good? 0.85 0.15)))
+          (observation
+           (list shared
+                 (if (< (random) 0.02) (not shared) shared)
+                 (< (random) (if good? 0.15 0.85))
+                 (< (random) (if good? 0.25 0.75)))))))
+    (define diagnostics (weak-model-diagnostics (fit-weak-model observations)))
+    (check-true (> (hash-ref diagnostics 'high-correlation-warnings) 0))
+    (check-true (> (hash-ref diagnostics 'effective-rank) 0)))
 
   (test-case "fit fails closed for duplicate or insufficient columns"
     (define too-small

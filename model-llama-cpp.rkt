@@ -4,6 +4,8 @@
          racket/runtime-path
          (only-in "private/logits.rkt"
                   function->logits-view)
+         (only-in "private/domain.rkt" domain-include? domain-ids)
+         (only-in "private/sampling.rkt" factor-selection)
          (only-in "private/model.rkt"
                   tokenizer
                   provider
@@ -15,7 +17,8 @@
 
 (struct native-api
   (model-open model-close vocab-size eog-count eog-ref tokenize detokenize token->piece
-              session-start session-reset session-close session-logits session-commit)
+              session-start session-reset session-close session-logits session-commit
+              session-sample-factor)
   #:transparent)
 
 (define sessions (make-hash))
@@ -76,6 +79,9 @@
      #:next-logits/session
      (lambda (session)
        (native-session-logits-view api (session-ptr session) size))
+     #:sample-factor/session
+     (lambda (session temperature domain constrain? children draw)
+       (native-sample-factor api (session-ptr session) temperature domain constrain? children draw))
      #:commit-token!
      (lambda (session token-id)
        (call/native-error
@@ -126,7 +132,10 @@
    (ffi "rackllm_llama_session_reset" (_fun _pointer _pointer _int32 _bytes _int64 -> _int32))
    (ffi "rackllm_llama_session_close" (_fun _pointer -> _void))
    (ffi "rackllm_llama_session_logits" (_fun _pointer _bytes _int64 -> _pointer))
-   (ffi "rackllm_llama_session_commit" (_fun _pointer _int32 _bytes _int64 -> _int32))))
+   (ffi "rackllm_llama_session_commit" (_fun _pointer _int32 _bytes _int64 -> _int32))
+   (ffi "rackllm_llama_session_sample_factor"
+        (_fun _pointer _double _int32 _pointer _int32 _int32
+              _pointer _pointer _int32 _double _pointer _pointer -> _int32))))
 
 (define (open-native-lib override)
   (define candidates
@@ -161,6 +170,34 @@
         [i (in-naturals)])
     (ptr-set! ptr _int32 i id))
   ptr)
+
+(define (make-double-buffer values)
+  (define ptr (malloc _double (max 1 (length values))))
+  (for ([value (in-list values)] [i (in-naturals)])
+    (ptr-set! ptr _double i value))
+  ptr)
+
+(define (native-sample-factor api session temperature domain constrain? children draw)
+  (define ids (vector->list (domain-ids domain)))
+  (define child-ids (map car children))
+  (define child-masses (map cdr children))
+  (define out-id (malloc _int32))
+  (define out (malloc _double 3))
+  (define count
+    ((native-api-session-sample-factor api)
+     session temperature (if (domain-include? domain) 1 0)
+     (make-int32-buffer ids) (length ids) (if constrain? 1 0)
+     (make-int32-buffer child-ids) (make-double-buffer child-masses)
+     (length children) draw out-id out))
+  (cond
+    [(= count -1) #f]
+    [(negative? count) (error 'llama-cpp-sample-factor "native factor scan failed")]
+    [else
+     (factor-selection (ptr-ref out-id _int32)
+                       (ptr-ref out _double 0)
+                       (ptr-ref out _double 1)
+                       (ptr-ref out _double 2)
+                       count)]))
 
 (define (native-tokenize api handle text)
   (define bytes (string->bytes/utf-8 text))

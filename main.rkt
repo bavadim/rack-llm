@@ -1,4 +1,4 @@
-#lang typed/racket/base/no-check
+#lang typed/racket/base
 
 (require racket/list
          (only-in "private/model.rkt"
@@ -6,48 +6,52 @@
                   tokenize detokenize token-ref vocab-size model-tokenizer model-provider
                   model-metadata model-close! model-acquire! model-release!
                   provider-vocab-size provider-eog-token-ids provider-start-session
-                  provider-next-logits provider-commit-token! provider-end-session!)
+                  provider-next-logits provider-factor-sampler
+                  provider-commit-token! provider-end-session!)
          (only-in "private/regex.rkt"
-                  make-regex-vocabulary parse-regex-program parse-ere-pattern)
+                  RegexVocabulary make-regex-vocabulary parse-regex-program parse-ere-pattern)
          (only-in "private/guidance.rkt"
                   Program ControlRule Guidance GuidanceState
-                  make-lit-program make-rx-program make-ere-program make-pure-program
-                  make-choice-program make-seq-program make-repeat-program make-bind-program
+                  make-lit-program make-rx-program make-ere-program
+                  make-choice-program make-seq-program make-repeat-program
                   make-text-program make-control-program
                   make-prefer-rule make-avoid-rule make-ban-rule
-                  program-pwsg-compatible? program-pwsg-errors program-layout-errors
-                  program-schema-descriptors program-canonical-form
-                  compile-guidance guidance-initial guidance-step guidance-allowed-token-ids
-                  guidance-accepting? guidance-dead? guidance-value guidance-weak-matches
-                  guidance-trace)
+                  program-pwsg-errors program-layout-errors
+                  program-schema-descriptors program-shape-form program-canonical-form
+                  compile-guidance guidance-initial guidance-step guidance-token-domain
+                  guidance-accepting? guidance-dead? guidance-weak-matches)
          (only-in "private/weak.rkt"
-                  WeakObservation WeakModel token-span
+                  WeakSchema WeakObservation WeakModel token-span
+                  weak-schema-fingerprint
                   weak-observation? weak-observation-labels weak-observation-rule-paths
                   weak-observation-polarities weak-observation-scope-spans
                   weak-observation-schema-fingerprint weak-observation-spec-fingerprint
                   weak-model? weak-model-fingerprint weak-model-schema-fingerprint
-                  weak-model-diagnostics make-weak-observation fit-weak-model weak-posterior
+                  weak-model-diagnostics fingerprint-datum make-weak-schema make-weak-observation
+                  fit-weak-model weak-posterior
                   save-weak-model load-weak-model)
          (only-in "private/sampling.rkt"
                   factor-selection? factor-selection-id factor-selection-base-probability
                   factor-selection-base-logprob factor-selection-frontier-mass
                   sample-factor-logits make-rng)
+         (only-in "private/domain.rkt"
+                  TokenDomain domain-only domain-union domain-subtract domain-member?)
          (only-in "private/cars.rkt"
-                  CarsTrie CarsNode TokenDomain
-                  make-token-domain token-domain-member?
+                  CarsTrie CarsNode
                   make-cars-trie cars-trie-root cars-trie-node-count cars-trie-frozen?
-                  cars-node-mass cars-node-log-factor cars-node-child!
+                  cars-node-mass cars-node-domain-value cars-node-child-masses
+                  cars-node-log-factor cars-node-child!
                   cars-node-install-domain! cars-node-set-mass!))
 
 (provide Model model-metadata model-close!
-         lit rx ere pure seq choice repeat bind text control prefer avoid ban
-         pwsg-compatible?
+         lit rx ere seq choice repeat text control prefer avoid ban validate-pwsg
+         CompiledSpec compile-spec compiled-spec-close!
          WeakObservation weak-observation? weak-observation-labels
          weak-observation-rule-paths weak-observation-polarities
          weak-observation-scope-spans weak-observation-schema-fingerprint
          weak-observation-spec-fingerprint token-span
          WeakModel weak-model? weak-model-fingerprint weak-model-schema-fingerprint
-         weak-model-diagnostics observe fit-weak-model weak-posterior
+         weak-model-diagnostics observe observe-token-ids observe-many fit-weak-model weak-posterior
          save-weak-model load-weak-model
          Sampler Generator cars-sampler make-generator generator-sample!
          generator-sample-n! generator-close!
@@ -64,16 +68,12 @@
 (define (rx source) (make-rx-program (parse-regex-program source)))
 (: ere (-> String Program))
 (define (ere source) (make-ere-program (parse-ere-pattern source)))
-(: pure (-> Any Program))
-(define (pure value) (make-pure-program value))
 (: seq (-> (Listof Program) Program))
 (define (seq programs) (make-seq-program programs))
 (: choice (-> (Listof Program) Program))
 (define (choice programs) (make-choice-program programs))
 (: repeat (-> Natural Natural Program Program))
 (define (repeat min-count max-count program) (make-repeat-program min-count max-count program))
-(: bind (-> Program (-> Any Program) Program))
-(define (bind first continue) (make-bind-program first continue))
 (: text (-> Natural Program))
 (define (text max-tokens) (make-text-program max-tokens))
 (: control (->* (Program) () #:rest ControlRule Program))
@@ -84,8 +84,8 @@
 (define (avoid pattern) (make-avoid-rule pattern))
 (: ban (-> Program ControlRule))
 (define (ban pattern) (make-ban-rule pattern))
-(: pwsg-compatible? (-> Program Boolean))
-(define (pwsg-compatible? program) (program-pwsg-compatible? program))
+(: validate-pwsg (-> Program (Listof String)))
+(define (validate-pwsg program) (program-pwsg-errors program))
 
 ;; Public results -------------------------------------------------------------
 
@@ -124,62 +124,128 @@
    [reason : (Option String)]
    [token-ids : TokenIds]
    [text : String]
-   [value : Any]
    [lm-logprob : (Option Real)]
    [target-log-weight : (Option Real)]
    [hard-ok? : Boolean]
    [distribution-guarantee : Symbol]
    [latency-ms : Real]
-   [trace : (Listof Any)]
-   [observation : (Option WeakObservation)]
+   [tokenizer-fingerprint : String]
    [weak : (Option weak-result)]
    [metrics : generation-metrics])
   #:transparent)
 
-;; Observation ---------------------------------------------------------------
+;; Compile-once specification and observation --------------------------------
 
-(: compile-for-model (-> Model Program Guidance))
-(define (compile-for-model model program)
-  (define tokenizer (model-tokenizer model))
-  (define token-texts
-    (for/vector : (Vectorof String) ([id : Natural (in-range (vocab-size tokenizer))])
-      (token-ref tokenizer id)))
-  (compile-guidance program
-                    (lambda ([source : String]) (tokenize tokenizer source))
-                    (make-regex-vocabulary token-texts)))
+(struct compilation-context
+  ([vocabulary : RegexVocabulary] [tokenizer-fingerprint : String]) #:transparent)
+(define compilation-contexts : (Weak-HashTable Model compilation-context)
+  (make-weak-hasheq))
 
-(: observation-from-state (-> Program GuidanceState WeakObservation))
-(define (observation-from-state program state)
-  (make-weak-observation (program-schema-descriptors program)
-                         (program-canonical-form program)
-                         (guidance-weak-matches state)))
+(struct compiled-spec-impl
+  ([model : Model] [program : Program] [guidance : Guidance] [schema : WeakSchema]
+   [spec-fingerprint : String] [tokenizer-fingerprint : String]
+   [closed? : (Boxof Boolean)])
+  #:transparent)
+(define-type CompiledSpec compiled-spec-impl)
 
-(: observe-ids (-> Model Program TokenIds WeakObservation))
-(define (observe-ids model program ids)
-  (unless (null? (program-layout-errors program))
-    (error 'observe "unsupported program layout: ~a" (car (program-layout-errors program))))
-  (define guidance (compile-for-model model program))
+(: model-compilation-context (-> Model compilation-context))
+(define (model-compilation-context model)
+  (hash-ref
+   compilation-contexts model
+   (lambda ()
+      (define tokenizer (model-tokenizer model))
+      (define token-texts
+        (for/vector : (Vectorof String) ([id : Natural (in-range (vocab-size tokenizer))])
+          (token-ref tokenizer id)))
+      (define context
+        (compilation-context
+         (make-regex-vocabulary token-texts)
+         (fingerprint-datum
+          (list 'rack-llm-tokenizer 1 (vector->list token-texts)))))
+      (hash-set! compilation-contexts model context)
+      context)))
+
+(: compile-spec (-> Model Program CompiledSpec))
+(define (compile-spec model program)
+  (define errors (program-layout-errors program))
+  (unless (null? errors) (error 'compile-spec "unsupported program layout: ~a" (car errors)))
+  (model-acquire! model)
+  (with-handlers ([exn:fail? (lambda ([exn : exn:fail]) (model-release! model) (raise exn))])
+    (define context (model-compilation-context model))
+    (define tokenizer (model-tokenizer model))
+    (define canonical (program-canonical-form program))
+    (compiled-spec-impl
+     model program
+     (compile-guidance program (lambda ([source : String]) (tokenize tokenizer source))
+                       (compilation-context-vocabulary context))
+     (make-weak-schema (program-schema-descriptors program)
+                       (compilation-context-tokenizer-fingerprint context)
+                       (program-shape-form program))
+     (fingerprint-datum (list 'rack-llm-spec 2 canonical))
+     (compilation-context-tokenizer-fingerprint context)
+     (box #f))))
+
+(: compiled-spec-close! (-> CompiledSpec Void))
+(define (compiled-spec-close! compiled)
+  (unless (unbox (compiled-spec-impl-closed? compiled))
+    (set-box! (compiled-spec-impl-closed? compiled) #t)
+    (model-release! (compiled-spec-impl-model compiled))))
+
+(: check-compiled (-> Symbol CompiledSpec Void))
+(define (check-compiled who compiled)
+  (when (unbox (compiled-spec-impl-closed? compiled)) (error who "compiled spec is closed")))
+
+(: observation-from-state (->* (CompiledSpec GuidanceState TokenIds) (#:trace? Boolean) WeakObservation))
+(define (observation-from-state compiled state ids #:trace? [trace? #f])
+  (make-weak-observation (compiled-spec-impl-schema compiled)
+                         (program-canonical-form (compiled-spec-impl-program compiled))
+                         (guidance-weak-matches state)
+                         #:trace? trace? #:token-ids ids))
+
+(: observe-token-ids (->* (CompiledSpec TokenIds) (#:trace? Boolean) WeakObservation))
+(define (observe-token-ids compiled ids #:trace? [trace? #f])
+  (check-compiled 'observe-token-ids compiled)
+  (define program (compiled-spec-impl-program compiled))
+  (define profile-errors (program-pwsg-errors program))
+  (unless (null? profile-errors) (error 'observe-token-ids "unsupported PWSG program: ~a" (car profile-errors)))
+  (define guidance (compiled-spec-impl-guidance compiled))
   (define state
     (for/fold ([state : GuidanceState (guidance-initial guidance)]) ([id (in-list ids)])
       (guidance-step guidance state id)))
   (unless (and (not (guidance-dead? state)) (guidance-accepting? state))
-    (error 'observe "candidate is not accepted by the hard program"))
-  (observation-from-state program state))
+    (error 'observe-token-ids "candidate is not accepted by the hard program"))
+  (observation-from-state compiled state ids #:trace? trace?))
 
-(: observe (-> Model Program (U String generation-result) WeakObservation))
-(define (observe model program candidate)
+(: observe (->* (CompiledSpec (U String generation-result)) (#:trace? Boolean) WeakObservation))
+(define (observe compiled candidate #:trace? [trace? #f])
+  (check-compiled 'observe compiled)
   (cond
     [(generation-result? candidate)
-     (define existing (generation-result-observation candidate))
-     (if existing
+     (unless (string=? (compiled-spec-impl-tokenizer-fingerprint compiled)
+                       (generation-result-tokenizer-fingerprint candidate))
+       (error 'observe "generation result uses a different tokenizer"))
+     (define weak (generation-result-weak candidate))
+     (define existing (and weak (weak-result-observation weak)))
+     (if (and existing
+              (string=? (weak-observation-spec-fingerprint existing)
+                        (compiled-spec-impl-spec-fingerprint compiled))
+              (not trace?))
          existing
-         (observe-ids model program (generation-result-token-ids candidate)))]
+         (observe-token-ids compiled (generation-result-token-ids candidate) #:trace? trace?))]
     [else
-     (define tokenizer (model-tokenizer model))
+     (define tokenizer (model-tokenizer (compiled-spec-impl-model compiled)))
      (define ids (tokenize tokenizer candidate))
      (unless (string=? candidate (detokenize tokenizer ids))
-       (error 'observe "candidate does not round-trip through the model tokenizer"))
-     (observe-ids model program ids)]))
+       (error 'observe "candidate does not round-trip through the model tokenizer; use observe-token-ids"))
+     (observe-token-ids compiled ids #:trace? trace?)]))
+
+(: observe-many (->* (CompiledSpec (Listof (U String generation-result TokenIds)))
+                     (#:trace? Boolean) (Listof WeakObservation)))
+(define (observe-many compiled candidates #:trace? [trace? #f])
+  (for/list : (Listof WeakObservation) ([candidate (in-list candidates)])
+    (if (list? candidate)
+        (observe-token-ids compiled candidate #:trace? trace?)
+        (observe compiled candidate #:trace? trace?))))
 
 ;; Generator -----------------------------------------------------------------
 
@@ -210,13 +276,13 @@
   (cars-sampler-config max-attempts max-nodes model min-posterior))
 
 (struct terminal-evaluation
-  ([observation : WeakObservation] [posterior : Real] [mass : Real])
+  ([observation : (Option WeakObservation)] [posterior : Real] [mass : Real])
   #:transparent)
 
 (struct generator-impl
   ([model : Model]
    [provider : Provider]
-   [program : Program]
+   [compiled : CompiledSpec]
    [prompt-ids : TokenIds]
    [guidance : Guidance]
    [sampler : Sampler]
@@ -224,7 +290,7 @@
    [max-tokens : Natural]
    [rng : Pseudo-Random-Generator]
    [trie : CarsTrie]
-   [terminal-cache : (HashTable TokenIds terminal-evaluation)]
+   [terminal-cache : (HashTable CarsNode terminal-evaluation)]
    [closed? : (Boxof Boolean)]
    [busy? : (Boxof Boolean)]
    [valid? : (Boxof Boolean)])
@@ -232,38 +298,35 @@
 (define-type Generator generator-impl)
 
 (: make-generator
-   (->* (Model String Program #:sampler Sampler)
+   (->* (CompiledSpec String #:sampler Sampler)
         (#:temperature Real #:max-tokens Natural #:seed (Option Integer))
         Generator))
-(define (make-generator model prompt program #:sampler sampler
+(define (make-generator compiled prompt #:sampler sampler
                         #:temperature [temperature 0.7]
                         #:max-tokens [max-tokens 128]
                         #:seed [seed #f])
   (unless (and (> temperature 0.0) (= temperature temperature)
                (not (eqv? temperature +inf.0)))
     (raise-argument-error 'make-generator "finite positive temperature" temperature))
-  (define layout-errors (program-layout-errors program))
-  (unless (null? layout-errors)
-    (error 'make-generator "unsupported program layout: ~a" (car layout-errors)))
+  (check-compiled 'make-generator compiled)
+  (define model (compiled-spec-impl-model compiled))
+  (define program (compiled-spec-impl-program compiled))
   (define weak-model (cars-sampler-config-weak-model sampler))
   (when weak-model
     (define profile-errors (program-pwsg-errors program))
     (unless (null? profile-errors)
       (error 'make-generator "unsupported PWSG program: ~a" (car profile-errors)))
-    (define empty-observation
-      (make-weak-observation (program-schema-descriptors program)
-                             (program-canonical-form program) '()))
     (unless (string=? (weak-model-schema-fingerprint weak-model)
-                      (weak-observation-schema-fingerprint empty-observation))
+                      (weak-schema-fingerprint (compiled-spec-impl-schema compiled)))
       (error 'make-generator "incompatible weak model and program schema")))
   (model-acquire! model)
   (with-handlers ([exn:fail? (lambda ([exn : exn:fail])
                                (model-release! model)
                                (raise exn))])
-    (define guidance (compile-for-model model program))
-    (generator-impl model (model-provider model) program
-                    (tokenize (model-tokenizer model) prompt) guidance sampler
-                    temperature max-tokens (make-rng seed)
+    (generator-impl model (model-provider model) compiled
+                    (tokenize (model-tokenizer model) prompt)
+                    (compiled-spec-impl-guidance compiled)
+                    sampler temperature max-tokens (make-rng seed)
                     (make-cars-trie (cars-sampler-config-max-trie-nodes sampler))
                     (make-hash) (box #f) (box #f) (box #t))))
 
@@ -294,32 +357,33 @@
    [reason : (Option String)])
   #:transparent)
 
-(: terminal-key (-> TokenIds TokenId TokenIds))
-(define (terminal-key ids stop-id) (append ids (list stop-id)))
-
 (: evaluate-terminal
-   (-> Generator TokenIds GuidanceState TokenId
+   (-> Generator TokenIds GuidanceState (Option CarsNode)
        (Values terminal-evaluation Boolean)))
-(define (evaluate-terminal generator ids state stop-id)
-  (define key (terminal-key ids stop-id))
-  (define cached (hash-ref (generator-impl-terminal-cache generator) key #f))
-  (if cached
-      (values cached #t)
-      (let* ([observation (observation-from-state (generator-impl-program generator) state)]
-             [config (generator-impl-sampler generator)]
-             [model (cars-sampler-config-weak-model config)]
-             [posterior (if model (weak-posterior model observation) 1.0)]
-             [mass (if (>= posterior (cars-sampler-config-min-posterior config))
-                       posterior 0.0)]
-             [evaluation (terminal-evaluation observation posterior mass)])
-        (hash-set! (generator-impl-terminal-cache generator) key evaluation)
-        (values evaluation #f))))
+(define (evaluate-terminal generator ids state prefix-node)
+  (define config (generator-impl-sampler generator))
+  (define model (cars-sampler-config-weak-model config))
+  (cond
+    [(not model) (values (terminal-evaluation #f 1.0 1.0) #f)]
+    [else
+     (define cached (and prefix-node
+                         (hash-ref (generator-impl-terminal-cache generator) prefix-node #f)))
+     (if cached
+         (values cached #t)
+         (let* ([observation
+                 (observation-from-state (generator-impl-compiled generator) state ids)]
+                [posterior (weak-posterior model observation)]
+                [mass (if (>= posterior (cars-sampler-config-min-posterior config)) posterior 0.0)]
+                [evaluation (terminal-evaluation observation posterior mass)])
+           (when prefix-node
+             (hash-set! (generator-impl-terminal-cache generator) prefix-node evaluation))
+           (values evaluation #f)))]))
 
 (: decide-terminal
-   (-> Generator TokenIds GuidanceState TokenId Real Natural Natural
-       (Listof pending-domain) (Option CarsNode) cars-proposal))
-(define (decide-terminal generator ids state stop-id base-logprob proposed llm-calls pending node)
-  (define-values (evaluation cache-hit?) (evaluate-terminal generator ids state stop-id))
+   (-> Generator TokenIds GuidanceState Real Natural Natural
+       (Listof pending-domain) (Option CarsNode) (Option CarsNode) cars-proposal))
+(define (decide-terminal generator ids state base-logprob proposed llm-calls pending prefix-node node)
+  (define-values (evaluation cache-hit?) (evaluate-terminal generator ids state prefix-node))
   (define mass (terminal-evaluation-mass evaluation))
   (define old (if node (cars-node-mass node) 1.0))
   (cond
@@ -348,8 +412,11 @@
     void
     (lambda ()
       (let loop : cars-proposal ([depth : Natural 0]
-                                 [ids : TokenIds '()]
-                                 [state : GuidanceState (guidance-initial guidance)]
+                                 [reversed-ids : TokenIds '()]
+                                 [state : GuidanceState
+                                  (guidance-initial guidance #:weak? (and (cars-sampler-config-weak-model
+                                                                          (generator-impl-sampler generator))
+                                                                         #t))]
                                  [node : (Option CarsNode) (cars-trie-root trie)]
                                  [base : Real 0.0]
                                  [proposed : Natural 0]
@@ -358,25 +425,35 @@
         (cond
           [(>= depth (generator-impl-max-tokens generator))
            (define child (and node (cars-node-child! trie node vocab 1.0)))
+           (define ids (reverse reversed-ids))
            (if (guidance-accepting? state)
-               (decide-terminal generator ids state vocab base proposed llm-calls pending child)
+               (decide-terminal generator ids state base proposed llm-calls pending node child)
                (cars-proposal 'hard-invalid ids state base proposed llm-calls pending child 0.0 #f
                               "virtual STOP is hard-invalid"))]
           [else
-           (define content-allowed
-             (filter (lambda ([id : TokenId]) (not (and (member id eog-ids) #t)))
-                     (guidance-allowed-token-ids guidance state vocab)))
-           (define allowed
-             (sort (append content-allowed (if (guidance-accepting? state) eog-ids '())) <))
-           (define domain (make-token-domain allowed vocab))
+           (define domain
+             (or (and node (cars-node-domain-value node))
+                 (let* ([content (domain-subtract (guidance-token-domain guidance state)
+                                                  (domain-only eog-ids))]
+                        [stops (if (guidance-accepting? state)
+                                   (domain-only eog-ids) (domain-only '()))])
+                   (domain-union content stops))))
+           (define native-sample (provider-factor-sampler provider))
            (define selection
-             (sample-factor-logits
-              (provider-next-logits provider session)
-              (generator-impl-rng generator)
-              (generator-impl-temperature generator)
-              (if node (lambda ([id : TokenId]) (cars-node-log-factor node id))
-                  (lambda ([_id : TokenId]) 0.0))
-              (lambda ([id : TokenId]) (token-domain-member? domain id))))
+             (if native-sample
+                 (native-sample
+                  session (generator-impl-temperature generator) domain
+                  (and node (cars-node-domain-value node) #t)
+                  (if node (cars-node-child-masses node) '())
+                  (parameterize ([current-pseudo-random-generator (generator-impl-rng generator)])
+                    (random)))
+                 (sample-factor-logits
+                  (provider-next-logits provider session)
+                  (generator-impl-rng generator)
+                  (generator-impl-temperature generator)
+                  (if node (lambda ([id : TokenId]) (cars-node-log-factor node id))
+                      (lambda ([_id : TokenId]) 0.0))
+                  (lambda ([id : TokenId]) (domain-member? domain id)))))
            (unless selection (error 'cars "proposal envelope has no sampleable action"))
            (define selected (assert selection factor-selection?))
            (define id (factor-selection-id selected))
@@ -390,20 +467,22 @@
            (define next-base (+ base (factor-selection-base-logprob selected)))
            (cond
              [(and (member id eog-ids) #t)
+              (define ids (reverse reversed-ids))
               (if (guidance-accepting? state)
-                  (decide-terminal generator ids state id next-base proposed (add1 llm-calls)
-                                   next-pending child)
+                  (decide-terminal generator ids state next-base proposed (add1 llm-calls)
+                                   next-pending node child)
                   (cars-proposal 'hard-invalid ids state next-base proposed (add1 llm-calls)
                                  next-pending child 0.0 #f "EOG is hard-invalid"))]
              [else
               (define next-state (guidance-step guidance state id))
+              (define next-reversed (cons id reversed-ids))
               (if (guidance-dead? next-state)
-                  (cars-proposal 'hard-invalid (append ids (list id)) next-state next-base
+                  (cars-proposal 'hard-invalid (reverse next-reversed) next-state next-base
                                  (add1 proposed) (add1 llm-calls) next-pending child 0.0 #f
                                  "content token made the hard state dead")
                   (begin
                     (provider-commit-token! provider session id)
-                    (loop (add1 depth) (append ids (list id)) next-state child next-base
+                    (loop (add1 depth) next-reversed next-state child next-base
                           (add1 proposed) (add1 llm-calls) next-pending)))])])))
     (lambda () (provider-end-session! provider session))))
 
@@ -424,8 +503,11 @@
        generation-result))
 (define (failure-result generator trie status reason started attempts rejected hard-invalid hard-proposals
                         threshold-rejections posterior-rejections weak-evaluations weak-cache-hits proposed llm-calls)
-  (generation-result status reason '() "" #f #f #f #f 'no-sample
-                     (- (current-inexact-milliseconds) started) '() #f #f
+  (generation-result status reason '() "" #f #f #f 'no-sample
+                     (- (current-inexact-milliseconds) started)
+                     (compiled-spec-impl-tokenizer-fingerprint
+                      (generator-impl-compiled generator))
+                     #f
                      (metrics generator trie attempts rejected hard-invalid hard-proposals
                               threshold-rejections posterior-rejections weak-evaluations
                               weak-cache-hits proposed llm-calls)))
@@ -467,7 +549,10 @@
        (define proposal
          (with-handlers ([exn:fail?
                           (lambda ([exn : exn:fail])
-                            (cars-proposal 'backend-error '() (guidance-initial (generator-impl-guidance generator))
+                            (cars-proposal 'backend-error '()
+                                           (guidance-initial
+                                            (generator-impl-guidance generator)
+                                            #:weak? (and (cars-sampler-config-weak-model config) #t))
                                            0.0 0 0 '() #f 1.0 #f (exn-message exn)))])
            (cars-attempt generator trie)))
        (cond
@@ -511,7 +596,8 @@
                       (and weak-model decision
                            (let ([evaluation (terminal-decision-evaluation decision)])
                              (weak-result
-                              (terminal-evaluation-observation evaluation)
+                              (assert (terminal-evaluation-observation evaluation)
+                                      weak-observation?)
                               (terminal-evaluation-posterior evaluation)
                               (cars-sampler-config-min-posterior config)
                               (terminal-evaluation-mass evaluation)
@@ -521,17 +607,18 @@
                               (weak-model-fingerprint weak-model)
                               (weak-model-schema-fingerprint weak-model))))]
                      [base (cars-proposal-base-logprob proposal)]
-                     [target (+ base (if weak (log (weak-result-posterior weak)) 0.0))]
+                     [target (assert
+                              (+ base (if weak (log (weak-result-posterior weak)) 0.0))
+                              real?)]
                      [ids (cars-proposal-ids proposal)])
                 (generation-result
                  'found #f ids
                  (detokenize (model-tokenizer (generator-impl-model generator)) ids)
-                 (guidance-value (cars-proposal-state proposal)) base target #t
+                 base target #t
                  (if weak 'exact-pwsg 'exact-hard)
                  (- (current-inexact-milliseconds) started)
-                 (guidance-trace (cars-proposal-state proposal))
-                 (and decision (terminal-evaluation-observation
-                                (terminal-decision-evaluation decision)))
+                 (compiled-spec-impl-tokenizer-fingerprint
+                  (generator-impl-compiled generator))
                  weak
                  (metrics generator trie attempt rejected next-hard-invalid next-hard-proposals
                           next-threshold next-posterior next-evaluations next-cache-hits
@@ -556,17 +643,17 @@
     (generator-sample! generator #:deadline-ms deadline-ms)))
 
 (: generate
-   (->* (Model String Program #:sampler Sampler)
+   (->* (CompiledSpec String #:sampler Sampler)
         (#:temperature Real #:seed (Option Integer) #:deadline-ms (Option Real)
          #:max-tokens Natural)
         generation-result))
-(define (generate model prompt program #:sampler sampler
+(define (generate compiled prompt #:sampler sampler
                   #:temperature [temperature 0.7]
                   #:seed [seed #f]
                   #:deadline-ms [deadline-ms #f]
                   #:max-tokens [max-tokens 128])
   (define generator
-    (make-generator model prompt program #:sampler sampler #:temperature temperature
+    (make-generator compiled prompt #:sampler sampler #:temperature temperature
                     #:seed seed #:max-tokens max-tokens))
   (dynamic-wind void
                 (lambda () (generator-sample! generator #:deadline-ms deadline-ms))

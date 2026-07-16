@@ -47,14 +47,12 @@
     (define-values (_ state) (run program '(0 2)))
     (check-true (guidance-dead? state)))
 
-  (test-case "text accepts from zero through its bound and then becomes terminal"
+  (test-case "text accepts from zero through its bound"
     (define program (text 2))
     (define-values (guidance empty) (run program '()))
     (check-true (guidance-accepting? empty))
-    (check-false (guidance-terminal? guidance empty))
     (define full (guidance-step guidance (guidance-step guidance empty 0) 1))
     (check-true (guidance-accepting? full))
-    (check-true (guidance-terminal? guidance full))
     (check-true (guidance-dead? (guidance-step guidance full 0))))
 
   (test-case "repeat does not accept while another item is partial"
@@ -66,7 +64,7 @@
     (check-true (guidance-accepting? (guidance-step guidance partial 1))))
 
   (test-case "PWSG profile rejects advanced and ambiguous constructs"
-    (check-true (pwsg-compatible? (control (text 4) (prefer (ere "a")))))
-    (check-false (pwsg-compatible? (rx "a+")))
-    (check-false (pwsg-compatible? (seq (list (text 2) (lit "x")))))
-    (check-false (pwsg-compatible? (repeat 1 2 (text 2))))))
+    (check-equal? (validate-pwsg (control (text 4) (prefer (ere "a")))) '())
+    (check-not-equal? (validate-pwsg (rx "a+")) '())
+    (check-not-equal? (validate-pwsg (seq (list (text 2) (lit "x")))) '())
+    (check-not-equal? (validate-pwsg (repeat 1 2 (text 2))) '())))

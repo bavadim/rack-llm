@@ -1,0 +1,15 @@
+name: unit
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Bogdanp/setup-racket@v1.14
+        with:
+          version: stable
+      - run: sudo apt-get update && sudo apt-get install -y libpcre2-dev
+      - run: raco pkg install --auto --name rack-llm --link .
+      - run: make unit-ci

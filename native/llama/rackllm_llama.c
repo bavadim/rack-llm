@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -285,4 +286,104 @@ int32_t rackllm_llama_session_commit(struct rackllm_llama_session * session,
                                      char * err,
                                      size_t err_len) {
     return decode_tokens(session, &token, 1, err, err_len);
+}
+
+static bool sorted_contains(const int32_t * ids, int32_t count, int32_t id) {
+    int32_t lo = 0, hi = count - 1;
+    while (lo <= hi) {
+        int32_t mid = lo + (hi - lo) / 2;
+        if (ids[mid] == id) return true;
+        if (ids[mid] < id) lo = mid + 1; else hi = mid - 1;
+    }
+    return false;
+}
+
+static double child_mass(const int32_t * ids, const double * masses,
+                         int32_t count, int32_t id) {
+    int32_t lo = 0, hi = count - 1;
+    while (lo <= hi) {
+        int32_t mid = lo + (hi - lo) / 2;
+        if (ids[mid] == id) return masses[mid];
+        if (ids[mid] < id) lo = mid + 1; else hi = mid - 1;
+    }
+    return 1.0;
+}
+
+static bool in_domain(bool include, const int32_t * ids, int32_t count, int32_t id) {
+    return include == sorted_contains(ids, count, id);
+}
+
+/* Exact categorical draw for exp(logit / temperature) times the CARS factor.
+ * out_metrics = base log-probability, base probability, frontier mass. */
+int32_t rackllm_llama_session_sample_factor(
+        struct rackllm_llama_session * session,
+        double temperature,
+        int32_t domain_include,
+        const int32_t * domain_ids,
+        int32_t domain_count,
+        int32_t constrain_to_domain,
+        const int32_t * child_ids,
+        const double * child_masses,
+        int32_t child_count,
+        double draw,
+        int32_t * out_id,
+        double * out_metrics) {
+    if (session == NULL || temperature <= 0.0 || out_id == NULL || out_metrics == NULL) return -2;
+    const float * logits = llama_get_logits_ith(session->ctx, -1);
+    if (logits == NULL) return -2;
+    const int32_t vocab = session->owner->vocab_size;
+    double max_base = -INFINITY, max_adjusted = -INFINITY;
+    int32_t candidates = 0;
+
+    for (int32_t id = 0; id < vocab; id++) {
+        double base = (double) logits[id] / temperature;
+        if (!isfinite(base)) continue;
+        if (base > max_base) max_base = base;
+        bool frontier = in_domain(domain_include != 0, domain_ids, domain_count, id);
+        double mass = (constrain_to_domain && !frontier)
+            ? 0.0 : child_mass(child_ids, child_masses, child_count, id);
+        if (mass > 0.0) {
+            double adjusted = base + log(mass);
+            if (adjusted > max_adjusted) max_adjusted = adjusted;
+            candidates++;
+        }
+    }
+    if (candidates == 0 || !isfinite(max_base) || !isfinite(max_adjusted)) return -1;
+
+    double base_sum = 0.0, frontier_sum = 0.0, adjusted_sum = 0.0;
+    for (int32_t id = 0; id < vocab; id++) {
+        double base = (double) logits[id] / temperature;
+        if (!isfinite(base)) continue;
+        double base_weight = exp(base - max_base);
+        base_sum += base_weight;
+        bool frontier = in_domain(domain_include != 0, domain_ids, domain_count, id);
+        if (frontier) frontier_sum += base_weight;
+        double mass = (constrain_to_domain && !frontier)
+            ? 0.0 : child_mass(child_ids, child_masses, child_count, id);
+        if (mass > 0.0) adjusted_sum += exp(base + log(mass) - max_adjusted);
+    }
+
+    double target = fmin(fmax(draw, 0.0), 0.9999999999999999) * adjusted_sum;
+    double cumulative = 0.0;
+    int32_t selected = -1;
+    double selected_base = -INFINITY;
+    for (int32_t id = 0; id < vocab; id++) {
+        double base = (double) logits[id] / temperature;
+        if (!isfinite(base)) continue;
+        bool frontier = in_domain(domain_include != 0, domain_ids, domain_count, id);
+        double mass = (constrain_to_domain && !frontier)
+            ? 0.0 : child_mass(child_ids, child_masses, child_count, id);
+        if (mass <= 0.0) continue;
+        selected = id;
+        selected_base = base;
+        cumulative += exp(base + log(mass) - max_adjusted);
+        if (cumulative > target) break;
+    }
+    if (selected < 0) return -1;
+    double log_z = max_base + log(base_sum);
+    out_id[0] = selected;
+    out_metrics[0] = selected_base - log_z;
+    out_metrics[1] = exp(out_metrics[0]);
+    out_metrics[2] = frontier_sum / base_sum;
+    return candidates;
 }

@@ -14,12 +14,13 @@
   (test-case "public API is the exact hard/PWSG surface"
     (for ([name (in-list
                  '(model-metadata model-close!
-                   lit rx ere pure seq choice repeat bind text control prefer avoid ban
-                   pwsg-compatible? observe fit-weak-model weak-posterior
+                   lit rx ere seq choice repeat text control prefer avoid ban validate-pwsg
+                   compile-spec compiled-spec-close! observe observe-token-ids observe-many
+                   fit-weak-model weak-posterior
                    save-weak-model load-weak-model cars-sampler make-generator
                    generator-sample! generator-sample-n! generator-close! generate
                    weak-observation-labels weak-model-fingerprint
-                   generation-result-weak generation-result-observation
+                   generation-result-weak generation-result-tokenizer-fingerprint
                    generation-result-distribution-guarantee
                    generation-metrics-hard-proposals generation-metrics-weak-rejections))])
       (check-not-equal? (exported-value core-module name) 'missing
@@ -39,9 +40,8 @@
 
   (test-case "new constructors enforce pattern and layout contracts"
     (check-exn #rx"lit or ere" (lambda () (prefer (rx "a"))))
-    (check-true (pwsg-compatible? (control (text 8) (prefer (ere "a")))))
-    (check-false (pwsg-compatible? (seq (list (text 8) (lit "suffix")))))
-    (check-false (pwsg-compatible? (bind (lit "a") (lambda (_v) (lit "b"))))))
+    (check-equal? (validate-pwsg (control (text 8) (prefer (ere "a")))) '())
+    (check-not-equal? (validate-pwsg (seq (list (text 8) (lit "suffix")))) '()))
 
   (test-case "llama backend keeps one public constructor"
     (check-not-equal? (exported-value llama-module 'llama-cpp-model) 'missing)

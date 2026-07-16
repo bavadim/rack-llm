@@ -26,8 +26,9 @@
 
 (module+ test
   (test-case "reusable exact generator produces independent samples"
+    (define compiled (compile-spec m (choice (list (lit " yes") (lit " no")))))
     (define generator
-      (make-generator m "" (choice (list (lit " yes") (lit " no")))
+      (make-generator compiled ""
                       #:sampler (cars-sampler #:max-attempts 20)
                       #:temperature 1.0 #:max-tokens 1 #:seed 33))
     (define results (generator-sample-n! generator 100))
@@ -37,4 +38,5 @@
     (check-true (> (generation-metrics-trie-nodes
                     (generation-result-metrics (last results))) 1))
     (generator-close! generator)
-    (check-exn #rx"closed" (lambda () (generator-sample! generator)))))
+    (check-exn #rx"closed" (lambda () (generator-sample! generator)))
+    (compiled-spec-close! compiled)))

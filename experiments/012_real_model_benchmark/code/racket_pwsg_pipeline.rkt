@@ -78,8 +78,9 @@
 
 (define (sample-hard backend row noise count seed)
   (define spec (make-spec row noise))
+  (define compiled (compile-spec backend spec))
   (define generator
-    (make-generator backend (field row 'prompt) spec
+    (make-generator compiled (field row 'prompt)
                     #:sampler (cars-sampler #:max-attempts 100)
                     #:temperature (temperature) #:max-tokens (max-tokens) #:seed seed))
   (dynamic-wind
@@ -90,14 +91,18 @@
         (unless (eq? (generation-result-status result) 'found)
           (error 'pwsg-012 "hard calibration generation failed for ~a/~a: ~a"
                  (field row 'key) noise (generation-result-reason result)))
-        (cons result (observe backend spec result))))
-    (lambda () (generator-close! generator))))
+        (cons result (observe compiled result))))
+    (lambda ()
+      (generator-close! generator)
+      (compiled-spec-close! compiled))))
 
 (define (fit-group backend template rows noise group-index)
   (define first-spec (make-spec (car rows) noise))
+  (define first-compiled (compile-spec backend first-spec))
   (define weak-count (vector-length
                       (weak-observation-labels
-                       (observe backend first-spec ""))))
+                       (observe first-compiled ""))))
+  (compiled-spec-close! first-compiled)
   (define target (max (calibration-min) (* (calibration-per-rule) weak-count)))
   (define base (quotient target (length rows)))
   (define extra (remainder target (length rows)))
@@ -113,10 +118,10 @@
   (save-weak-model model path)
   model)
 
-(define (result-posterior weak-model result)
-  (weak-posterior weak-model (generation-result-observation result)))
+(define (result-posterior weak-model compiled result)
+  (weak-posterior weak-model (observe compiled result)))
 
-(define (result-row row template noise method sample-index result posterior weak-model)
+(define (result-row row template noise method sample-index result posterior observation weak-model)
   (define metrics (generation-result-metrics result))
   (hash 'key (field row 'key)
         'template template
@@ -132,7 +137,7 @@
         'posterior posterior
         'weak_model_fingerprint (weak-model-fingerprint weak-model)
         'schema_fingerprint
-        (weak-observation-schema-fingerprint (generation-result-observation result))
+        (weak-observation-schema-fingerprint observation)
         'distribution_guarantee
         (symbol->string (generation-result-distribution-guarantee result))
         'attempts (generation-metrics-attempts metrics)
@@ -144,36 +149,43 @@
 
 (define (evaluate-method backend row template noise method weak-model sample-index seed)
   (define spec (make-spec row noise))
+  (define compiled (compile-spec backend spec))
   (define (one-hard offset)
-    (generate backend (field row 'prompt) spec
+    (generate compiled (field row 'prompt)
               #:sampler (cars-sampler #:max-attempts 100)
               #:temperature (temperature) #:max-tokens (max-tokens) #:seed (+ seed offset)))
-  (case method
-    [(pwsg_cars)
-     (define result
-       (generate backend (field row 'prompt) spec
-                 #:sampler (cars-sampler #:max-attempts 100 #:weak-model weak-model)
-                 #:temperature (temperature) #:max-tokens (max-tokens) #:seed seed))
-     (values result (and (generation-result-observation result)
-                         (result-posterior weak-model result)))]
-    [(hard_only_cars)
-     (define result (one-hard 0))
-     (values result (result-posterior weak-model result))]
-    [(posterior_rerank)
-     (define candidates (for/list ([i (in-range 4)]) (one-hard i)))
-     (define result (argmax (lambda (r) (result-posterior weak-model r)) candidates))
-     (values result (result-posterior weak-model result))]
-    [(posterior_rejection)
-     (define rng (make-pseudo-random-generator))
-     (parameterize ([current-pseudo-random-generator rng]) (random-seed (+ seed 7000000)))
-     (let loop ([attempt 0])
-       (when (>= attempt 100) (error 'pwsg-012 "posterior rejection exhausted attempts"))
-       (define result (one-hard attempt))
-       (define posterior (result-posterior weak-model result))
-       (if (parameterize ([current-pseudo-random-generator rng]) (< (random) posterior))
-           (values result posterior)
-           (loop (add1 attempt))))]
-    [else (error 'pwsg-012 "unknown method ~a" method)]))
+  (dynamic-wind
+    void
+    (lambda ()
+      (define-values (result posterior)
+        (case method
+          [(pwsg_cars)
+           (define result
+             (generate compiled (field row 'prompt)
+                       #:sampler (cars-sampler #:max-attempts 100 #:weak-model weak-model)
+                       #:temperature (temperature) #:max-tokens (max-tokens) #:seed seed))
+           (values result (result-posterior weak-model compiled result))]
+          [(hard_only_cars)
+           (define result (one-hard 0))
+           (values result (result-posterior weak-model compiled result))]
+          [(posterior_rerank)
+           (define candidates (for/list ([i (in-range 4)]) (one-hard i)))
+           (define result
+             (argmax (lambda (r) (result-posterior weak-model compiled r)) candidates))
+           (values result (result-posterior weak-model compiled result))]
+          [(posterior_rejection)
+           (define rng (make-pseudo-random-generator))
+           (parameterize ([current-pseudo-random-generator rng]) (random-seed (+ seed 7000000)))
+           (let loop ([attempt 0])
+             (when (>= attempt 100) (error 'pwsg-012 "posterior rejection exhausted attempts"))
+             (define result (one-hard attempt))
+             (define posterior (result-posterior weak-model compiled result))
+             (if (parameterize ([current-pseudo-random-generator rng]) (< (random) posterior))
+                 (values result posterior)
+                 (loop (add1 attempt))))]
+          [else (error 'pwsg-012 "unknown method ~a" method)]))
+      (values result posterior (observe compiled result)))
+    (lambda () (compiled-spec-close! compiled))))
 
 (define rows (read-jsonl (specs-path)))
 (when (< (length rows) 150) (error 'pwsg-012 "fewer than 150 PWSG rows"))
@@ -200,12 +212,13 @@
                    [sample-index (in-range (eval-samples))])
               (define seed (+ 50000000 (* group-index 1000000)
                               (* sample-index 100) (index-of methods method)))
-              (define-values (result posterior)
+              (define-values (result posterior observation)
                 (evaluate-method backend row template noise method weak-model sample-index seed))
               (unless (eq? (generation-result-status result) 'found)
                 (error 'pwsg-012 "evaluation failed for ~a/~a/~a: ~a"
                        (field row 'key) noise method (generation-result-reason result)))
-              (write-json (result-row row template noise method sample-index result posterior weak-model) out)
+              (write-json (result-row row template noise method sample-index result posterior
+                                      observation weak-model) out)
               (newline out)
               (flush-output out)))))
       (lambda () (model-close! backend))))

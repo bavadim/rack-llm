@@ -157,3 +157,9 @@
                               "[[:punct:]]+"
                               "\\p{L}+"))])
       (check-not-exn (lambda () (parse-regex-program pattern))))))
+
+(module+ test
+  (test-case "ERE parser owns end-anchor classification"
+    (check-true (ere-pattern-has-end-anchor? (parse-ere-pattern "x$")))
+    (check-false (ere-pattern-has-end-anchor? (parse-ere-pattern "x\\$")))
+    (check-true (ere-pattern-has-end-anchor? (parse-ere-pattern "x\\\\$")))))

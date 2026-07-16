@@ -6,27 +6,28 @@
 (lit text)
 (rx pcre-pattern)
 (ere portable-pattern)
-(pure value)
 (seq programs)
 (choice programs)
 (repeat min max program)
-(bind program continue)
 (text max-tokens)
 (control program rule ...)
 (prefer (lit-or-ere pattern))
 (avoid  (lit-or-ere pattern))
 (ban    (lit-or-ere pattern))
-(pwsg-compatible? program)
+(validate-pwsg program)
 ```
 
 `text` accepts zero through `max-tokens` and is restricted to tail position.
-`ere` is fullmatch as a guide and search as a rule. `rx`, `pure`, and `bind` are
-hard-only extensions.
+`ere` is fullmatch as a guide and search as a rule. `rx` is a hard-only
+extension. `validate-pwsg` returns diagnostics; an empty list means compatible.
 
 ## Calibration
 
 ```racket
-(observe model spec text-or-generation-result)
+(define compiled (compile-spec model spec))
+(observe compiled text-or-generation-result #:trace? #f)
+(observe-token-ids compiled ids #:trace? #f)
+(observe-many compiled candidates #:trace? #f)
 (fit-weak-model observations
   #:max-iterations 200 #:tolerance 1e-7
   #:pseudocount 1.0 #:restarts 8 #:seed 0)
@@ -35,9 +36,9 @@ hard-only extensions.
 (load-weak-model path)
 ```
 
-`observe` rejects text outside the hard language. The returned observation
-contains signed labels, structural paths, scope token spans, and schema/spec
-fingerprints.
+Compilation creates the regex vocabulary once. `observe` rejects text outside
+the hard language and requires tokenizer round-trip; `observe-token-ids` is the
+dataset API. Trace mode adds scope spans; the default stores labels only.
 
 ## Generation
 
@@ -49,7 +50,7 @@ fingerprints.
                 #:min-posterior 0.0))
 
 (define generator
-  (make-generator model prompt spec
+  (make-generator compiled prompt
                   #:sampler sampler
                   #:temperature 0.7
                   #:max-tokens 128
@@ -58,6 +59,7 @@ fingerprints.
 (generator-sample! generator #:deadline-ms #f)
 (generator-sample-n! generator count #:deadline-ms #f)
 (generator-close! generator)
+(compiled-spec-close! compiled)
 ```
 
 Runtime statuses are `found`, `not-found-attempt-budget`,

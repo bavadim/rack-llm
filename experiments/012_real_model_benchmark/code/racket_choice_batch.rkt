@@ -71,21 +71,25 @@
               'outcome "ERROR"
               'failure_reason (exn-message exn)
               'source "real_runtime"))])
+    (define compiled (compile-spec model (request->guide request)))
     (define generated
-      (generate model
-                (field request 'prompt)
-                (request->guide request)
-                #:seed (field request 'seed)
-                #:temperature 0.7
-                #:deadline-ms (field request 'deadline_ms #f)
-                #:max-tokens (field request 'max_tokens 512)))
+      (dynamic-wind
+        void
+        (lambda ()
+          (generate compiled (field request 'prompt)
+                    #:sampler (cars-sampler #:max-attempts 100)
+                    #:seed (field request 'seed)
+                    #:temperature 0.7
+                    #:deadline-ms (field request 'deadline_ms #f)
+                    #:max-tokens (field request 'max_tokens 512)))
+        (lambda () (compiled-spec-close! compiled))))
     (hash 'run_id (field request 'run_id)
           'key (field request 'key)
           'method "ours_hard"
           'seed (field request 'seed)
           'text (generation-result-text generated)
           'latency_ms (- (current-inexact-milliseconds) started-ms)
-          'generated_tokens (generation-result-generated-tokens generated)
+          'generated_tokens (length (generation-result-token-ids generated))
           'outcome (if (eq? (generation-result-status generated) 'found) "GENERATED" "NOT_FOUND")
           'failure_reason (or (generation-result-reason generated) "")
           'source "real_runtime")))

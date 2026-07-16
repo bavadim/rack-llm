@@ -1,27 +1,23 @@
 #lang typed/racket/base
 
-(require racket/list)
+(require (only-in "domain.rkt" TokenDomain domain-member?))
 
-(provide TokenDomain CarsTrie CarsNode
-         make-token-domain token-domain-member?
+(provide CarsTrie CarsNode
          make-cars-trie cars-trie-root cars-trie-node-count cars-trie-frozen?
-         cars-node-mass cars-node-log-factor cars-node-child!
+         cars-node-mass cars-node-domain-value cars-node-child-masses
+         cars-node-log-factor cars-node-child!
          cars-node-install-domain! cars-node-set-mass!)
 
 (define-type TokenId Natural)
-(define-type TokenIds (Listof TokenId))
-
-;; only?=#t stores the allowed side; only?=#f stores its blocked complement.
-(struct token-domain ([only? : Boolean] [ids : (Vectorof TokenId)]) #:transparent)
-(define-type TokenDomain token-domain)
-
 (struct cars-edge ([q : Real] [child : CarsNode]) #:transparent)
 (struct cars-node
   ([envelope : Real]
    [domain : (Option TokenDomain)]
    [domain-mass : Real]
    [children : (HashTable TokenId cars-edge)]
-   [parent : (Option CarsNode)])
+   [parent : (Option CarsNode)]
+   [incoming-id : TokenId]
+   [incoming-q : Real])
   #:mutable
   #:transparent)
 (define-type CarsNode cars-node)
@@ -34,40 +30,11 @@
   #:transparent)
 (define-type CarsTrie cars-trie)
 
-(: make-token-domain (-> TokenIds Natural TokenDomain))
-(define (make-token-domain allowed total-actions)
-  (define allowed* (sort (remove-duplicates allowed) <))
-  (if (<= (length allowed*) (quotient total-actions 2))
-      (token-domain #t (list->vector allowed*))
-      (token-domain
-       #f
-       (list->vector
-        (let loop : TokenIds ([id : Natural 0] [rest : TokenIds allowed*])
-         (cond
-           [(>= id total-actions) '()]
-           [(and (pair? rest) (= id (car rest)))
-            (loop (add1 id) (cdr rest))]
-           [else (cons id (loop (add1 id) rest))]))))))
-
-(: token-domain-member? (-> TokenDomain TokenId Boolean))
-(define (token-domain-member? domain id)
-  (define ids (token-domain-ids domain))
-  (define found?
-    (let loop : Boolean ([lo : Integer 0] [hi : Integer (sub1 (vector-length ids))])
-      (if (> lo hi)
-          #f
-          (let* ([mid (quotient (+ lo hi) 2)]
-                 [candidate (vector-ref ids mid)])
-            (cond [(= candidate id) #t]
-                  [(< candidate id) (loop (add1 mid) hi)]
-                  [else (loop lo (sub1 mid))])))))
-  (if (token-domain-only? domain) found? (not found?)))
-
 (: make-cars-trie (-> (Option Natural) CarsTrie))
 (define (make-cars-trie max-nodes)
   (when (and max-nodes (zero? max-nodes))
     (raise-argument-error 'cars-sampler "positive max-trie-nodes or #f" max-nodes))
-  (cars-trie (cars-node 1.0 #f 1.0 (make-hash) #f)
+  (cars-trie (cars-node 1.0 #f 1.0 (make-hash) #f 0 0.0)
              (box 1)
              max-nodes
              (box #f)))
@@ -85,11 +52,24 @@
 (: cars-node-mass (-> CarsNode Real))
 (define (cars-node-mass node) (cars-node-envelope node))
 
+(: cars-node-domain-value (-> CarsNode (Option TokenDomain)))
+(define (cars-node-domain-value node) (cars-node-domain node))
+
+(: cars-node-child-masses (-> CarsNode (Listof (Pairof TokenId Real))))
+(define (cars-node-child-masses node)
+  (sort
+   (for/list : (Listof (Pairof TokenId Real))
+             ([(id edge) (in-hash (cars-node-children node))]
+              #:unless (= (cars-node-mass (cars-edge-child edge)) 1.0))
+     (cons id (cars-node-mass (cars-edge-child edge))))
+   (lambda ([left : (Pairof TokenId Real)] [right : (Pairof TokenId Real)])
+     (< (car left) (car right)))))
+
 (: cars-node-log-factor (-> CarsNode TokenId Real))
 (define (cars-node-log-factor node id)
   (define domain (cars-node-domain node))
   (cond
-    [(and domain (not (token-domain-member? domain id))) -inf.0]
+    [(and domain (not (domain-member? domain id))) -inf.0]
     [else
      (define edge (hash-ref (cars-node-children node) id #f))
      (if edge
@@ -107,7 +87,7 @@
      (set-box! (cars-trie-frozen-box trie) #t)
      #f]
     [else
-     (define child (cars-node 1.0 #f 1.0 (make-hash) node))
+     (define child (cars-node 1.0 #f 1.0 (make-hash) node id q))
      (hash-set! (cars-node-children node) id (cars-edge q child))
      (set-box! (cars-trie-count-box trie) (add1 (trie-count trie)))
      child]))
@@ -117,26 +97,28 @@
   (unless (cars-node-domain node)
     (set-cars-node-domain! node domain)
     (set-cars-node-domain-mass! node (max 0.0 (min 1.0 mass)))
-    (recompute-up! node)))
+    (define removed
+      (for/fold ([total : Real 0.0]) ([(id edge) (in-hash (cars-node-children node))])
+        (if (domain-member? domain id)
+            (+ total (* (cars-edge-q edge)
+                        (- 1.0 (cars-node-mass (cars-edge-child edge)))))
+            total)))
+    (set-mass/propagate! node (- (cars-node-domain-mass node) removed))))
 
 (: cars-node-set-mass! (-> CarsNode Real Void))
 (define (cars-node-set-mass! node mass)
-  (set-cars-node-envelope! node (max 0.0 (min 1.0 mass)))
-  (define parent (cars-node-parent node))
-  (when parent (recompute-up! parent)))
+  (set-mass/propagate! node mass))
 
-(: recompute-up! (-> CarsNode Void))
-(define (recompute-up! node)
-  (define domain (cars-node-domain node))
-  (define base (if domain (cars-node-domain-mass node) 1.0))
-  (define removed
-    (for/fold ([total : Real 0.0]) ([(id edge) (in-hash (cars-node-children node))])
-      (if (and domain (not (token-domain-member? domain id)))
-          total
-          (+ total (* (cars-edge-q edge)
-                      (- 1.0 (cars-node-mass (cars-edge-child edge))))))))
-  (define next (max 0.0 (min 1.0 (- base removed))))
-  (unless (= next (cars-node-mass node))
+(: set-mass/propagate! (-> CarsNode Real Void))
+(define (set-mass/propagate! node raw)
+  (define next (max 0.0 (min 1.0 raw)))
+  (define delta (- next (cars-node-mass node)))
+  (unless (zero? delta)
     (set-cars-node-envelope! node next)
     (define parent (cars-node-parent node))
-    (when parent (recompute-up! parent))))
+    (when (and parent
+               (let ([domain (cars-node-domain parent)])
+                 (or (not domain) (domain-member? domain (cars-node-incoming-id node)))))
+      (set-mass/propagate! parent
+                           (+ (cars-node-mass parent)
+                              (* (cars-node-incoming-q node) delta))))))

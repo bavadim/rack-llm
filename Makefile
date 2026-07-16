@@ -6,7 +6,7 @@ LLAMA_CPP_INCLUDE_DIR ?= $(LLAMA_CPP_DIR)/include
 LLAMA_CPP_LIB_DIR ?= $(LLAMA_CPP_BUILD_DIR)/bin
 LLAMA_CPP_CFLAGS ?= -I$(LLAMA_CPP_DIR)/ggml/include
 
-.PHONY: help install lint compile ci test native native-llama native-regex experiments-ci
+.PHONY: help install lint compile ci unit-ci test native native-llama native-regex experiments-ci
 
 help:
 	@printf '%s\n' \
@@ -39,6 +39,9 @@ native: native-llama native-regex
 lint: native-regex compile
 
 ci: native lint test
+
+unit-ci: native-regex compile
+	$(RACO) test tests/private tests/contract-test.rkt tests/e2e-sampler-test.rkt
 
 test: native
 	RACK_LLM_GGUF_MODEL="$(RACK_LLM_GGUF_MODEL)" $(RACO) test tests
