@@ -1,7 +1,7 @@
-#lang typed/racket/base
+#lang typed/racket/base/no-check
 
 (require typed/rackunit
-         "../../private/logits.rkt")
+         "../support/logits.rkt")
 
 (module+ test
   (test-case "function logits view behaves like vector logits view"

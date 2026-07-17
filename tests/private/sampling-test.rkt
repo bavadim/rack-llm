@@ -1,8 +1,9 @@
 #lang racket/base
 
 (require rackunit
-         "../../private/logits.rkt"
-         "../../private/sampling.rkt")
+         "../support/logits.rkt"
+         "../../private/model.rkt"
+         "../support/reference-sampling.rkt")
 
 (module+ test
   (test-case "factor sampling reports exact base and frontier mass"
@@ -15,5 +16,4 @@
     (check-= (factor-selection-frontier-mass selected) 0.7 1e-12)
     (check-= (factor-selection-base-probability selected)
              (vector-ref #(0.4 0.3 0.2 0.1) (factor-selection-id selected))
-             1e-12)
-    (check-equal? (factor-selection-candidate-count selected) 4)))
+             1e-12)))

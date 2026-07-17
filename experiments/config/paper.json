@@ -1,0 +1,50 @@
+{
+  "dataset_seed": 20260716,
+  "test_per_family": 25,
+  "calibration_temperatures": [0.7, 1.0],
+  "calibration_seeds": [0, 1, 2, 3, 4, 5, 6, 7],
+  "generation_seeds": [0, 1, 2, 3, 4],
+  "runtime": {
+    "generation_workers": 1,
+    "evaluator_workers": 8,
+    "context_size": 1024,
+    "model_threads": 4,
+    "batch_threads": 16,
+    "factor_threads": 16,
+    "batch_size": 8192,
+    "ubatch_size": 512,
+    "regex_threads": 8,
+    "cohort_width": 32,
+    "gpu_devices": [0]
+  },
+  "budgets": [1, 4, 8, 16],
+  "replication_budgets": [8],
+  "noise_levels": [0.0, 0.2, 0.4],
+  "strict_tau": 0.5,
+  "operational_risk": 0.05,
+  "bootstrap_repetitions": 10000,
+  "confidence": 0.95,
+  "ece_bins": 15,
+  "hard_max_attempts": 128,
+  "hard_deadline_ms": 120000,
+  "native": {
+    "llama_cpp_dir": "/mnt/storage/work/llama.cpp",
+    "llama_cpp_commit": "683f0c72e5b3c07fab90bfd9ec2ce8661d624228"
+  },
+  "main_model": {
+    "family": "qwen3.5",
+    "hf_path": "/mnt/storage/models/qwen/Qwen3.5-4B",
+    "gguf_path": "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf"
+  },
+  "replication_model": {
+    "family": "phi4-mini",
+    "repository": "microsoft/Phi-4-mini-instruct",
+    "revision": "cfbefacb99257ffa30c83adab238a50856ac3083",
+    "hf_path": "/mnt/storage/models/microsoft/Phi-4-mini-instruct",
+    "gguf_path": "/mnt/storage/models/microsoft/Phi-4-mini-instruct-GGUF/Phi-4-mini-instruct-Q4_K_M.gguf"
+  },
+  "ifbench": {
+    "repository": "https://github.com/allenai/IFBench",
+    "commit": "1091c4c3de6c1f6ed12c012ed68f11ea450b0117"
+  }
+}

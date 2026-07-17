@@ -2,162 +2,206 @@
 
 (require rackunit
          "../../main.rkt"
-         "../../private/logits.rkt"
-         "../../private/model.rkt")
+         "../../backend.rkt"
+         "../support/logits.rkt"
+         "../support/fake-cohort.rkt")
 
 (define pieces (vector " a" " b" " x" "<eog>"))
-(define sessions-started (box 0))
 (define tokenizer*
-  (tokenizer
+  (make-tokenizer
    #:vocab-size 4
+   #:fingerprint "runtime-test-v1"
    #:token-ref (lambda (id) (vector-ref pieces id))
    #:tokenize
    (lambda (source)
      (cond [(string=? source "") '()]
            [else
-            (define id (for/first ([piece (in-vector pieces)] [i (in-naturals)]
-                                   #:when (string=? piece source)) i))
+            (define id
+              (for/first ([piece (in-vector pieces)] [i (in-naturals)]
+                          #:when (string=? piece source)) i))
             (if id (list id) (error 'tokenize "unknown text ~s" source))]))
-   #:detokenize (lambda (ids) (apply string-append (map (lambda (id) (vector-ref pieces id)) ids)))))
+   #:detokenize
+   (lambda (ids)
+     (apply string-append (map (lambda (id) (vector-ref pieces id)) ids)))))
+
+(define decode-widths (box '()))
 (define provider*
-  (provider
-   #:vocab-size 4 #:eog-token-ids '(3)
-   #:start-session (lambda (_prompt)
-                     (set-box! sessions-started (add1 (unbox sessions-started)))
-                     'session)
-   #:next-logits/session (lambda (_session) (vector->logits-view (vector 3.0 2.0 1.0 0.0)))
-   #:commit-token! (lambda (_session _id) (void))
-   #:end-session! (lambda (_session) (void))))
-(define model* (model tokenizer* provider* (hash) void))
+  (make-fake-cohort-provider
+   #:vocab-size 4 #:eog-token-ids '(3) #:cohort-width 4
+   #:start-lane (lambda (_prompt) (box 0))
+   #:logits/lane (lambda (_session)
+                   (vector->logits-view (vector 3.0 2.0 1.0 0.0)))
+   #:commit-lane! (lambda (session _id) (set-box! session (add1 (unbox session))))
+   #:on-decode-width
+   (lambda (width) (set-box! decode-widths (cons width (unbox decode-widths))))))
+(define model* (make-backend tokenizer* provider* void))
+
+(define (request compiled seed #:attempts [attempts 8] #:max-tokens [max-tokens 1])
+  (generation-request
+   compiled "" #:max-attempts attempts
+   #:temperature 1.0 #:max-tokens max-tokens #:seed seed))
 
 (module+ test
-  (test-case "shape fingerprint ignores patterns but distinguishes program structure"
-    (define left (compile-spec model* (control (text 1) (prefer (lit " a")))))
-    (define right (compile-spec model* (control (text 1) (prefer (lit " b")))))
-    (define other (compile-spec model* (control (text 2) (prefer (lit " a")))))
-    (check-equal? (weak-observation-schema-fingerprint (observe left " a"))
-                  (weak-observation-schema-fingerprint (observe right " b")))
-    (check-not-equal? (weak-observation-schema-fingerprint (observe left " a"))
-                      (weak-observation-schema-fingerprint (observe other " a")))
-    (for-each compiled-spec-close! (list left right other)))
-
-  (test-case "observe-many reuses the compiled vocabulary"
-    (define refs (box 0))
-    (define counted-tokenizer
-      (tokenizer
-       #:vocab-size 4
-       #:token-ref (lambda (id)
-                     (set-box! refs (add1 (unbox refs)))
-                     (vector-ref pieces id))
-       #:tokenize (lambda (source) (tokenize tokenizer* source))
-       #:detokenize (lambda (ids) (detokenize tokenizer* ids))))
-    (define counted-model (model counted-tokenizer provider* (hash) void))
-    (define compiled
-      (compile-spec counted-model (control (text 1) (prefer (lit " a")))))
-    (define after-compile (unbox refs))
-    (check-equal? (length (observe-many compiled '(" a" " b" " a" " b"))) 4)
-    (check-equal? (unbox refs) after-compile)
-    (compiled-spec-close! compiled)
-    (model-close! counted-model))
-
   (test-case "hard CARS returns only the finite hard language"
-    (define compiled (compile-spec model* (choice (list (lit " a") (lit " b")))))
-    (define result
-      (generate compiled ""
-                #:sampler (cars-sampler #:max-attempts 20)
-                #:temperature 1.0 #:max-tokens 1 #:seed 4))
-    (check-equal? (generation-result-status result) 'found)
-    (check-not-false (member (generation-result-text result) '(" a" " b")))
-    (check-equal? (generation-result-distribution-guarantee result) 'exact-hard)
-    (check-equal? (generation-metrics-weak-policy (generation-result-metrics result))
-                  'not-present)
-    (compiled-spec-close! compiled))
+    (define compiled (compile-spec model* (choice (lit " a") (lit " b"))))
+    (define result (generate-batch (list (request compiled 4))))
+    (check-equal? (length result) 1)
+    (check-equal? (generation-result-status (car result)) 'found)
+    (check-not-false (member (generation-result-text (car result)) '(" a" " b"))))
 
-  (test-case "scoped literal ban removes an otherwise likely token"
-    (define compiled (compile-spec model* (control (text 1) (ban (lit " a")))))
-    (define result
-      (generate compiled ""
-                #:sampler (cars-sampler #:max-attempts 20)
-                #:temperature 1.0 #:max-tokens 1 #:seed 2))
-    (check-equal? (generation-result-status result) 'found)
-    (check-not-equal? (generation-result-text result) " a")
-    (compiled-spec-close! compiled))
-
-  (test-case "end-anchored ban is enforced by CARS"
-    (define compiled (compile-spec model* (control (text 1) (ban (ere " a$")))))
+  (test-case "fixed cohort preserves ordering, seed isolation, and physical width"
+    (set-box! decode-widths '())
+    (define compiled (compile-spec model* (choice (lit " a") (lit " b"))))
+    (define seeds '(11 12 13 14 15 16))
     (define results
-      (for/list ([seed (in-range 20)])
-        (generate compiled "" #:sampler (cars-sampler #:max-attempts 20)
-                  #:temperature 1.0 #:max-tokens 1 #:seed seed)))
-    (check-false (ormap (lambda (result) (string=? (generation-result-text result) " a"))
+      (generate-batch (map (lambda (seed) (request compiled seed)) seeds)))
+    (check-equal? (length results) (length seeds))
+    (check-true (andmap (lambda (result)
+                          (eq? 'found (generation-result-status result)))
                         results))
-    (compiled-spec-close! compiled))
+    (check-true (andmap (lambda (width) (= width 4)) (unbox decode-widths)))
+    ;; One real request still executes in the same width-four profile.
+    (set-box! decode-widths '())
+    (define alone (car (generate-batch (list (request compiled 11)))))
+    (check-true (andmap (lambda (width) (= width 4)) (unbox decode-widths)))
+    (check-equal? (generation-result-token-ids alone)
+                  (generation-result-token-ids (car results))))
 
-  (test-case "observe uses original result token ids and stable schema"
-    (define spec
-      (control (text 1)
-               (prefer (lit " a"))
-               (avoid (ere "x$"))))
-    (define compiled (compile-spec model* spec))
-    (define result
-      (generate compiled "" #:sampler (cars-sampler #:max-attempts 10 #:ignore-weak? #t)
-                #:temperature 1.0 #:max-tokens 1 #:seed 8))
-    (check-false (generation-result-weak result))
-    (check-equal? (generation-metrics-weak-evaluations
-                   (generation-result-metrics result)) 0)
-    (check-equal? (generation-metrics-weak-policy
-                   (generation-result-metrics result))
-                  'ignored-explicitly)
-    (define observation (observe compiled result))
-    (check-equal? (vector-length (weak-observation-labels observation)) 2)
-    (check-equal? (vector->list (weak-observation-rule-paths observation))
-                  '("root/control/rule[0]" "root/control/rule[1]"))
-    (compiled-spec-close! compiled))
+  (test-case "first CARS attempt starts from prefetched prompt without reset"
+    (define restores (box 0))
+    (define first-provider
+      (make-fake-cohort-provider
+       #:vocab-size 4 #:eog-token-ids '(3) #:cohort-width 2
+       #:start-lane (lambda (_prompt) (box 0))
+       #:logits/lane (lambda (_session)
+                       (vector->logits-view (vector 3.0 2.0 1.0 0.0)))
+       #:commit-lane! (lambda (_session _id) (void))
+       #:on-restore (lambda (lanes)
+                      (set-box! restores (+ (unbox restores) (length lanes))))))
+    (define first-model (make-backend tokenizer* first-provider void))
+    (define compiled (compile-spec first-model (choice (lit " a") (lit " b"))))
+    (define result (car (generate-batch (list (request compiled 9)))))
+    (check-equal? (generation-result-status result) 'found)
+    (check-equal? (unbox restores) 0)
+    (backend-close! first-model))
 
-  (test-case "soft rules require an explicit weak policy before opening a session"
+  (test-case "each request owns a fresh CARS trie"
+    (define compiled (compile-spec model* (lit " b")))
+    (define results
+      (generate-batch (for/list ([i (in-range 5)]) (request compiled i))))
+    (check-equal? (length results) 5)
+    (check-true
+     (andmap (lambda (result)
+               (positive? (generation-result-trie-nodes result)))
+             results)))
+
+  (test-case "soft rules require an explicit weak policy before backend mutation"
+    (define opens (box 0))
+    (define guarded-provider
+      (make-fake-cohort-provider
+       #:vocab-size 4 #:eog-token-ids '(3) #:cohort-width 2
+       #:start-lane (lambda (_prompt) (set-box! opens (add1 (unbox opens))) (box 0))
+       #:logits/lane (lambda (_session)
+                       (vector->logits-view (vector 3.0 2.0 1.0 0.0)))
+       #:commit-lane! (lambda (_session _id) (void))))
+    (define guarded-model (make-backend tokenizer* guarded-provider void))
     (define compiled
-      (compile-spec model* (control (text 1) (prefer (lit " a")))))
-    (define before (unbox sessions-started))
+      (compile-spec guarded-model (with-rules (text 1) (positive (lit " a")))))
     (check-exn #rx"weak-model-required"
                (lambda ()
-                 (make-generator compiled ""
-                                 #:sampler (cars-sampler #:max-attempts 1))))
-    (check-equal? (unbox sessions-started) before)
-    (compiled-spec-close! compiled))
+                 (generate-batch (list (request compiled 1)))))
+    (check-equal? (unbox opens) 0)
+    (backend-close! guarded-model))
 
-  (test-case "active weak model is reported in metrics"
-    (define compiled
-      (compile-spec model*
-                    (control (text 1)
-                             (prefer (lit " a"))
-                             (avoid (lit " b"))
-                             (prefer (lit " x")))))
-    (define weak-model
-      (fit-weak-model
-       (for/list ([i (in-range 60)])
-         (observe compiled (list-ref '(" a" " b" " x") (remainder i 3))))
-                      #:seed 7))
-    (check-exn #rx"mutually exclusive"
+  (test-case "backend failure returns aligned errors and closes a poisoned cohort"
+    (define closes (box '()))
+    (define failing-provider
+      (make-provider
+       #:vocab-size 4 #:eog-token-ids '(3) #:cohort-width 2
+       #:open-cohort (lambda (_prompts) 'cohort)
+       #:restore-lanes! (lambda (_cohort _lanes) (void))
+       #:sample-factors (lambda (_cohort _entries) (error 'decode "injected"))
+       #:decode! (lambda (_cohort _tokens) (void))
+       #:close-cohort!
+       (lambda (_cohort poisoned?)
+         (set-box! closes (cons poisoned? (unbox closes))))))
+    (define failing-model (make-backend tokenizer* failing-provider void))
+    (define compiled (compile-spec failing-model (lit " a")))
+    (define results
+      (generate-batch (list (request compiled 1) (request compiled 2))))
+    (check-equal? (map generation-result-status results)
+                  '(backend-error backend-error))
+    (check-equal? (unbox closes) '(#t))
+    (backend-close! failing-model))
+
+  (test-case "closed models fail before tokenizer or backend access"
+    (define accesses (box 0))
+    (define closed-tokenizer
+      (make-tokenizer
+       #:vocab-size 4
+       #:fingerprint "closed-test-v1"
+       #:token-ref (lambda (id) (set-box! accesses (add1 (unbox accesses)))
+                     (vector-ref pieces id))
+       #:tokenize (lambda (_text) (set-box! accesses (add1 (unbox accesses))) '())
+       #:detokenize (lambda (_ids) (set-box! accesses (add1 (unbox accesses))) "")))
+    (define closed-model (make-backend closed-tokenizer provider* void))
+    (define compiled (compile-spec closed-model (text 1)))
+    (backend-close! closed-model)
+    (define before (unbox accesses))
+    (check-exn #rx"model is closed" (lambda () (compile-spec closed-model (text 1))))
+    (check-exn #rx"model is closed" (lambda () (observe-token-ids compiled '())))
+    (check-exn #rx"model is closed"
+               (lambda () (generate-batch (list (request compiled 1)))))
+    (check-equal? (unbox accesses) before))
+
+  (test-case "non-regex specs do not enumerate tokenizer vocabulary"
+    (define piece-reads (box 0))
+    (define lazy-tokenizer
+      (make-tokenizer
+       #:vocab-size 4 #:fingerprint "test-vocab"
+       #:token-ref (lambda (id)
+                     (set-box! piece-reads (add1 (unbox piece-reads)))
+                     (vector-ref pieces id))
+       #:tokenize (lambda (source) (if (string=? source " a") '(0) '()))
+       #:detokenize (lambda (_ids) "")))
+    (define lazy-model (make-backend lazy-tokenizer provider* void))
+    (compile-spec lazy-model (text 2))
+    (compile-spec lazy-model (choice (lit " a")))
+    (check-equal? (unbox piece-reads) 0)
+    (compile-spec lazy-model (ere "a*"))
+    (check-equal? (unbox piece-reads) 4)
+    (backend-close! lazy-model))
+
+  (test-case "request context overflow fails before cohort open"
+    (define opens (box 0))
+    (define limited-provider
+      (make-provider
+       #:vocab-size 4 #:eog-token-ids '(3) #:cohort-width 2 #:context-limit 1
+       #:open-cohort (lambda (_prompts) (set-box! opens (add1 (unbox opens))) 'c)
+       #:restore-lanes! void #:sample-factors void #:decode! void
+       #:close-cohort! void))
+    (define limited-model (make-backend tokenizer* limited-provider void))
+    (define compiled (compile-spec limited-model (text 2)))
+    (check-exn #rx"exceeds the per-lane context"
                (lambda ()
-                 (cars-sampler #:max-attempts 1
-                               #:weak-model weak-model
-                               #:ignore-weak? #t)))
-    (define result
-      (generate compiled ""
-                #:sampler (cars-sampler #:max-attempts 20 #:weak-model weak-model)
-                #:temperature 1.0 #:max-tokens 1 #:seed 3))
-    (check-equal? (generation-metrics-weak-policy (generation-result-metrics result))
-                  'applied)
-    (compiled-spec-close! compiled))
+                 (generate-batch (list (request compiled 1 #:max-tokens 2)))))
+    (check-equal? (unbox opens) 0)
+    (backend-close! limited-model))
 
-  (test-case "failure metrics preserve explicit ignored policy"
-    (define compiled
-      (compile-spec model* (control (lit " a") (prefer (lit " a")))))
-    (define result
-      (generate compiled ""
-                #:sampler (cars-sampler #:max-attempts 1 #:ignore-weak? #t)
-                #:temperature 1.0 #:max-tokens 0 #:seed 1))
-    (check-equal? (generation-result-status result) 'not-found-attempt-budget)
-    (check-equal? (generation-metrics-weak-policy (generation-result-metrics result))
-                  'ignored-explicitly)
-    (compiled-spec-close! compiled)))
+  (test-case "cohort open failure returns aligned backend errors"
+    (define closes (box 0))
+    (define open-failing-provider
+      (make-provider
+       #:vocab-size 4 #:eog-token-ids '(3) #:cohort-width 2
+       #:open-cohort (lambda (_prompts) (error 'open "injected"))
+       #:restore-lanes! void #:sample-factors void #:decode! void
+       #:close-cohort! (lambda (_cohort _poisoned?)
+                         (set-box! closes (add1 (unbox closes))))))
+    (define open-failing-model (make-backend tokenizer* open-failing-provider void))
+    (define compiled (compile-spec open-failing-model (lit " a")))
+    (define results
+      (generate-batch (list (request compiled 1) (request compiled 2))))
+    (check-equal? (map generation-result-status results)
+                  '(backend-error backend-error))
+    (check-equal? (unbox closes) 0)
+    (backend-close! open-failing-model)))

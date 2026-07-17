@@ -1,155 +1,84 @@
-#lang typed/racket/base
+#lang racket/base
 
-(require racket/list
-         (only-in "logits.rkt" LogitsView check-logits-view)
-         (only-in "domain.rkt" TokenDomain)
-         (only-in "sampling.rkt" factor-selection))
+(require racket/list)
+(provide tokenizer tokenize detokenize token-ref vocab-size tokenizer-fingerprint
+         check-token-ids (struct-out factor-request) (struct-out factor-selection) make-rng
+         provider provider-vocab-size provider-eog-token-ids provider-cohort-width
+         provider-context-limit provider-open-cohort provider-restore-lanes!
+         provider-sample-factors provider-decode! provider-close-cohort!
+         model model-tokenizer model-provider model-close!
+         model-ensure-open! model-enter-generation! model-leave-generation!)
 
-(provide TokenId TokenIds Tokenizer Provider Model
-         tokenizer tokenize detokenize token-ref vocab-size
-         provider provider-vocab-size provider-eog-token-ids provider-start-session
-         provider-next-logits provider-factor-sampler provider-commit-token! provider-end-session!
-         model model-tokenizer model-provider model-metadata model-close!
-         model-acquire! model-release!)
-
-(define-type TokenId Natural)
-(define-type TokenIds (Listof TokenId))
-
-(struct tokenizer-impl
-  ([tokenize : (-> String TokenIds)]
-   [detokenize : (-> TokenIds String)]
-   [token-ref : (-> TokenId String)]
-   [vocab-size : Natural])
-  #:transparent)
-(define-type Tokenizer tokenizer-impl)
-
-(: tokenizer
-   (-> #:tokenize (-> String TokenIds)
-       #:detokenize (-> TokenIds String)
-       #:token-ref (-> TokenId String)
-       #:vocab-size Natural
-       Tokenizer))
-(define (tokenizer #:tokenize encode #:detokenize decode #:token-ref piece
-                   #:vocab-size size)
-  (tokenizer-impl
-   (lambda ([text : String])
-     (define ids (encode text))
-     (check-ids 'tokenize ids size)
-     ids)
-   (lambda ([ids : TokenIds]) (check-ids 'detokenize ids size) (decode ids))
-   (lambda ([id : TokenId])
-     (unless (< id size) (raise-argument-error 'token-ref (format "token id < ~a" size) id))
-     (piece id))
-   size))
-
-(: tokenize (-> Tokenizer String TokenIds))
-(define (tokenize t text) ((tokenizer-impl-tokenize t) text))
-(: detokenize (-> Tokenizer TokenIds String))
-(define (detokenize t ids) ((tokenizer-impl-detokenize t) ids))
-(: token-ref (-> Tokenizer TokenId String))
-(define (token-ref t id) ((tokenizer-impl-token-ref t) id))
-(: vocab-size (-> Tokenizer Natural))
-(define (vocab-size t) (tokenizer-impl-vocab-size t))
-
-(: check-ids (-> Symbol TokenIds Natural Void))
+(define (ids-ok? ids size)
+  (and (list? ids) (andmap (lambda (id) (and (exact-nonnegative-integer? id) (< id size))) ids)))
 (define (check-ids who ids size)
-  (for ([id (in-list ids)])
-    (unless (< id size) (raise-argument-error who (format "token id < ~a" size) id))))
+  (unless (ids-ok? ids size) (raise-argument-error who (format "token ids below ~a" size) ids)))
 
-(struct provider-impl
-  ([vocab-size : Natural]
-   [eog-token-ids : TokenIds]
-   [start : (-> TokenIds Any)]
-   [logits : (-> Any LogitsView)]
-   [factor-sampler : (Option (-> Any Real TokenDomain Boolean
-                                (Listof (Pairof TokenId Real)) Real
-                                (Option factor-selection)))]
-   [commit : (-> Any TokenId Void)]
-   [end : (-> Any Void)])
-  #:transparent)
-(define-type Provider provider-impl)
+(struct tokenizer* (encode decode piece size fingerprint) #:transparent)
+(define (tokenizer #:tokenize encode #:detokenize decode #:token-ref piece
+                   #:vocab-size size #:fingerprint fingerprint)
+  (unless (exact-positive-integer? size) (raise-argument-error 'tokenizer "positive vocab size" size))
+  (unless (and (string? fingerprint) (not (string=? fingerprint "")))
+    (raise-argument-error 'tokenizer "non-empty fingerprint string" fingerprint))
+  (tokenizer* encode decode piece size fingerprint))
+(define (check-token-ids who t ids) (check-ids who ids (vocab-size t)))
+(define (tokenize t text)
+  (define ids ((tokenizer*-encode t) text)) (check-ids 'tokenize ids (vocab-size t)) ids)
+(define (detokenize t ids) (check-ids 'detokenize ids (vocab-size t)) ((tokenizer*-decode t) ids))
+(define (token-ref t id) (check-ids 'token-ref (list id) (vocab-size t)) ((tokenizer*-piece t) id))
+(define (vocab-size t) (tokenizer*-size t))
+(define (tokenizer-fingerprint t) (tokenizer*-fingerprint t))
 
-(: provider
-   (->* (#:vocab-size Natural
-         #:eog-token-ids TokenIds
-         #:start-session (-> TokenIds Any)
-         #:next-logits/session (-> Any LogitsView)
-         #:commit-token! (-> Any TokenId Void)
-         #:end-session! (-> Any Void))
-        (#:sample-factor/session
-         (Option (-> Any Real TokenDomain Boolean
-                     (Listof (Pairof TokenId Real)) Real
-                     (Option factor-selection))))
-        Provider))
-(define (provider #:vocab-size size #:eog-token-ids eog-token-ids #:start-session start
-                  #:next-logits/session logits #:sample-factor/session [factor-sampler #f]
-                  #:commit-token! commit #:end-session! end)
-  (check-ids 'provider eog-token-ids size)
-  (when (null? eog-token-ids)
-    (raise-argument-error 'provider "non-empty list of EOG token ids" eog-token-ids))
-  (unless (= (length eog-token-ids) (length (remove-duplicates eog-token-ids)))
-    (raise-argument-error 'provider "distinct EOG token ids" eog-token-ids))
-  (provider-impl size eog-token-ids start logits factor-sampler commit end))
+(struct factor-request (temperature domain constrain? children draw) #:transparent)
+(struct factor-selection (id base-logprob base-probability frontier-mass) #:transparent)
+(define (make-rng seed)
+  (define rng (make-pseudo-random-generator))
+  (when seed (parameterize ([current-pseudo-random-generator rng]) (random-seed (add1 (abs seed))))) rng)
 
-(: provider-vocab-size (-> Provider Natural))
-(define (provider-vocab-size p) (provider-impl-vocab-size p))
-(: provider-eog-token-ids (-> Provider TokenIds))
-(define (provider-eog-token-ids p) (provider-impl-eog-token-ids p))
-(: provider-start-session (-> Provider TokenIds Any))
-(define (provider-start-session p ids) ((provider-impl-start p) ids))
-(: provider-next-logits (-> Provider Any LogitsView))
-(define (provider-next-logits p session)
-  (define logits ((provider-impl-logits p) session))
-  (check-logits-view 'provider-next-logits logits (provider-vocab-size p))
-  logits)
-(: provider-factor-sampler
-   (-> Provider (Option (-> Any Real TokenDomain Boolean
-                           (Listof (Pairof TokenId Real)) Real
-                           (Option factor-selection)))))
-(define (provider-factor-sampler p) (provider-impl-factor-sampler p))
-(: provider-commit-token! (-> Provider Any TokenId Void))
-(define (provider-commit-token! p session id) ((provider-impl-commit p) session id))
-(: provider-end-session! (-> Provider Any Void))
-(define (provider-end-session! p session) ((provider-impl-end p) session))
+(struct provider* (size eog width context open restore sample decode close) #:transparent)
+(define (provider #:vocab-size size #:eog-token-ids eog #:cohort-width width
+                  #:context-limit [context #f] #:open-cohort open
+                  #:restore-lanes! restore #:sample-factors sample #:decode! decode
+                  #:close-cohort! close)
+  (unless (and (ids-ok? eog size) (pair? eog) (= (length eog) (length (remove-duplicates eog))))
+    (raise-argument-error 'provider "distinct non-empty EOG ids" eog))
+  (unless (exact-positive-integer? width) (raise-argument-error 'provider "positive cohort width" width))
+  (provider* size eog width context open restore sample decode close))
+(define (provider-vocab-size p) (provider*-size p))
+(define (provider-eog-token-ids p) (provider*-eog p))
+(define (provider-cohort-width p) (provider*-width p))
+(define (provider-context-limit p) (provider*-context p))
+(define (lanes! who p lanes)
+  (unless (and (ids-ok? lanes (provider-cohort-width p))
+               (= (length lanes) (length (remove-duplicates lanes))))
+    (raise-argument-error who "distinct cohort lanes" lanes)))
+(define (provider-open-cohort p prompts)
+  (unless (= (length prompts) (provider-cohort-width p)) (error 'provider-open-cohort "cohort must be full"))
+  (for ([ids prompts]) (check-ids 'provider-open-cohort ids (provider-vocab-size p)))
+  ((provider*-open p) prompts))
+(define (provider-restore-lanes! p cohort lanes)
+  (lanes! 'provider-restore-lanes! p lanes) (unless (null? lanes) ((provider*-restore p) cohort lanes)))
+(define (provider-sample-factors p cohort entries)
+  (lanes! 'provider-sample-factors p (map car entries))
+  (unless (andmap factor-request? (map cdr entries)) (raise-argument-error 'provider-sample-factors "factor requests" entries))
+  (define values ((provider*-sample p) cohort entries))
+  (unless (= (length values) (length entries)) (error 'provider-sample-factors "wrong result count")) values)
+(define (provider-decode! p cohort tokens)
+  (unless (= (length tokens) (provider-cohort-width p)) (error 'provider-decode! "decode batch must be full"))
+  (check-ids 'provider-decode! tokens (provider-vocab-size p)) ((provider*-decode p) cohort tokens))
+(define (provider-close-cohort! p cohort [poisoned? #f]) ((provider*-close p) cohort poisoned?))
 
-(struct model-impl
-  ([tokenizer : Tokenizer]
-   [provider : Provider]
-   [metadata : (HashTable Symbol Any)]
-   [close-proc : (-> Void)]
-   [closed? : (Boxof Boolean)]
-   [leases : (Boxof Natural)])
-  #:transparent)
-(define-type Model model-impl)
-
-(: model (-> Tokenizer Provider (HashTable Symbol Any) (-> Void) Model))
-(define (model tok p metadata close!)
-  (model-impl tok p metadata close! (box #f) (box 0)))
-
-(: model-acquire! (-> Model Void))
-(define (model-acquire! m)
-  (when (unbox (model-impl-closed? m))
-    (error 'make-generator "model is closed"))
-  (set-box! (model-impl-leases m) (add1 (unbox (model-impl-leases m)))))
-
-(: model-release! (-> Model Void))
-(define (model-release! m)
-  (define leases (unbox (model-impl-leases m)))
-  (when (zero? leases)
-    (error 'generator-close! "model lease is already released"))
-  (set-box! (model-impl-leases m) (sub1 leases)))
-
-(: model-tokenizer (-> Model Tokenizer))
-(define (model-tokenizer m) (model-impl-tokenizer m))
-(: model-provider (-> Model Provider))
-(define (model-provider m) (model-impl-provider m))
-(: model-metadata (-> Model (HashTable Symbol Any)))
-(define (model-metadata m) (model-impl-metadata m))
-
-(: model-close! (-> Model Void))
+(struct model* (tokenizer provider close closed busy) #:transparent)
+(define (model tok provider close) (model* tok provider close (box #f) (box #f)))
+(define (model-tokenizer m) (model*-tokenizer m))
+(define (model-provider m) (model*-provider m))
+(define (model-ensure-open! who m) (when (unbox (model*-closed m)) (error who "model is closed")))
+(define (model-enter-generation! m)
+  (model-ensure-open! 'generate-batch m)
+  (when (unbox (model*-busy m)) (error 'generate-batch "model-busy: generation is not reentrant"))
+  (set-box! (model*-busy m) #t))
+(define (model-leave-generation! m) (set-box! (model*-busy m) #f))
 (define (model-close! m)
-  (unless (unbox (model-impl-closed? m))
-    (unless (zero? (unbox (model-impl-leases m)))
-      (error 'model-close! "model has active generators"))
-    (set-box! (model-impl-closed? m) #t)
-    ((model-impl-close-proc m))))
+  (unless (unbox (model*-closed m))
+    (when (unbox (model*-busy m)) (error 'model-close! "model is generating"))
+    ((model*-close m)) (set-box! (model*-closed m) #t)))

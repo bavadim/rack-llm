@@ -1,124 +1,80 @@
 #lang typed/racket/base
-
-(require (only-in "domain.rkt" TokenDomain domain-member?))
-
-(provide CarsTrie CarsNode
-         make-cars-trie cars-trie-root cars-trie-node-count cars-trie-frozen?
-         cars-node-mass cars-node-domain-value cars-node-child-masses
-         cars-node-log-factor cars-node-child!
-         cars-node-install-domain! cars-node-set-mass!)
-
+(require racket/list (only-in "domain.rkt" TokenDomain domain-member?))
+(provide make-cars-trie cars-trie-root cars-trie-node-count cars-node-mass
+         cars-node-domain-value cars-node-child-masses cars-node-check-domain!
+         cars-node-child! make-cars-domain-update cars-commit!)
 (define-type TokenId Natural)
-(struct cars-edge ([q : Real] [child : CarsNode]) #:transparent)
-(struct cars-node
-  ([envelope : Real]
-   [domain : (Option TokenDomain)]
-   [domain-mass : Real]
-   [children : (HashTable TokenId cars-edge)]
-   [parent : (Option CarsNode)]
-   [incoming-id : TokenId]
-   [incoming-q : Real])
-  #:mutable
-  #:transparent)
-(define-type CarsNode cars-node)
-
-(struct cars-trie
-  ([root : CarsNode]
-   [count-box : (Boxof Natural)]
-   [max-nodes : (Option Natural)]
-   [frozen-box : (Boxof Boolean)])
-  #:transparent)
-(define-type CarsTrie cars-trie)
-
-(: make-cars-trie (-> (Option Natural) CarsTrie))
-(define (make-cars-trie max-nodes)
-  (when (and max-nodes (zero? max-nodes))
-    (raise-argument-error 'cars-sampler "positive max-trie-nodes or #f" max-nodes))
-  (cars-trie (cars-node 1.0 #f 1.0 (make-hash) #f 0 0.0)
-             (box 1)
-             max-nodes
-             (box #f)))
-
-(: cars-trie-node-count (-> CarsTrie Natural))
-(define (cars-trie-node-count trie) (unbox (cars-trie-count-box trie)))
-
-;; Keep the struct accessor available internally under an unambiguous name.
-(: trie-count (-> CarsTrie Natural))
-(define (trie-count trie) (unbox (cars-trie-count-box trie)))
-
-(: cars-trie-frozen? (-> CarsTrie Boolean))
-(define (cars-trie-frozen? trie) (unbox (cars-trie-frozen-box trie)))
-
-(: cars-node-mass (-> CarsNode Real))
-(define (cars-node-mass node) (cars-node-envelope node))
-
-(: cars-node-domain-value (-> CarsNode (Option TokenDomain)))
-(define (cars-node-domain-value node) (cars-node-domain node))
-
-(: cars-node-child-masses (-> CarsNode (Listof (Pairof TokenId Real))))
-(define (cars-node-child-masses node)
-  (sort
-   (for/list : (Listof (Pairof TokenId Real))
-             ([(id edge) (in-hash (cars-node-children node))]
-              #:unless (= (cars-node-mass (cars-edge-child edge)) 1.0))
-     (cons id (cars-node-mass (cars-edge-child edge))))
-   (lambda ([left : (Pairof TokenId Real)] [right : (Pairof TokenId Real)])
-     (< (car left) (car right)))))
-
-(: cars-node-log-factor (-> CarsNode TokenId Real))
-(define (cars-node-log-factor node id)
-  (define domain (cars-node-domain node))
-  (cond
-    [(and domain (not (domain-member? domain id))) -inf.0]
-    [else
-     (define edge (hash-ref (cars-node-children node) id #f))
-     (if edge
-         (let ([mass (cars-node-mass (cars-edge-child edge))])
-           (if (<= mass 0.0) -inf.0 (assert (log mass) real?)))
-         0.0)]))
-
-(: cars-node-child! (-> CarsTrie CarsNode TokenId Real (Option CarsNode)))
-(define (cars-node-child! trie node id q)
-  (define old (hash-ref (cars-node-children node) id #f))
-  (cond
-    [old (cars-edge-child old)]
-    [(and (cars-trie-max-nodes trie)
-          (>= (trie-count trie) (assert (cars-trie-max-nodes trie) exact-nonnegative-integer?)))
-     (set-box! (cars-trie-frozen-box trie) #t)
-     #f]
-    [else
-     (define child (cars-node 1.0 #f 1.0 (make-hash) node id q))
-     (hash-set! (cars-node-children node) id (cars-edge q child))
-     (set-box! (cars-trie-count-box trie) (add1 (trie-count trie)))
-     child]))
-
-(: cars-node-install-domain! (-> CarsNode TokenDomain Real Void))
-(define (cars-node-install-domain! node domain mass)
-  (unless (cars-node-domain node)
-    (set-cars-node-domain! node domain)
-    (set-cars-node-domain-mass! node (max 0.0 (min 1.0 mass)))
-    (define removed
-      (for/fold ([total : Real 0.0]) ([(id edge) (in-hash (cars-node-children node))])
-        (if (domain-member? domain id)
-            (+ total (* (cars-edge-q edge)
-                        (- 1.0 (cars-node-mass (cars-edge-child edge)))))
-            total)))
-    (set-mass/propagate! node (- (cars-node-domain-mass node) removed))))
-
-(: cars-node-set-mass! (-> CarsNode Real Void))
-(define (cars-node-set-mass! node mass)
-  (set-mass/propagate! node mass))
-
-(: set-mass/propagate! (-> CarsNode Real Void))
-(define (set-mass/propagate! node raw)
-  (define next (max 0.0 (min 1.0 raw)))
-  (define delta (- next (cars-node-mass node)))
-  (unless (zero? delta)
-    (set-cars-node-envelope! node next)
-    (define parent (cars-node-parent node))
-    (when (and parent
-               (let ([domain (cars-node-domain parent)])
-                 (or (not domain) (domain-member? domain (cars-node-incoming-id node)))))
-      (set-mass/propagate! parent
-                           (+ (cars-node-mass parent)
-                              (* (cars-node-incoming-q node) delta))))))
+(struct edge ([q : Real] [child : Node]) #:transparent)
+(struct node ([mass : Real] [domain : (Option TokenDomain)] [domain-mass : Real]
+              [removed : Real] [children : (HashTable TokenId edge)]
+              [parent : (Option Node)] [parent-id : TokenId] [parent-q : Real])
+  #:mutable #:transparent)
+(define-type Node node)
+(struct update ([node : Node] [domain : TokenDomain] [mass : Real]) #:transparent)
+(define-type Update update)
+(struct trie ([root : Node] [count : (Boxof Natural)]) #:transparent)
+(define-type Trie trie)
+(: make-cars-trie (-> Trie))
+(define (make-cars-trie) (trie (node 1.0 #f 1.0 0.0 (make-hash) #f 0 0.0) (box 1)))
+(: cars-trie-root (-> Trie Node))
+(define cars-trie-root trie-root)
+(: cars-trie-node-count (-> Trie Natural))
+(define (cars-trie-node-count t) (unbox (trie-count t)))
+(: cars-node-mass (-> Node Real))
+(define cars-node-mass node-mass)
+(: cars-node-domain-value (-> Node (Option TokenDomain)))
+(define cars-node-domain-value node-domain)
+(: make-cars-domain-update (-> Node TokenDomain Real Update))
+(define make-cars-domain-update update)
+(: cars-node-child-masses (-> Node (Listof (Pairof TokenId Real))))
+(define (cars-node-child-masses n)
+  (for/list : (Listof (Pairof TokenId Real)) ([(id e) (in-hash (node-children n))]
+                                               #:unless (= 1.0 (node-mass (edge-child e))))
+    (cons id (node-mass (edge-child e)))))
+(: cars-node-child! (-> Trie Node TokenId Real Node))
+(define (cars-node-child! t n id q)
+  (define old (hash-ref (node-children n) id #f))
+  (cond [old
+         (unless (eqv? q (edge-q old)) (error 'cars "cached edge probability changed"))
+         (edge-child old)]
+        [else
+         (define child (node 1.0 #f 1.0 0.0 (make-hash) n id q))
+         (hash-set! (node-children n) id (edge q child))
+         (set-box! (trie-count t) (add1 (unbox (trie-count t)))) child]))
+(: cars-node-check-domain! (-> Node TokenDomain Real Void))
+(define (cars-node-check-domain! n domain mass)
+  (unless (and (equal? domain (node-domain n)) (eqv? mass (node-domain-mass n)))
+    (error 'cars "cached frontier changed")))
+(: clamp (-> Real Real))
+(define (clamp x) (max 0.0 (min 1.0 x)))
+(: install! (-> Node TokenDomain Real Void))
+(define (install! n domain mass)
+  (set-node-domain! n domain) (set-node-domain-mass! n (clamp mass))
+  (define removed
+    (for/fold ([total : Real 0.0]) ([(id e) (in-hash (node-children n))])
+      (if (domain-member? domain id)
+          (+ total (* (edge-q e) (- 1.0 (node-mass (edge-child e))))) total)))
+  (set-node-removed! n removed) (set-node-mass! n (clamp (- (node-domain-mass n) removed))))
+(: propagate! (-> Node Real Real Void))
+(define (propagate! child old new)
+  (define parent (node-parent child))
+  (when parent
+    (define domain (node-domain parent))
+    (when (or (not domain) (domain-member? domain (node-parent-id child)))
+      (define before (node-mass parent))
+      (set-node-removed! parent (+ (node-removed parent) (* (node-parent-q child) (- old new))))
+      (define after (clamp (- (if domain (node-domain-mass parent) 1.0) (node-removed parent))))
+      (set-node-mass! parent after) (propagate! parent before after))))
+(: cars-commit! (-> (Listof Update) (Option Node) Real Void))
+(define (cars-commit! updates terminal terminal-mass)
+  (for ([u (in-list updates)])
+    (when (node-domain (update-node u)) (error 'cars "domain initialized twice")))
+  (when (and terminal (> terminal-mass (+ (node-mass terminal) 1e-12)))
+    (error 'cars "terminal mass exceeds envelope"))
+  (define top (and (pair? updates) (update-node (last updates))))
+  (define top-old (and top (node-mass top)))
+  (define terminal-old (and terminal (node-mass terminal)))
+  (when terminal (set-node-mass! terminal (clamp terminal-mass)))
+  (for ([u (in-list updates)]) (install! (update-node u) (update-domain u) (update-mass u)))
+  (cond [top (propagate! top (assert top-old real?) (node-mass top))]
+        [terminal (propagate! terminal (assert terminal-old real?) (node-mass terminal))]))

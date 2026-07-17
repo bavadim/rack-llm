@@ -1,6 +1,0 @@
-{
-  "attempt_budget": [1, 2, 4, 8],
-  "methods": ["ours_hard", "guidance_hard", "outlines_hard"],
-  "time_ms": [500, 1000, 2000, 5000, 10000],
-  "token_budget": [64, 128, 256, 512]
-}

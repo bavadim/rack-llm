@@ -1,148 +1,53 @@
 #lang racket/base
-
-(require rackunit
-         "../../main.rkt"
-         "../../private/domain.rkt"
-         "../../private/guidance.rkt"
-         "../../private/regex.rkt")
-
-(define pieces (vector "a" "b" "x" "!" "\n"))
-(define (encode text)
-  (for/list ([ch (in-string text)])
-    (or (for/first ([piece (in-vector pieces)] [i (in-naturals)]
-                    #:when (string=? piece (string ch))) i)
-        (error 'encode "unknown character ~s" ch))))
-(define vocabulary (make-regex-vocabulary pieces))
-(define (compile program) (compile-guidance program encode vocabulary))
-(define (run program ids)
-  (define guidance (compile program))
-  (values guidance
-          (for/fold ([state (guidance-initial guidance)]) ([id (in-list ids)])
-            (guidance-step guidance state id))))
-(define (accepts? program text)
-  (define-values (_ state) (run program (encode text)))
-  (guidance-accepting? state))
-
+(require rackunit "../../main.rkt" "../../backend.rkt")
+(define pieces #( "a" "b" "x" "!" "\n"))
+(define (encode s)
+  (for/list ([ch (in-string s)])
+    (or (for/first ([p (in-vector pieces)] [i (in-naturals)] #:when (string=? p (string ch))) i)
+        (error 'encode "unknown character"))))
+(define tok (make-tokenizer #:vocab-size 5 #:fingerprint "guidance-test-v1"
+                            #:token-ref (lambda (i) (vector-ref pieces i))
+                            #:tokenize encode
+                            #:detokenize (lambda (ids) (apply string-append (map (lambda (i) (vector-ref pieces i)) ids)))))
+(define provider
+  (make-provider #:vocab-size 5 #:eog-token-ids '(4) #:cohort-width 1
+                 #:open-cohort void #:restore-lanes! void #:sample-factors void
+                 #:decode! void #:close-cohort! void))
+(define model (make-backend tok provider void))
+(define (compile p) (compile-spec model p))
 (module+ test
-  (test-case "control emits scoped prefer/avoid labels in structural order"
-    (define program
-      (control (text 4)
-               (prefer (ere "ab"))
-               (avoid (lit "x"))))
-    (define-values (_ state) (run program '(0 1 3)))
-    (check-true (guidance-accepting? state))
-    (define matches (guidance-weak-matches state))
-    (check-equal? (map weak-match-path matches)
-                  '("root/control/rule[0]" "root/control/rule[1]"))
-    (check-equal? (map weak-match-matched? matches) '(#t #f))
-    (check-equal? (map weak-match-start-token matches) '(0 0))
-    (check-equal? (map weak-match-end-token matches) '(3 3)))
-
-  (test-case "end-anchored ban blocks only the current scope boundary"
-    (define program (control (text 3) (ban (ere "x$"))))
-    (define-values (guidance at-x) (run program '(2)))
-    (check-false (guidance-accepting? at-x))
-    (define extended (guidance-step guidance at-x 0))
-    (check-true (guidance-accepting? extended))
-    (check-false (guidance-dead? extended)))
-
-  (test-case "unanchored ban is latched immediately"
-    (define program (control (text 3) (ban (ere "x"))))
-    (define-values (_ state) (run program '(0 2)))
-    (check-true (guidance-dead? state)))
-
-  (test-case "text accepts from zero through its bound"
-    (define program (text 2))
-    (define-values (guidance empty) (run program '()))
-    (check-true (guidance-accepting? empty))
-    (define full (guidance-step guidance (guidance-step guidance empty 0) 1))
-    (check-true (guidance-accepting? full))
-    (check-true (guidance-dead? (guidance-step guidance full 0))))
-
-  (test-case "repeat does not accept while another item is partial"
-    (define program (repeat 1 2 (seq (list (lit "a") (lit "b")))))
-    (define-values (guidance one) (run program '(0 1)))
-    (check-true (guidance-accepting? one))
-    (define partial (guidance-step guidance one 0))
-    (check-false (guidance-accepting? partial))
-    (check-true (guidance-accepting? (guidance-step guidance partial 1))))
-
-  (test-case "sequence preserves both accepting and live prefix alternatives"
-    (define program
-      (seq (list (choice (list (lit "a") (lit "ab"))) (lit "x"))))
-    (define-values (guidance at-a) (run program '(0)))
-    (define domain (guidance-token-domain guidance at-a))
-    (check-true (domain-member? domain 1))
-    (check-true (domain-member? domain 2))
-    (check-true (accepts? program "ax"))
-    (check-true (accepts? program "abx"))
-    (check-false (accepts? program "ab")))
-
-  (test-case "nullable and accepting regex prefixes keep every continuation"
-    (define nullable
-      (seq (list (choice (list (lit "") (lit "a"))) (lit "x"))))
-    (check-true (accepts? nullable "x"))
-    (check-true (accepts? nullable "ax"))
-    (define regex-prefix (seq (list (ere "a(b)?") (lit "x"))))
-    (check-true (accepts? regex-prefix "ax"))
-    (check-true (accepts? regex-prefix "abx")))
-
-  (test-case "repeat preserves short and long item parses"
-    (define program (repeat 1 2 (choice (list (lit "a") (lit "ab")))))
-    (define-values (guidance at-a) (run program '(0)))
-    (define domain (guidance-token-domain guidance at-a))
-    (check-true (domain-member? domain 0))
-    (check-true (domain-member? domain 1))
-    (for ([text (in-list '("a" "ab" "aa" "aab" "aba" "abab"))])
-      (check-true (accepts? program text) text)))
-
-  (test-case "overlapping choice merges weak matches from all accepting branches"
-    (define program
-      (choice
-       (list (control (lit "x") (prefer (lit "x")))
-             (control (lit "x") (avoid (lit "x")))
-             (control (lit "xa") (prefer (lit "x"))))))
-    (define-values (_ state) (run program '(2)))
-    (define matches (guidance-weak-matches state))
-    (check-equal? (map weak-match-polarity matches) '(prefer avoid))
-    (check-equal? (map weak-match-matched? matches) '(#t #t))
-    (check-equal? (map weak-match-path matches)
-                  '("root/choice[0]/control/rule[0]"
-                    "root/choice[1]/control/rule[0]")))
-
-  (test-case "ambiguous repeat preserves distinct weak spans"
-    (define program
-      (repeat
-       1 2
-       (choice
-        (list (control (lit "a") (prefer (lit "a")))
-              (control (lit "aa") (avoid (lit "aa")))))))
-    (define-values (_ state) (run program '(0 0)))
-    (define matches (guidance-weak-matches state))
-    (define spans
-      (map (lambda (m) (list (weak-match-polarity m)
-                             (weak-match-start-token m)
-                             (weak-match-end-token m)))
-           matches))
-    (check-not-false (member '(prefer 0 1) spans))
-    (check-not-false (member '(prefer 1 2) spans))
-    (check-not-false (member '(avoid 0 2) spans)))
-
-  (test-case "end-anchored ban blocks only the epsilon continuation"
-    (define program
-      (seq
-       (list (control (choice (list (lit "a") (lit "ab")))
-                      (ban (ere "a$")))
-             (lit "x"))))
-    (define-values (guidance at-a) (run program '(0)))
-    (define domain (guidance-token-domain guidance at-a))
-    (check-true (domain-member? domain 1))
-    (check-false (domain-member? domain 2))
-    (check-false (accepts? program "ax"))
-    (check-true (accepts? program "abx")))
-
-  (test-case "PWSG profile rejects advanced and ambiguous constructs"
-    (check-equal? (validate-pwsg (control (text 4) (prefer (ere "a")))) '())
-    (check-not-equal? (validate-pwsg (rx "a+")) '())
-    (check-not-equal? (validate-pwsg (seq (list (text 2) (lit "x")))) '())
-    (check-not-equal? (validate-pwsg (repeat 1 2 (text 2))) '())))
+  (test-case "text accepts through bound"
+    (define p (compile (text 2)))
+    (for ([s '("" "a" "ab")]) (check-true (accepts? p s)))
+    (check-false (accepts? p "abx")))
+  (test-case "sequence keeps short and long alternatives"
+    (define p (compile (seq (choice (lit "a") (lit "ab")) (lit "x"))))
+    (check-true (accepts? p "ax")) (check-true (accepts? p "abx"))
+    (check-false (accepts? p "ab")))
+  (test-case "nullable regex keeps continuation"
+    (define p (compile (seq (ere "a(b)?") (lit "x"))))
+    (check-true (accepts? p "ax")) (check-true (accepts? p "abx")))
+  (test-case "repeat preserves ambiguous parses"
+    (define p (compile (repeat 1 2 (choice (lit "a") (lit "ab")))))
+    (for ([s '("a" "ab" "aa" "aab" "aba" "abab")]) (check-true (accepts? p s) s)))
+  (test-case "nested weak scopes use structural slots and OR over parses"
+    (define p
+      (compile
+       (repeat 1 2
+               (choice (with-rules (lit "a") (positive (lit "a")))
+                       (with-rules (lit "aa") (negative (lit "aa")))))))
+    (check-equal? (observe-token-ids p (encode "aa")) #(1 -1)))
+  (test-case "weak rules are scoped"
+    (define p
+      (compile (seq (with-rules (choice (lit "a") (lit "ab"))
+                                (positive (ere "b$")) (negative (lit "x")))
+                    (lit "x"))))
+    (check-equal? (observe-token-ids p (encode "abx")) #(1 0))
+    (check-equal? (observe-token-ids p (encode "ax")) #(0 0)))
+  (test-case "invalid layouts fail at compile"
+    (check-exn #rx"tail position" (lambda () (compile (seq (text 2) (lit "x")))))
+    (check-exn #rx"text cannot be repeated" (lambda () (compile (repeat 1 2 (text 2)))))
+    (check-exn #rx"must consume" (lambda () (compile (repeat 1 2 (lit ""))))))
+  (test-case "whole-text anchors are strict"
+    (define p (compile (ere "^a$")))
+    (check-true (accepts? p "a")) (check-false (accepts? p "a\n"))))

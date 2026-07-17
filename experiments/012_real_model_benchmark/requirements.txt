@@ -1,6 +1,0 @@
-guidance
-numpy
-outlines
-pytest
-torch
-transformers

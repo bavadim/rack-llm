@@ -1,49 +1,41 @@
 #lang racket/base
-
-(require racket/runtime-path
-         rackunit
-         "../main.rkt")
-
-(define-runtime-path core-module "../main.rkt")
-(define-runtime-path llama-module "../model-llama-cpp.rkt")
-(define (exported-value module-path name)
-  (with-handlers ([exn:fail? (lambda (_exn) 'missing)])
-    (dynamic-require module-path name (lambda () 'missing))))
-
+(require racket/runtime-path rackunit "../main.rkt")
+(define-runtime-path core "../main.rkt")
+(define-runtime-path extension "../backend.rkt")
+(define (exported module name)
+  (with-handlers ([exn:fail? (lambda (_) 'missing)])
+    (dynamic-require module name (lambda () 'missing))))
 (module+ test
-  (test-case "public API is the exact hard/PWSG surface"
-    (for ([name (in-list
-                 '(model-metadata model-close!
-                   lit rx ere seq choice repeat text control prefer avoid ban validate-pwsg
-                   compile-spec compiled-spec-close! observe observe-token-ids observe-many
-                   fit-weak-model weak-posterior
-                   save-weak-model load-weak-model cars-sampler make-generator
-                   generator-sample! generator-sample-n! generator-close! generate
-                   weak-observation-labels weak-model-fingerprint
-                   generation-result-weak generation-result-tokenizer-fingerprint
-                   generation-result-distribution-guarantee
-                   generation-metrics-hard-proposals generation-metrics-weak-rejections
-                   generation-metrics-weak-policy))])
-      (check-not-equal? (exported-value core-module name) 'missing
-                        (format "~a should be exported" name)))
-    (for ([name (in-list '(score rank rank-rx weight ban-rx local-sampler
-                           TextObserver guidance-score guidance-potential
-                           program-score-ceiling))])
-      (check-equal? (exported-value core-module name) 'missing
-                    (format "~a should not be exported" name))))
-
-  (test-case "ERE accepts only the documented portable grammar"
-    (for ([pattern (in-list '("US[0-9]+" "(a|b){1,3}" "^a.*b$" "[^x]" "a\\+b"))])
-      (check-not-exn (lambda () (ere pattern)) pattern))
-    (for ([pattern (in-list '("(?i)a" "(?=a)b" "\\d+" "\\bword\\b" "(a)\\1" "a*?"))])
-      (check-exn #rx"ere" (lambda () (ere pattern)) pattern))
-    (check-not-exn (lambda () (rx "(?i)\\bword\\b"))))
-
-  (test-case "new constructors enforce pattern and layout contracts"
-    (check-exn #rx"lit or ere" (lambda () (prefer (rx "a"))))
-    (check-equal? (validate-pwsg (control (text 8) (prefer (ere "a")))) '())
-    (check-not-equal? (validate-pwsg (seq (list (text 8) (lit "suffix")))) '()))
-
-  (test-case "llama backend keeps one public constructor"
-    (check-not-equal? (exported-value llama-module 'llama-cpp-model) 'missing)
-    (check-equal? (exported-value llama-module 'make-llama-cpp-backend) 'missing)))
+  (test-case "compact public API"
+    (for ([name '(backend-close! llama-cpp-backend lit ere seq choice repeat text
+                  with-rules positive negative compile-spec accepts? observe-token-ids
+                  fit-weak-model weak-posterior weak-model-fingerprint weak-model-diagnostics
+                  save-weak-model load-weak-model generation-request generate-batch
+                  generation-result-status generation-result-reason generation-result-token-ids
+                  generation-result-text generation-result-lm-logprob
+                  generation-result-latency-ms generation-result-tokenizer-fingerprint
+                  generation-result-posterior generation-result-attempts
+                  generation-result-proposed-tokens
+                  generation-result-model-draws generation-result-trie-nodes)])
+      (check-not-equal? (exported core name) 'missing (symbol->string name)))
+    (for ([name '(rx ban control prefer avoid cars-sampler make-generation-request generate
+                  compiled-spec-schema-fingerprint model-close! llama-cpp-model)])
+      (check-equal? (exported core name) 'missing (symbol->string name))))
+  (test-case "backend extension is public"
+    (for ([name '(make-tokenizer make-provider make-backend backend-close!
+                  factor-request-temperature factor-request-domain factor-request-constrain?
+                  factor-request-children factor-request-draw factor-selection domain-member?)])
+      (check-not-equal? (exported extension name) 'missing (symbol->string name))))
+  (test-case "removed backend internals stay private"
+    (for ([name '(factor-request tokenize detokenize token-ref vocab-size
+                  tokenizer-fingerprint make-rng factor-selection? factor-selection-id)])
+      (check-equal? (exported extension name) 'missing (symbol->string name))))
+  (test-case "ERE portable grammar"
+    (for ([p '("US[0-9]+" "(a|b){1,3}" "^a.*b$" "[^x]" "a\\+b")])
+      (check-not-exn (lambda () (ere p)) p))
+    (for ([p '("(?i)a" "(?=a)b" "\\d+" "\\bword\\b" "(a)\\1" "a*?")])
+      (check-exn #rx"ere" (lambda () (ere p)) p)))
+  (test-case "constructors validate"
+    (check-exn exn:fail? (lambda () (seq)))
+    (check-exn exn:fail? (lambda () (choice)))
+    (check-exn #rx"lit or ere" (lambda () (positive (text 2))))))

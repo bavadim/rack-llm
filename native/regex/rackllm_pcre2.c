@@ -4,37 +4,50 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "rackllm_pcre2.h"
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #define INITIAL_WORKSPACE_SIZE 128
 
-typedef struct {
+struct rackllm_vocab {
     char *bytes;
     size_t *offsets;
     int32_t size;
-} rackllm_vocab;
+    size_t max_token_length;
+};
 
-typedef struct {
+typedef struct allowed_cache_entry {
+    int *workspace;
+    size_t workspace_size;
+    int restartable;
+    int started;
+    int32_t *allowed;
+    int32_t allowed_count;
+    struct allowed_cache_entry *next;
+} allowed_cache_entry;
+
+struct rackllm_regex {
     pcre2_code *code;
     rackllm_vocab *vocab;
     int restart_safe;
-} rackllm_regex;
+    allowed_cache_entry *allowed_cache;
+    int allowed_cache_count;
+};
 
-typedef struct {
+struct rackllm_regex_state {
     rackllm_regex *regex;
     char *prefix;
     size_t length;
     int accepting;
     int32_t *allowed;
     int32_t allowed_count;
-    int32_t *accepted;
-    int32_t accepted_count;
     int *workspace;
     size_t workspace_size;
     int restartable;
     int started;
-} rackllm_regex_state;
-
-void rackllm_regex_state_close(rackllm_regex_state *state);
+};
 
 static void set_error(char *err, size_t n, const char *message) {
     if (err && n) snprintf(err, n, "%s", message);
@@ -90,6 +103,9 @@ rackllm_vocab *rackllm_vocab_open(const char *bytes,
             return NULL;
         }
         offset += (size_t) lengths[id];
+        if ((size_t) lengths[id] > vocab->max_token_length) {
+            vocab->max_token_length = (size_t) lengths[id];
+        }
         vocab->offsets[id + 1] = offset;
     }
     if (offset != byte_count) {
@@ -110,13 +126,15 @@ void rackllm_vocab_close(rackllm_vocab *vocab) {
     free(vocab);
 }
 
+/* 2 = accepting, 1 = live partial, 0 = dead, -1 = backend failure. */
 static int live(rackllm_regex *regex, const char *text, size_t length) {
     pcre2_match_data *data = pcre2_match_data_create_from_pattern(regex->code, NULL);
     if (!data) return -1;
     int rc = pcre2_match(regex->code, (PCRE2_SPTR) text, length, 0,
                          PCRE2_PARTIAL_HARD, data, NULL);
     pcre2_match_data_free(data);
-    if (rc >= 0 || rc == PCRE2_ERROR_PARTIAL) return 1;
+    if (rc >= 0) return 2;
+    if (rc == PCRE2_ERROR_PARTIAL) return 1;
     if (rc == PCRE2_ERROR_NOMATCH) return 0;
     return -1;
 }
@@ -213,6 +231,14 @@ rackllm_regex *rackllm_regex_open(const char *pattern,
 
 void rackllm_regex_close(rackllm_regex *regex) {
     if (!regex) return;
+    allowed_cache_entry *entry = regex->allowed_cache;
+    while (entry) {
+        allowed_cache_entry *next = entry->next;
+        free(entry->workspace);
+        free(entry->allowed);
+        free(entry);
+        entry = next;
+    }
     pcre2_code_free(regex->code);
     free(regex);
 }
@@ -229,7 +255,6 @@ rackllm_regex_state *rackllm_regex_start(rackllm_regex *regex) {
     state->regex = regex;
     state->accepting = accepting(regex, "", 0);
     state->allowed_count = -1;
-    state->accepted_count = -1;
     return state;
 }
 
@@ -238,118 +263,141 @@ void rackllm_regex_state_close(rackllm_regex_state *state) {
     free(state->prefix);
     free(state->workspace);
     free(state->allowed);
-    free(state->accepted);
     free(state);
-}
-
-static int compute_accepted(rackllm_regex_state *state) {
-    if (state->accepted_count >= 0) return 1;
-    rackllm_vocab *vocab = state->regex->vocab;
-    state->accepted = malloc((size_t) vocab->size * sizeof(int32_t));
-    size_t capacity = state->length + 1;
-    for (int32_t id = 0; id < vocab->size; id++) {
-        size_t n = state->length + token_length(vocab, id);
-        if (n + 1 > capacity) capacity = n + 1;
-    }
-    char *subject = malloc(capacity);
-    pcre2_match_data *data = pcre2_match_data_create_from_pattern(state->regex->code, NULL);
-    if ((vocab->size && !state->accepted) || !subject || !data) {
-        free(state->accepted);
-        free(subject);
-        pcre2_match_data_free(data);
-        state->accepted = NULL;
-        return 0;
-    }
-    state->accepted_count = 0;
-    memcpy(subject, state->prefix, state->length);
-    for (int32_t id = 0; id < vocab->size; id++) {
-        size_t length = token_length(vocab, id);
-        if (!length) continue;
-        size_t n = state->length + length;
-        memcpy(subject + state->length, token_bytes(vocab, id), length);
-        subject[n] = 0;
-        int rc = pcre2_match(state->regex->code, (PCRE2_SPTR) subject, n, 0,
-                             0, data, NULL);
-        if (rc >= 0) state->accepted[state->accepted_count++] = id;
-    }
-    pcre2_match_data_free(data);
-    free(subject);
-    return 1;
-}
-
-int32_t rackllm_regex_accepted_count(rackllm_regex_state *state) {
-    return state && compute_accepted(state) ? state->accepted_count : -1;
-}
-
-int32_t rackllm_regex_accepted_ref(rackllm_regex_state *state, int32_t index) {
-    if (!state || !compute_accepted(state) || index < 0 || index >= state->accepted_count) return -1;
-    return state->accepted[index];
 }
 
 static int compute_allowed(rackllm_regex_state *state) {
     if (state->allowed_count >= 0) return 1;
     rackllm_vocab *vocab = state->regex->vocab;
+    if (state->regex->restart_safe) {
+        for (allowed_cache_entry *entry = state->regex->allowed_cache;
+             entry; entry = entry->next) {
+            if (entry->started == state->started &&
+                entry->restartable == state->restartable &&
+                entry->workspace_size == state->workspace_size &&
+                (entry->workspace_size == 0 ||
+                 memcmp(entry->workspace, state->workspace,
+                        entry->workspace_size * sizeof(int)) == 0)) {
+                state->allowed = malloc(
+                    (size_t) entry->allowed_count * sizeof(int32_t));
+                if (entry->allowed_count && !state->allowed) return 0;
+                if (entry->allowed_count) {
+                    memcpy(state->allowed, entry->allowed,
+                           (size_t) entry->allowed_count * sizeof(int32_t));
+                }
+                state->allowed_count = entry->allowed_count;
+                return 1;
+            }
+        }
+    }
     state->allowed = malloc((size_t) vocab->size * sizeof(int32_t));
-    pcre2_match_data *data = pcre2_match_data_create(8, NULL);
-    if ((vocab->size && !state->allowed) || !data) {
+    uint8_t *allowed = calloc((size_t) vocab->size, sizeof(uint8_t));
+    if (vocab->size && (!state->allowed || !allowed)) {
         free(state->allowed);
-        pcre2_match_data_free(data);
+        free(allowed);
         state->allowed = NULL;
         return 0;
     }
-    state->allowed_count = 0;
-    size_t capacity = state->length + 1;
-    char *subject = NULL;
-    if (!state->regex->restart_safe) {
+    size_t capacity = state->length + vocab->max_token_length + 1;
+    int failed = 0;
+#pragma omp parallel reduction(|:failed)
+    {
+        pcre2_match_data *data = pcre2_match_data_create(8, NULL);
+        char *subject = state->regex->restart_safe ? NULL : malloc(capacity);
+        int *workspace = NULL;
+        size_t workspace_size = state->workspace_size;
+        if (!data || (!state->regex->restart_safe && !subject)) {
+            failed = 1;
+        }
+        if (subject) memcpy(subject, state->prefix, state->length);
+#pragma omp for schedule(static)
         for (int32_t id = 0; id < vocab->size; id++) {
-            size_t n = state->length + token_length(vocab, id);
-            if (n + 1 > capacity) capacity = n + 1;
+            if (data && (state->regex->restart_safe || subject)) {
+                size_t length = token_length(vocab, id);
+                if (!length) continue;
+                int rc;
+                if (state->regex->restart_safe) {
+                    if (state->started && !state->restartable) continue;
+                    rc = restart_match(state->regex, state,
+                                       token_bytes(vocab, id), length, data,
+                                       &workspace, &workspace_size);
+                } else {
+                    size_t n = state->length + length;
+                    memcpy(subject + state->length, token_bytes(vocab, id), length);
+                    subject[n] = 0;
+                    rc = pcre2_match(state->regex->code, (PCRE2_SPTR) subject, n, 0,
+                                     PCRE2_PARTIAL_HARD, data, NULL);
+                }
+                int status = rc >= 0 || rc == PCRE2_ERROR_PARTIAL
+                           ? 1
+                           : rc == PCRE2_ERROR_NOMATCH ? 0 : -1;
+                if (status < 0) failed = 1;
+                else if (status) allowed[id] = 1;
+            }
         }
-        subject = malloc(capacity);
-        if (!subject) {
-            pcre2_match_data_free(data);
-            free(state->allowed);
-            state->allowed = NULL;
-            state->allowed_count = -1;
-            return 0;
-        }
-        memcpy(subject, state->prefix, state->length);
+        free(subject);
+        free(workspace);
+        pcre2_match_data_free(data);
     }
-    int *workspace = NULL;
-    size_t workspace_size = state->workspace_size;
+    if (failed) {
+        free(allowed);
+        free(state->allowed);
+        state->allowed = NULL;
+        state->allowed_count = -1;
+        return 0;
+    }
+    state->allowed_count = 0;
     for (int32_t id = 0; id < vocab->size; id++) {
-        size_t length = token_length(vocab, id);
-        if (!length) continue;
-        int rc;
-        if (state->regex->restart_safe) {
-            if (state->started && !state->restartable) continue;
-            rc = restart_match(state->regex, state,
-                               token_bytes(vocab, id), length, data,
-                               &workspace, &workspace_size);
-        } else {
-            size_t n = state->length + length;
-            memcpy(subject + state->length, token_bytes(vocab, id), length);
-            subject[n] = 0;
-            rc = pcre2_match(state->regex->code, (PCRE2_SPTR) subject, n, 0,
-                             PCRE2_PARTIAL_HARD, data, NULL);
-        }
-        int status = rc >= 0 || rc == PCRE2_ERROR_PARTIAL
-                   ? 1
-                   : rc == PCRE2_ERROR_NOMATCH ? 0 : -1;
-        if (status < 0) {
-            free(subject);
-            free(workspace);
-            pcre2_match_data_free(data);
-            free(state->allowed);
-            state->allowed = NULL;
-            state->allowed_count = -1;
-            return 0;
-        }
-        if (status) state->allowed[state->allowed_count++] = id;
+        if (allowed[id]) state->allowed[state->allowed_count++] = id;
     }
-    pcre2_match_data_free(data);
-    free(subject);
-    free(workspace);
+    free(allowed);
+    if (state->regex->restart_safe) {
+        allowed_cache_entry *entry = calloc(1, sizeof(*entry));
+        if (entry) {
+            if (state->workspace_size) {
+                entry->workspace = malloc(state->workspace_size * sizeof(int));
+            }
+            if (state->allowed_count) {
+                entry->allowed = malloc(
+                    (size_t) state->allowed_count * sizeof(int32_t));
+            }
+            if ((!state->workspace_size || entry->workspace) &&
+                (!state->allowed_count || entry->allowed)) {
+                if (state->workspace_size) {
+                    memcpy(entry->workspace, state->workspace,
+                           state->workspace_size * sizeof(int));
+                }
+                if (state->allowed_count) {
+                    memcpy(entry->allowed, state->allowed,
+                           (size_t) state->allowed_count * sizeof(int32_t));
+                }
+                entry->workspace_size = state->workspace_size;
+                entry->restartable = state->restartable;
+                entry->started = state->started;
+                entry->allowed_count = state->allowed_count;
+                entry->next = state->regex->allowed_cache;
+                state->regex->allowed_cache = entry;
+                state->regex->allowed_cache_count++;
+                if (state->regex->allowed_cache_count > 8) {
+                    allowed_cache_entry *previous = NULL;
+                    allowed_cache_entry *tail = state->regex->allowed_cache;
+                    while (tail->next) {
+                        previous = tail;
+                        tail = tail->next;
+                    }
+                    if (previous) previous->next = NULL;
+                    free(tail->workspace);
+                    free(tail->allowed);
+                    free(tail);
+                    state->regex->allowed_cache_count--;
+                }
+            } else {
+                free(entry->workspace);
+                free(entry->allowed);
+                free(entry);
+            }
+        }
+    }
     return 1;
 }
 
@@ -357,9 +405,16 @@ int32_t rackllm_regex_allowed_count(rackllm_regex_state *state) {
     return state && compute_allowed(state) ? state->allowed_count : -1;
 }
 
-int32_t rackllm_regex_allowed_ref(rackllm_regex_state *state, int32_t index) {
-    if (!state || !compute_allowed(state) || index < 0 || index >= state->allowed_count) return -1;
-    return state->allowed[index];
+int32_t rackllm_regex_allowed_copy(rackllm_regex_state *state,
+                                   int32_t *out,
+                                   int32_t capacity) {
+    if (!state || !compute_allowed(state) || capacity < state->allowed_count
+        || (state->allowed_count && !out)) return -1;
+    if (state->allowed_count) {
+        memcpy(out, state->allowed,
+               (size_t) state->allowed_count * sizeof(int32_t));
+    }
+    return state->allowed_count;
 }
 
 int rackllm_regex_step(rackllm_regex_state *state,
@@ -395,8 +450,8 @@ int rackllm_regex_step(rackllm_regex_state *state,
                                        token_bytes(vocab, token_id), length, data,
                                        &workspace, &workspace_size);
         pcre2_match_data_free(data);
-        status = incremental_rc >= 0 || incremental_rc == PCRE2_ERROR_PARTIAL
-               ? 1
+        status = incremental_rc >= 0 ? 2
+               : incremental_rc == PCRE2_ERROR_PARTIAL ? 1
                : incremental_rc == PCRE2_ERROR_NOMATCH ? 0 : -1;
     } else {
         status = live(state->regex, subject, n);
@@ -415,9 +470,10 @@ int rackllm_regex_step(rackllm_regex_state *state,
     next->regex = state->regex;
     next->prefix = subject;
     next->length = n;
+    /* PCRE2_PARTIAL_HARD may report PARTIAL even when a complete match also
+     * exists, so acceptance cannot be inferred from the liveness call. */
     next->accepting = accepting(state->regex, subject, n);
     next->allowed_count = -1;
-    next->accepted_count = -1;
     if (state->regex->restart_safe) {
         next->workspace = workspace;
         next->workspace_size = workspace_size;
@@ -434,30 +490,15 @@ int rackllm_regex_accepting(rackllm_regex_state *state) {
     return state ? state->accepting : 0;
 }
 
-int rackllm_regex_terminal(rackllm_regex_state *state) {
-    if (!state || !state->accepting) return 0;
-    if (!compute_allowed(state)) return -1;
-    return state->allowed_count == 0;
+int rackllm_regex_abi_version(void) {
+    return RACKLLM_REGEX_ABI_VERSION;
 }
 
-int rackllm_regex_text_match(const char *pattern, const char *text, char *err, size_t err_len) {
-    int error_code;
-    PCRE2_SIZE error_offset;
-    pcre2_code *code = pcre2_compile((PCRE2_SPTR) pattern, PCRE2_ZERO_TERMINATED,
-                                     PCRE2_UTF | PCRE2_ALT_BSUX,
-                                     &error_code, &error_offset, NULL);
-    if (!code) {
-        set_error(err, err_len, "invalid regex");
-        return -1;
-    }
-    pcre2_match_data *data = pcre2_match_data_create_from_pattern(code, NULL);
-    if (!data) {
-        pcre2_code_free(code);
-        set_error(err, err_len, "match data allocation failed");
-        return -1;
-    }
-    int rc = pcre2_match(code, (PCRE2_SPTR) text, strlen(text), 0, 0, data, NULL);
+int rackllm_regex_match_compiled(rackllm_regex *regex, const char *text) {
+    if (!regex || !text) return -1;
+    pcre2_match_data *data = pcre2_match_data_create_from_pattern(regex->code, NULL);
+    if (!data) return -1;
+    int rc = pcre2_match(regex->code, (PCRE2_SPTR) text, strlen(text), 0, 0, data, NULL);
     pcre2_match_data_free(data);
-    pcre2_code_free(code);
     return rc >= 0;
 }
