@@ -384,7 +384,8 @@
     (define rule-ids (family-rule-ids family family-persisted))
     (define labels
       (for/list ([raw (in-list family-persisted)]
-                 #:when (string=? "calibration" (get raw 'split)))
+                 #:when (and (string=? "calibration" (get raw 'split))
+                             (= 1.0 (get raw 'temperature 1.0))))
         (get raw 'labels)))
     (with-handlers ([exn:fail?
                      (lambda (exn)
@@ -452,12 +453,14 @@
     (define compiled (compile-spec backend (row-program row)))
     (for*/list ([seed (in-list (seeds))]
                 [budget (in-list checkpoint-budgets)])
+      (define draw-caps (get row 'paired_draw_caps))
+      (define draw-cap (get draw-caps (string->symbol (format "~a:~a" seed budget))))
       (pwsg-work
        row seed budget
        (generation-request
         compiled (get row 'model_prompt (get row 'prompt))
-        #:max-attempts budget
-        #:max-model-draws (* budget (add1 (get row 'max_tokens)))
+        #:max-attempts (max-attempts)
+        #:max-model-draws draw-cap
         #:weak-model weak-model
         #:temperature (temperature) #:max-tokens (get row 'max_tokens)
         #:seed seed #:deadline-ms (deadline-ms)))))

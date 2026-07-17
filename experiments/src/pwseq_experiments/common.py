@@ -15,12 +15,12 @@ EXPERIMENTS = REPO / "experiments"
 DATA = REPO / "data" / "pwseq-ifbench"
 SOURCE_DATA = REPO / "data" / "pwseq-ifbench-v0.2-min" / "data"
 ARTIFACT_ROOT = EXPERIMENTS / "artifacts"
-ACTIVE_RUN_FILE = ARTIFACT_ROOT / "active_run"
-_active_run = ACTIVE_RUN_FILE.read_text(encoding="utf-8").strip() if ACTIVE_RUN_FILE.exists() else "setup"
-ARTIFACTS = ARTIFACT_ROOT / _active_run
+ACTIVE_RUN_FILE = ARTIFACT_ROOT / "active_run"  # legacy pilot pointer; never used by new runs
+_run_id = os.environ.get("PWSEQ_RUN_ID", "setup")
+ARTIFACTS = ARTIFACT_ROOT / _run_id
 CACHE = EXPERIMENTS / ".cache"
 CONFIG_PATH = EXPERIMENTS / "config" / "paper.json"
-_ASSERTED_MANIFEST: dict[str, Any] | None = None
+STATE_FILE = ARTIFACTS / "RUN_STATE.json"
 
 
 def load_config() -> dict[str, Any]:
@@ -61,6 +61,16 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
+
+
+def write_jsonl_once(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    """Create a frozen decision artifact once; identical retries are harmless."""
+    materialized = list(rows)
+    if path.exists():
+        if read_jsonl(path) != materialized:
+            raise RuntimeError(f"immutable JSONL artifact would change: {path}")
+        return
+    write_jsonl(path, materialized)
 
 
 def jsonl_count(path: Path) -> int:
@@ -180,9 +190,6 @@ def frozen_manifest() -> dict[str, Any] | None:
 
 
 def assert_frozen() -> dict[str, Any]:
-    global _ASSERTED_MANIFEST
-    if _ASSERTED_MANIFEST is not None:
-        return _ASSERTED_MANIFEST
     manifest = frozen_manifest()
     if manifest is None:
         raise RuntimeError("experiment is not frozen; run `make -C experiments freeze`")
@@ -205,8 +212,28 @@ def assert_frozen() -> dict[str, Any]:
             ).strip()
             if actual != manifest[key]:
                 raise RuntimeError(f"frozen checkout drift: {root}")
-    _ASSERTED_MANIFEST = manifest
     return manifest
+
+
+def run_state() -> str | None:
+    if not STATE_FILE.exists():
+        return None
+    return json.loads(STATE_FILE.read_text(encoding="utf-8"))["state"]
+
+
+def set_run_state(state: str, **details: Any) -> None:
+    allowed = {
+        None: {"FROZEN"},
+        "FROZEN": {"RUNNING", "SUPERSEDED"},
+        "RUNNING": {"RUN_COMPLETE", "FAILED", "SUPERSEDED"},
+        "RUN_COMPLETE": {"ANALYZED", "SUPERSEDED"},
+        "ANALYZED": {"READY_TO_ARCHIVE", "SUPERSEDED"},
+        "READY_TO_ARCHIVE": {"ARCHIVED", "SUPERSEDED"},
+    }
+    current = run_state()
+    if state not in allowed.get(current, set()):
+        raise RuntimeError(f"invalid run state transition: {current} -> {state}")
+    write_json(STATE_FILE, {"run_id": ARTIFACTS.name, "state": state, **details})
 
 
 def python_env() -> dict[str, str]:

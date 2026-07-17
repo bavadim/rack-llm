@@ -8,7 +8,7 @@ PWSeq-IFBench claims:
 3. zero-label calibration versus equal voting;
 4. posterior-weighted selective generation.
 
-The program is fail-closed.  Development and static tests happen before
+The program is fail-closed. Development and static tests happen before
 `freeze`; after a manifest has been frozen, runtime failures are appended to
 `artifacts/<run-id>/issues.jsonl` and are not repaired under that run id.
 Independent stages continue and their final state is recorded separately.
@@ -19,20 +19,49 @@ STOP after exactly `T` content tokens.  EOG is not part of the returned text.
 Both CARS and naive rejection are evaluated against the same `Q_T` conditioned
 on hard acceptance.
 
+Dataset authoring and model evaluation are deliberately separate. OpenAI
+Codex deterministically authors `test_generated`, its held-out parameters and
+markers, the weak-rule schemas, noise overlays, and the paired mixed hard+weak
+tasks. Qwen and Phi do not author or revise any task or rule; they are only the
+candidate generators being evaluated. The exact provenance declaration is
+frozen in `data/pwseq-ifbench/rules_provenance.json`.
+
+The first frozen run is a dev-only design run. It never generates a test
+candidate and cannot read a test label:
+
 ```bash
 make -C experiments bootstrap
 make -C experiments prepare
 make -C experiments test
-make -C experiments freeze
-make -C experiments run-all
-make -C experiments analyze
-make -C experiments archive
+DESIGN_RUN=$(make -s -C experiments freeze)
+make -C experiments run-design RUN_ID=$DESIGN_RUN
+make -C experiments power RUN_ID=$DESIGN_RUN
+make -C experiments finalize-design RUN_ID=$DESIGN_RUN
+```
+
+`finalize-design` records the dev-derived sample-size decision, regenerates
+the Codex-authored held-out tasks, and supersedes the design run. Commit those
+frozen inputs, then create the separate confirmatory run:
+
+```bash
+RUN_ID=$(make -s -C experiments freeze)
+make -C experiments run-all RUN_ID=$RUN_ID
+make -C experiments analyze RUN_ID=$RUN_ID
+make -C experiments archive RUN_ID=$RUN_ID
 ```
 
 Generated data lives in `data/pwseq-ifbench/`. Runtime artifacts live under
 `experiments/artifacts/<run-id>/` and are entirely ignored by Git. `archive`
 creates an immutable tar.zst plus SHA-256 under
 `/mnt/storage/work/rack-llm-results` (override with `PWSEQ_ARCHIVE_DIR`).
+
+Operational thresholds are fitted globally across families on dev and stored
+as immutable artifacts. Test analysis applies those values exactly once. The
+primary selective results are SolveRate/Risk/Coverage at that dev-selected
+operating point plus normalized partial AURC on the common coverage range.
+`pass@5` is emitted only as a separately named secondary estimand. The
+published FUSE comparator is labeled as a FUSE-style reimplementation, not as
+the official implementation.
 
 ## Runtime resources
 

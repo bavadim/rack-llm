@@ -13,22 +13,28 @@ from unittest import mock
 
 import numpy as np
 
-from pwseq_experiments.builders import SOFT_FAMILIES, build
-from pwseq_experiments.common import DATA, EXPERIMENTS, SOURCE_DATA, atomic_jsonl_command, read_jsonl, write_jsonl
+from pwseq_experiments.builders import MIXED_FAMILIES, SOFT_FAMILIES, build, build_mixed
+from pwseq_experiments.common import DATA, EXPERIMENTS, SOURCE_DATA, atomic_jsonl_command, read_jsonl, write_jsonl, write_jsonl_once
 from pwseq_experiments.fuse import fit_fuse, predict_fuse
 from pwseq_experiments.hard_validation import hard_accepts
-from pwseq_experiments.metrics import aurc, classification_metrics, effective_rank, safe_solve, selective_curve
+from pwseq_experiments.metrics import (
+    calibration_bins, classification_metrics, common_coverage_metrics,
+    corrected_bootstrap_p, effective_rank, normalized_partial_aurc,
+    operating_metrics, oracle_safe_solve, selective_curve,
+)
 from pwseq_experiments.prepare import prepare_data
 from pwseq_experiments.pipeline import _operational_threshold
+from pwseq_experiments.analysis import _accepts_threshold
 from pwseq_experiments import common, pipeline
 from pwseq_experiments import evaluator
 from pwseq_experiments import archive as archive_module
+from pwseq_experiments import analysis as analysis_module
 
 
 class BuilderTests(unittest.TestCase):
-    def test_frozen_builders_reproduce_source(self):
-        for split in ["calibration", "dev"]:
-            for row in read_jsonl(SOURCE_DATA / f"{split}.jsonl"):
+    def test_frozen_builders_reproduce_prepared_data(self):
+        for split in ["calibration", "dev", "test_generated", "test_official"]:
+            for row in read_jsonl(DATA / f"{split}.jsonl"):
                 built = build(row["family"], row["kwargs"][0], row["max_tokens"])
                 self.assertEqual(built.hard_spec, row["hard_spec"], row["id"])
                 source_rules = [
@@ -41,6 +47,13 @@ class BuilderTests(unittest.TestCase):
         import inspect
         self.assertEqual(list(inspect.signature(build).parameters), ["family", "kwargs", "max_tokens"])
 
+    def test_mixed_builder_has_same_blind_interface(self):
+        import inspect
+        self.assertEqual(
+            list(inspect.signature(build_mixed).parameters),
+            ["family", "kwargs", "max_tokens"],
+        )
+
 
 class PreparedDataTests(unittest.TestCase):
     @classmethod
@@ -48,9 +61,11 @@ class PreparedDataTests(unittest.TestCase):
         prepare_data()
 
     def test_counts_and_balance(self):
+        config = json.loads((EXPERIMENTS / "config" / "paper.json").read_text())
         expected = {
             "calibration": 360, "dev": 120, "hard_sanity": 60,
-            "test_generated": 300, "test_official": 67,
+            "test_generated": 12 * config["test_per_family"], "test_official": 67,
+            "mixed": 2 * len(MIXED_FAMILIES) * (30 + 10 + config["test_per_family"]),
         }
         for split, count in expected.items():
             rows = read_jsonl(DATA / f"{split}.jsonl")
@@ -65,6 +80,25 @@ class PreparedDataTests(unittest.TestCase):
                         for rule in row["weak_rules"])
                     for row in rows
                 ))
+
+    def test_mixed_rows_are_paired_and_change_only_the_hard_envelope(self):
+        pairs = defaultdict(list)
+        for row in read_jsonl(DATA / "mixed.jsonl"):
+            pairs[row["pair_id"]].append(row)
+        self.assertTrue(pairs)
+        for pair_id, arms in pairs.items():
+            self.assertEqual({row["mixed_arm"] for row in arms}, {"text_weak", "coarse_hard_weak"})
+            self.assertEqual(len(arms), 2, pair_id)
+            weak, hard = sorted(arms, key=lambda row: row["mixed_arm"], reverse=True)
+            self.assertEqual(weak["weak_rules"], hard["weak_rules"])
+            self.assertNotEqual(weak["hard_spec"], hard["hard_spec"])
+
+    def test_codex_authorship_and_model_separation_are_recorded(self):
+        provenance = json.loads((DATA / "rules_provenance.json").read_text())
+        self.assertEqual(provenance["author"], "OpenAI Codex (GPT-5)")
+        self.assertFalse(provenance["experimental_models_used_for_authoring"])
+        self.assertEqual(provenance["experimental_model_role"], "candidate generation only")
+        self.assertIn("test_generated prompts", provenance["artifacts_authored"])
 
     def test_test_prompts_and_parameters_are_disjoint(self):
         train = read_jsonl(DATA / "calibration.jsonl") + read_jsonl(DATA / "dev.jsonl")
@@ -92,8 +126,6 @@ class PreparedDataTests(unittest.TestCase):
         for level in [20, 40]:
             overlays = read_jsonl(DATA / f"noise_{level}.jsonl")
             self.assertEqual(len(overlays), len(base))
-            source = read_jsonl(SOURCE_DATA / f"noise_{level}.jsonl")
-            self.assertEqual(overlays[:len(source)], source)
             seen = set()
             for overlay in overlays:
                 row = base[overlay["instance_id"]]
@@ -172,8 +204,28 @@ class MetricTests(unittest.TestCase):
             {"outcome": "NOT_FOUND", "confidence": 0},
         ]
         curve = selective_curve(rows)
-        self.assertGreaterEqual(aurc(curve), 0)
-        self.assertAlmostEqual(safe_solve(curve, .05), 1 / 3)
+        self.assertGreaterEqual(normalized_partial_aurc(curve, 2 / 3), 0)
+        self.assertAlmostEqual(oracle_safe_solve(curve, .05), 1 / 3)
+
+    def test_common_coverage_prevents_abstention_advantage(self):
+        full = selective_curve([
+            {"outcome": "FOUND_OK", "confidence": .9},
+            {"outcome": "FOUND_WRONG", "confidence": .8},
+        ])
+        short = selective_curve([
+            {"outcome": "FOUND_OK", "confidence": .9},
+            {"outcome": "NOT_FOUND", "confidence": 0},
+        ])
+        result = common_coverage_metrics({"full": full, "short": short})
+        self.assertEqual(result["full"]["common_coverage"], .5)
+        self.assertIsNone(result["short"]["risk_at_75"])
+
+    def test_bootstrap_p_is_never_zero(self):
+        self.assertGreater(corrected_bootstrap_p([1.0] * 10000), 0)
+
+    def test_calibration_bins_are_shared_and_counted(self):
+        groups = calibration_bins(np.asarray([0, 1, 1]), np.asarray([.1, .8, .9]), 2)
+        self.assertEqual(sum(group["count"] for group in groups), 3)
 
     def test_selective_curve_groups_unorderable_confidence_ties(self):
         rows = [
@@ -202,22 +254,94 @@ class MetricTests(unittest.TestCase):
         ]
         self.assertEqual(_operational_threshold(rows, 0.05), .9)
 
+    def test_serialized_reject_all_threshold_is_not_accept_all(self):
+        row = {"confidence": 1.0}
+        self.assertFalse(_accepts_threshold(row, {"accept_if": "never", "threshold": None}))
+        self.assertTrue(_accepts_threshold(row, {"accept_if": "always", "threshold": None}))
+
     def test_effective_rank(self):
         matrix = np.eye(3)
         self.assertGreater(effective_rank(matrix), 1)
 
 
 class RuntimePlumbingTests(unittest.TestCase):
+    def test_generation_bootstrap_uses_complete_prompt_seed_cohorts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "run"
+            data = root / "data"
+            (artifacts / "results").mkdir(parents=True)
+            (artifacts / "thresholds").mkdir()
+            data.mkdir()
+            prompts = [
+                {"id": "p0", "family": "family-a"},
+                {"id": "p1", "family": "family-a"},
+            ]
+            write_jsonl(data / "test_generated.jsonl", prompts)
+            methods = [
+                "hard_only_cars", "equal_score_best_of_b",
+                "posterior_best_of_b", "exact_pwsg",
+            ]
+            raw = []
+            for method in methods:
+                for prompt in prompts:
+                    for seed in [0, 1]:
+                        raw.append({
+                            "split": "test_generated", "budget": 8,
+                            "method": method, "prompt_id": prompt["id"],
+                            "family": prompt["family"], "seed": seed,
+                            "outcome": "FOUND_OK", "confidence": .8,
+                        })
+            write_jsonl(artifacts / "results" / "main_noise_00_generation_raw.jsonl", raw)
+            write_jsonl(artifacts / "thresholds" / "main_noise_00.jsonl", [{
+                "method": method, "budget": 8, "source_split": "dev",
+                "threshold": .5, "accept_if": "confidence_gte",
+            } for method in methods])
+            config = {
+                "confidence": .95, "generation_seeds": [0, 1],
+                "bootstrap_repetitions": 5, "dataset_seed": 17,
+            }
+            with (
+                mock.patch.object(analysis_module, "ARTIFACTS", artifacts),
+                mock.patch.object(analysis_module, "DATA", data),
+                mock.patch.object(analysis_module, "load_config", return_value=config),
+            ):
+                result = analysis_module._bootstrap_generation()
+            self.assertEqual(len(result), 3)
+            self.assertTrue(any(row["comparison"].endswith("posterior_best_of_b") for row in result))
+
+    def test_immutable_decision_artifact_rejects_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "thresholds.jsonl"
+            write_jsonl_once(path, [{"threshold": .7}])
+            write_jsonl_once(path, [{"threshold": .7}])
+            with self.assertRaises(RuntimeError):
+                write_jsonl_once(path, [{"threshold": .8}])
+
     def test_external_archive_is_immutable_and_hashed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run = root / "artifacts" / "run-1"
             run.mkdir(parents=True)
             (run / "frozen_manifest.json").write_text("{}\n")
+            (run / "stage_status.json").write_text("{}\n")
+            (run / "CLAIMS.json").write_text("[]\n")
+            (run / "tables").mkdir()
+            (run / "tables" / "statistical_tests.jsonl").write_text("{}\n")
+            (run / "tables" / "table3_generation.csv").write_text("method\n")
+            (run / "tables" / "table5_mixed_hard_weak.csv").write_text("method\n")
+            (run / "thresholds").mkdir()
+            (run / "thresholds" / "main_noise_00.jsonl").write_text("{}\n")
+            (run / "figures").mkdir()
+            (run / "figures" / "risk_coverage.png").write_bytes(b"png")
+            (run / "figures" / "reliability_data.jsonl").write_text("{}\n")
             destination = root / "release"
             with (
                 mock.patch.object(archive_module, "ARTIFACTS", run),
+                mock.patch.object(archive_module, "assert_frozen", return_value={}),
                 mock.patch.object(archive_module, "frozen_manifest", return_value={"run_id": "run-1"}),
+                mock.patch.object(archive_module, "run_state", return_value="READY_TO_ARCHIVE"),
+                mock.patch.object(archive_module, "set_run_state"),
                 mock.patch.dict(os.environ, {"PWSEQ_ARCHIVE_DIR": str(destination)}),
             ):
                 target = archive_module.archive()

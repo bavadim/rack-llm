@@ -11,8 +11,22 @@ from typing import Any
 
 import numpy as np
 
-from .common import ARTIFACTS, DATA, issue, load_config, read_jsonl, write_json, write_jsonl
-from .metrics import average_precision, aurc, safe_solve, selective_curve
+from .common import ARTIFACTS, DATA, assert_frozen, issue, load_config, read_jsonl, run_state, set_run_state, write_json, write_jsonl
+from .metrics import (
+    average_precision, calibration_bins, common_coverage_metrics, corrected_bootstrap_p,
+    operating_metrics, selective_curve,
+)
+
+
+def _accepts_threshold(row: dict[str, Any], decision: dict[str, Any]) -> bool:
+    mode = decision["accept_if"]
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    if mode == "confidence_gte":
+        return float(row["confidence"]) >= float(decision["threshold"])
+    raise RuntimeError(f"unknown threshold decision: {mode}")
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -51,11 +65,11 @@ def _macro_aggregation(path: Path) -> list[dict[str, Any]]:
         })
     blocked = [
         row for row in read_jsonl(path)
-        if str(row.get("aggregator", "")).startswith("FUSE") and "auprc" not in row
+        if str(row.get("aggregator", "")).startswith("fuse_style") and "auprc" not in row
     ]
     for row in blocked:
         output.append({
-            "split": row["split"], "aggregator": "FUSE",
+            "split": row["split"], "aggregator": "fuse_style_reimplementation",
             "status": row["status"],
         })
     return output
@@ -95,10 +109,61 @@ def _generation_table(path: Path, *, split: str = "test_generated", policy: str 
     ]
     return [{
         "method": row["method"], "budget": row["budget"],
-        "aurc": row["aurc"], "safe_solve_05": row["safe_solve_05"],
+        "solve_rate": row["solve_rate"], "risk": row.get("risk"),
+        "coverage": row["coverage"],
         "found_ok": row["found_ok"], "found_wrong": row["found_wrong"],
         "not_found": row["not_found"], "tokens_per_ok": row["tokens_per_ok"],
     } for row in rows]
+
+
+def _mixed_table(path: Path) -> list[dict[str, Any]]:
+    rows = [
+        row for row in read_jsonl(path)
+        if row["split"] == "test_generated" and row["policy"] == "operational"
+        and row.get("aggregation") == "family"
+    ]
+    return [{
+        "constraint_family": row["family"].split("@", 1)[0],
+        "hard_arm": row["family"].split("@", 1)[1],
+        "method": row["method"], "budget": row["budget"],
+        "solve_rate": row["solve_rate"], "risk": row["risk"],
+        "coverage": row["coverage"], "tokens_per_ok": row["tokens_per_ok"],
+    } for row in rows]
+
+
+def _pass_at_five() -> list[dict[str, Any]]:
+    raw_path = ARTIFACTS / "results" / "main_noise_00_generation_raw.jsonl"
+    threshold_path = ARTIFACTS / "thresholds" / "main_noise_00.jsonl"
+    if not raw_path.exists() or not threshold_path.exists():
+        return []
+    thresholds = {
+        (row["method"], int(row["budget"])): row
+        for row in read_jsonl(threshold_path)
+    }
+    groups: dict[tuple[str, int, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in read_jsonl(raw_path):
+        if row["split"] == "test_generated":
+            groups[(row["method"], int(row["budget"]), row["family"], row["prompt_id"])].append(row)
+    family_values: dict[tuple[str, int, str], list[bool]] = defaultdict(list)
+    for (method, budget, family, _prompt), values in groups.items():
+        decision = thresholds[(method, budget)]
+        solved = any(
+            row["outcome"] == "FOUND_OK"
+            and _accepts_threshold(row, decision)
+            for row in values
+        )
+        family_values[(method, budget, family)].append(solved)
+    output = []
+    for method, budget in sorted({(key[0], key[1]) for key in family_values}):
+        rates = [
+            float(np.mean(values)) for (candidate, candidate_budget, _), values in family_values.items()
+            if candidate == method and candidate_budget == budget
+        ]
+        output.append({
+            "metric": "pass_at_5_secondary", "method": method, "budget": budget,
+            "macro_rate": float(np.mean(rates)), "families": len(rates),
+        })
+    return output
 
 
 def _bootstrap_aggregation() -> list[dict[str, Any]]:
@@ -155,7 +220,7 @@ def _bootstrap_aggregation() -> list[dict[str, Any]]:
             "difference_mean": float(array.mean()),
             "ci_low": float(np.quantile(array, tail)),
             "ci_high": float(np.quantile(array, 1.0 - tail)),
-            "bootstrap_p": float(min(1.0, 2 * min(np.mean(array <= 0), np.mean(array >= 0)))),
+            "bootstrap_p": corrected_bootstrap_p(array),
         })
     return output
 
@@ -170,58 +235,91 @@ def _bootstrap_generation() -> list[dict[str, Any]]:
         row for row in read_jsonl(path)
         if row["split"] == "test_generated" and row["budget"] == 8
     ]
-    summary_path = ARTIFACTS / "results" / "main_noise_00_generation_summary.jsonl"
-    thresholds = {
-        row["method"]: row["threshold"]
-        for row in read_jsonl(summary_path)
-        if row["split"] == "test_generated" and row["budget"] == 8
-        and row["policy"] == "operational" and row.get("aggregation") == "macro"
-    } if summary_path.exists() else {}
-    by_method_prompt: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
-    for row in rows:
-        value = dict(row)
-        threshold = thresholds.get(row["method"])
-        if (
-            threshold is not None and row["outcome"] != "NOT_FOUND"
-            and row["confidence"] < threshold
-        ):
-            value["outcome"] = "NOT_FOUND"
-        by_method_prompt[row["method"]][row["prompt_id"]].append(value)
-    methods = ["hard_only_cars", "equal_score_best_of_b", "posterior_best_of_b"]
-    if "exact_pwsg" not in by_method_prompt:
+    threshold_path = ARTIFACTS / "thresholds" / "main_noise_00.jsonl"
+    if not threshold_path.exists():
         return []
+    thresholds = {
+        (row["method"], int(row["budget"])): row
+        for row in read_jsonl(threshold_path) if row["source_split"] == "dev"
+    }
+    expected_seeds = set(map(int, config["generation_seeds"]))
+
+    def grouped(apply_threshold: bool) -> dict[str, dict[str, dict[str, Any]]]:
+        source: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+        for original in rows:
+            row = dict(original)
+            decision = thresholds.get((row["method"], 8)) if apply_threshold else None
+            if (decision is not None and row["outcome"] != "NOT_FOUND"
+                    and not _accepts_threshold(row, decision)):
+                row["outcome"] = "NOT_FOUND"
+            source[row["method"]][row["prompt_id"]].append(row)
+        output: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+        for method, prompts in source.items():
+            for prompt, values in prompts.items():
+                seeds = [int(row["seed"]) for row in values]
+                if len(seeds) != len(set(seeds)) or set(seeds) != expected_seeds:
+                    raise RuntimeError(f"invalid seed cohort: {method}/{prompt}: {seeds}")
+                output[method][prompt] = {
+                    "prompt_id": prompt, "family": values[0]["family"],
+                    "outcome": "PROMPT_MEAN",
+                    "confidence": float(np.mean([float(row["confidence"]) for row in values])),
+                    "ok_weight": float(np.mean([row["outcome"] == "FOUND_OK" for row in values])),
+                    "wrong_weight": float(np.mean([row["outcome"] == "FOUND_WRONG" for row in values])),
+                    "return_weight": float(np.mean([row["outcome"] != "NOT_FOUND" for row in values])),
+                }
+        return output
+
+    raw_by_method = grouped(False)
+    operational_by_method = grouped(True)
+    methods = ["hard_only_cars", "equal_score_best_of_b", "posterior_best_of_b"]
+    if "exact_pwsg" not in raw_by_method:
+        return []
+    required = {"exact_pwsg", *methods}
+    missing_methods = sorted(required - set(raw_by_method))
+    if missing_methods:
+        raise RuntimeError(f"missing primary generation methods: {missing_methods}")
+    missing_thresholds = sorted(
+        method for method in required if (method, 8) not in thresholds
+    )
+    if missing_thresholds:
+        raise RuntimeError(f"missing dev thresholds: {missing_thresholds}")
     prompts_by_family: dict[str, list[str]] = defaultdict(list)
     instance_family = {
         row["id"]: row["family"] for row in read_jsonl(DATA / "test_generated.jsonl")
     }
-    for prompt in by_method_prompt["exact_pwsg"]:
+    for prompt in raw_by_method["exact_pwsg"]:
         prompts_by_family[instance_family[prompt]].append(prompt)
     rng = np.random.default_rng(config["dataset_seed"] + 1)
-    diffs = {method: [] for method in methods if method in by_method_prompt}
+    diffs = {method: [] for method in methods if method in raw_by_method}
     safe_diffs = {method: [] for method in diffs}
 
-    def macro_metrics(items: list[dict[str, Any]]) -> tuple[float, float]:
-        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for item in items:
-            grouped[item["family"]].append(item)
-        aurc_values = []
-        safe_values = []
-        for family_rows in grouped.values():
-            curve = selective_curve(family_rows)
-            aurc_values.append(aurc(curve))
-            safe_values.append(safe_solve(curve, .05))
-        return float(np.mean(aurc_values)), float(np.mean(safe_values))
+    def macro_metrics(selected: list[str], method: str) -> tuple[float, float]:
+        paurc = []
+        solve = []
+        for family in sorted(prompts_by_family):
+            family_prompts = [prompt for prompt in selected if instance_family[prompt] == family]
+            curves = {
+                candidate: selective_curve([raw_by_method[candidate][prompt] for prompt in family_prompts])
+                for candidate in ["hard_only_cars", "equal_score_best_of_b", "posterior_best_of_b", "exact_pwsg"]
+                if candidate in raw_by_method
+            }
+            common = common_coverage_metrics(curves)
+            value = common[method]["normalized_partial_aurc"]
+            if value is None:
+                raise RuntimeError(f"zero common coverage for {family}/{method}")
+            paurc.append(value)
+            op = [operational_by_method[method][prompt] for prompt in family_prompts]
+            solve.append(float(np.mean([row["ok_weight"] for row in op])))
+        return float(np.mean(paurc)), float(np.mean(solve))
 
     for _ in range(config["bootstrap_repetitions"]):
         sampled = []
         for family, prompts in prompts_by_family.items():
             indices = rng.integers(0, len(prompts), size=len(prompts))
             sampled.extend(prompts[index] for index in indices)
-        ours = [row for prompt in sampled for row in by_method_prompt["exact_pwsg"][prompt]]
-        ours_aurc, ours_safe = macro_metrics(ours)
+        ours_aurc, ours_safe = macro_metrics(sampled, "exact_pwsg")
         for method in diffs:
-            baseline = [row for prompt in sampled for row in by_method_prompt[method][prompt]]
-            baseline_aurc, baseline_safe = macro_metrics(baseline)
+            baseline_aurc, baseline_safe = macro_metrics(sampled, method)
             diffs[method].append(ours_aurc - baseline_aurc)
             safe_diffs[method].append(ours_safe - baseline_safe)
     output = []
@@ -230,23 +328,27 @@ def _bootstrap_generation() -> list[dict[str, Any]]:
         safe = np.asarray(safe_diffs[method])
         output.append({
             "comparison": f"exact_pwsg-minus-{method}",
-            "aurc_difference_mean": float(array.mean()),
-            "aurc_ci_low": float(np.quantile(array, tail)),
-            "aurc_ci_high": float(np.quantile(array, 1.0 - tail)),
-            "safe_solve_05_difference_mean": float(safe.mean()),
-            "safe_solve_ci_low": float(np.quantile(safe, tail)),
-            "safe_solve_ci_high": float(np.quantile(safe, 1.0 - tail)),
-            "bootstrap_p": float(min(
-                1.0, 2 * min(np.mean(array <= 0), np.mean(array >= 0))
-            )),
+            "metric": "normalized_common_coverage_paurc",
+            "paurc_difference_mean": float(array.mean()),
+            "paurc_ci_low": float(np.quantile(array, tail)),
+            "paurc_ci_high": float(np.quantile(array, 1.0 - tail)),
+            "operational_solve_rate_difference_mean": float(safe.mean()),
+            "solve_rate_ci_low": float(np.quantile(safe, tail)),
+            "solve_rate_ci_high": float(np.quantile(safe, 1.0 - tail)),
+            "bootstrap_p": corrected_bootstrap_p(array),
         })
+        seed0 = min(expected_seeds)
+        def solved_seed0(row: dict[str, Any]) -> bool:
+            decision = thresholds[(row["method"], 8)]
+            returned = row["outcome"] != "NOT_FOUND" and _accepts_threshold(row, decision)
+            return returned and row["outcome"] == "FOUND_OK"
         ours_solved = {
-            prompt: any(row["outcome"] == "FOUND_OK" for row in values)
-            for prompt, values in by_method_prompt["exact_pwsg"].items()
+            row["prompt_id"]: solved_seed0(row)
+            for row in rows if row["method"] == "exact_pwsg" and int(row["seed"]) == seed0
         }
         baseline_solved = {
-            prompt: any(row["outcome"] == "FOUND_OK" for row in values)
-            for prompt, values in by_method_prompt[method].items()
+            row["prompt_id"]: solved_seed0(row)
+            for row in rows if row["method"] == method and int(row["seed"]) == seed0
         }
         common = sorted(ours_solved.keys() & baseline_solved.keys())
         ours_only = sum(ours_solved[prompt] and not baseline_solved[prompt] for prompt in common)
@@ -309,14 +411,14 @@ def _figures() -> None:
             clean = group[group["noise"] == 0]
             if len(clean):
                 clean = clean.sort_values("mean_model_tokens")
-                plt.plot(clean["mean_model_tokens"], clean["safe_solve_05"], marker="o", label=method)
-        plt.xlabel("Mean model-token draws"); plt.ylabel("SafeSolve@5%"); plt.legend(); plt.tight_layout()
+                plt.plot(clean["mean_model_tokens"], clean["solve_rate"], marker="o", label=method)
+        plt.xlabel("Mean model-token draws"); plt.ylabel("Solve rate at dev-selected threshold"); plt.legend(); plt.tight_layout()
         plt.savefig(figure_dir / "quality_vs_budget.png", dpi=180); plt.close()
 
         plt.figure()
         for method, group in subset[subset["budget"] == 8].groupby("method"):
-            plt.plot(group["noise"], group["safe_solve_05"], marker="o", label=method)
-        plt.xlabel("Noise"); plt.ylabel("SafeSolve@5%"); plt.legend(); plt.tight_layout()
+            plt.plot(group["noise"], group["solve_rate"], marker="o", label=method)
+        plt.xlabel("Noise"); plt.ylabel("Solve rate at dev-selected threshold"); plt.legend(); plt.tight_layout()
         plt.savefig(figure_dir / "noise_robustness.png", dpi=180); plt.close()
 
         plt.figure()
@@ -332,18 +434,23 @@ def _figures() -> None:
     if scores_path.exists() and labels_path.exists():
         gold = {row["candidate_id"]: int(row["gold_pass"]) for row in read_jsonl(labels_path)}
         rows = [row for row in read_jsonl(scores_path) if row.get("record_type") == "score" and row["split"] == "test_generated" and row.get("candidate_id") in gold]
-        bins = np.linspace(0, 1, 11)
+        y = np.asarray([gold[row["candidate_id"]] for row in rows], dtype=int)
+        p = np.asarray([row["posterior"] for row in rows], dtype=float)
+        groups = calibration_bins(y, p, bins=load_config()["ece_bins"])
+        write_jsonl(figure_dir / "reliability_data.jsonl", groups)
         plt.figure()
-        for left, right in zip(bins[:-1], bins[1:]):
-            items = [row for row in rows if left <= row["posterior"] < right or (right == 1 and row["posterior"] == 1)]
-            if items:
-                plt.scatter(np.mean([row["posterior"] for row in items]), np.mean([gold[row["candidate_id"]] for row in items]), color="C0")
+        for group in groups:
+            plt.scatter(group["mean_probability"], group["empirical_rate"],
+                        s=max(12, math.sqrt(group["count"]) * 3), color="C0")
         plt.plot([0, 1], [0, 1], color="black", linestyle="--")
         plt.xlabel("Posterior"); plt.ylabel("Empirical accuracy"); plt.tight_layout()
         plt.savefig(figure_dir / "reliability.png", dpi=180); plt.close()
 
 
 def analyze() -> None:
+    assert_frozen()
+    if run_state() != "RUN_COMPLETE":
+        raise RuntimeError(f"analysis requires RUN_COMPLETE state, got {run_state()}")
     tables = ARTIFACTS / "tables"
     statistics = []
     audit = ARTIFACTS / "reports" / "main_noise_00_rule_audit.jsonl"
@@ -355,6 +462,10 @@ def analyze() -> None:
     generation = ARTIFACTS / "results" / "main_noise_00_generation_summary.jsonl"
     if generation.exists():
         _write_csv(tables / "table3_generation.csv", _generation_table(generation))
+        _write_csv(tables / "table3b_pass_at_5_secondary.csv", _pass_at_five())
+    mixed = ARTIFACTS / "results" / "main_mixed_noise_00_generation_summary.jsonl"
+    if mixed.exists():
+        _write_csv(tables / "table5_mixed_hard_weak.csv", _mixed_table(mixed))
     noise_rows = []
     for level in [0, 20, 40]:
         path = ARTIFACTS / "results" / f"main_noise_{level:02d}_generation_summary.jsonl"
@@ -412,12 +523,12 @@ def analyze() -> None:
         claims.append({"claim": 3, "status": "BLOCKED"})
 
     if generation_stats:
-        relevant = [row for row in generation_stats if row["comparison"].endswith(("hard_only_cars", "equal_score_best_of_b"))]
-        supported = bool(relevant) and all(
-            row["aurc_ci_high"] < 0 and row["safe_solve_ci_low"] >= .03
-            for row in relevant
-        )
-        claims.append({"claim": 4, "status": "SUPPORTED" if supported else "NOT_SUPPORTED"})
+        broad = [row for row in generation_stats if row["comparison"].endswith(("hard_only_cars", "equal_score_best_of_b"))]
+        direct = next((row for row in generation_stats if row["comparison"].endswith("posterior_best_of_b")), None)
+        broad_ok = bool(broad) and all(row["paurc_ci_high"] < 0 and row.get("holm_p", 1) < .05 for row in broad)
+        direct_ok = bool(direct) and direct["paurc_ci_high"] < 0 and direct.get("holm_p", 1) < .05
+        claims.append({"claim": "4a", "status": "SUPPORTED" if broad_ok else "NOT_SUPPORTED"})
+        claims.append({"claim": "4b", "status": "SUPPORTED" if direct_ok else "NOT_SUPPORTED"})
     else:
         claims.append({"claim": 4, "status": "BLOCKED"})
     write_json(ARTIFACTS / "CLAIMS.json", claims)
@@ -442,3 +553,6 @@ def analyze() -> None:
         _figures()
     except Exception as exc:
         issue("analysis.figures", exc)
+        raise
+    set_run_state("ANALYZED")
+    set_run_state("READY_TO_ARCHIVE")

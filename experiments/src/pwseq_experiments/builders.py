@@ -130,8 +130,8 @@ def rules_word_range(k: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         rule(0, "positive", word_between(max(1, math.floor(lo * .75)), math.ceil(hi * 1.25))),
         rule(1, "positive", word_between(max(1, math.floor(lo * .9)))),
-        rule(2, "positive", word_between(0, math.ceil(hi * 1.1))),
-        rule(3, "negative", word_between(0, max(1, math.floor(lo * .5)))),
+        rule(2, "positive", word_between(1, math.ceil(hi * 1.1))),
+        rule(3, "negative", word_between(1, max(1, math.floor(lo * .5)))),
         rule(4, "negative", word_between(math.ceil(hi * 1.5))),
         refusal(5),
     ]
@@ -143,7 +143,7 @@ def rules_list(k: dict[str, Any]) -> list[dict[str, Any]]:
         rule(0, "positive", p),
         rule(1, "positive", f"^{ANY}*{p}{ANY}*{p}{ANY}*$"),
         rule(2, "positive", f"^{ANY}*{p}{ANY}*{p}{ANY}*{p}{ANY}*$"),
-        rule(3, "negative", "(^|\\n)[ \\t]*[-*+][ \\t]+" if k["sep"] not in {"-", "*", "+"} else "(^|\\n)[ \\t]*[0-9]+[.)][ \\t]+"),
+        rule(3, "negative", "(^|\\n)[ \\t]*[-*+][ \\t]+" if k["sep"] not in {"-", "*", "+"} else "(^|\\n)[ \\t]*[A-Za-z][.)][ \\t]+"),
         rule(4, "negative", "(^|\\n)[ \\t]*[0-9]+[.)][ \\t]+"),
         rule(5, "negative", "^[^\\n]{240,}$"),
     ]
@@ -184,12 +184,14 @@ def rules_prose_bullets(_: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def rules_emoji(_: dict[str, Any]) -> list[dict[str, Any]]:
+    symbols = "".join(EMOJIS)
     return [
         rule(0, "positive", EMOJI_ALT),
         rule(1, "positive", f"^{ANY}*{EMOJI_ALT}{ANY}*{EMOJI_ALT}{ANY}*$"),
         rule(2, "positive", f"[.!?][ \\t]*{EMOJI_ALT}"),
-        rule(3, "negative", "(:-?\\)|:-?\\(|;[-]?\\))"),
-        rule(4, "negative", "(:smile:|:emoji:|emoji here)"), refusal(5),
+        rule(3, "negative", f"(^|\\n)[^{symbols}\\n]*[.!?][ \\t]*($|\\n)"),
+        rule(4, "negative", "(^|\\n)[^\\n]*[.!?][ \\t]*[A-Za-z0-9]"),
+        rule(5, "negative", "(:-?\\)|:-?\\(|;[-]?\\)|:smile:|:emoji:|emoji here)"),
     ]
 
 
@@ -198,9 +200,10 @@ def rules_thesis(_: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         rule(0, "positive", ital),
         rule(1, "positive", f"^{ANY}*{ital}{ANY}*{ital}{ANY}*$"),
-        rule(2, "positive", "(^|\\n)[ \\t]*<h[1-6]>[^<]+</h[1-6]>[ \\t]*\\n[ \\t]*<i>"),
+        rule(2, "positive", "<i>[^<]+[.!?:]</i>"),
         rule(3, "negative", "(^|\\n)[ \\t]*\\*[^*]+\\*"),
-        rule(4, "negative", "(^|\\n)[ \\t]*<em>"), refusal(5),
+        rule(4, "negative", "(^|\\n)[ \\t]*<em>"),
+        rule(5, "negative", "(^|\\n)[ \\t]*_[^_]+_"),
     ]
 
 
@@ -216,12 +219,12 @@ def rules_quotes(_: dict[str, Any]) -> list[dict[str, Any]]:
 
 def rules_indent(_: dict[str, Any]) -> list[dict[str, Any]]:
     return [
-        rule(0, "positive", "^[^ \\t\\n][^\\n]*\\n [^\\n]*\\n  [^\\n]*$"),
-        rule(1, "positive", "^[^ \\t\\n][^\\n]*\\n [^\\n]*\\n  [^\\n]*\\n   [^\\n]*"),
-        rule(2, "positive", "^[^\\n]+(\\n[^\\n]+){3,}$"),
-        rule(3, "negative", "\\n  [^\\n]*\\n  [^\\n]*"),
-        rule(4, "negative", "\\n   [^\\n]*\\n  [^\\n]*"),
-        rule(5, "negative", "^[^\\n]{220,}$"),
+        rule(0, "positive", "\\n [^ \\t\\n][^\\n]*"),
+        rule(1, "positive", "\\n  [^ \\t\\n][^\\n]*"),
+        rule(2, "positive", "\\n   [^ \\t\\n][^\\n]*"),
+        rule(3, "negative", "\\n  [^ \\t\\n][^\\n]*\\n  [^ \\t\\n]"),
+        rule(4, "negative", "\\n   [^ \\t\\n][^\\n]*\\n  [^ \\t\\n]"),
+        rule(5, "negative", "\\n\\n|\\n\\t|\\n    [^ \\t\\n]"),
     ]
 
 
@@ -251,4 +254,27 @@ def build(family: str, kwargs: dict[str, Any], max_tokens: int) -> BuiltSpec:
     return BuiltSpec(
         hard_spec={"kind": "text", "max_tokens": int(max_tokens)},
         weak_rules=rules,
+    )
+
+
+MIXED_FAMILIES = ["format:list", "format:newline", "format:quotes", "format:line_indent"]
+
+
+def build_mixed(family: str, kwargs: dict[str, Any], max_tokens: int) -> BuiltSpec:
+    base = build(family, kwargs, max_tokens)
+    if family == "format:list":
+        marker = "([-*+]|[0-9]+[.)]|" + escape(str(kwargs["sep"])) + ")"
+        line = f"[ \\t]*{marker}[ \\t]+[^\\n]+"
+        pattern = f"^{line}(\\n{line}){{1,}}$"
+    elif family == "format:newline":
+        pattern = "^[^\\n]+(\\n[^\\n]+){3,}$"
+    elif family == "format:quotes":
+        pattern = f"^{ANY}*\"{ANY}*'{ANY}*$|^{ANY}*'{ANY}*\"{ANY}*$"
+    elif family == "format:line_indent":
+        pattern = "^[^ \\t\\n][^\\n]*(\\n[ ]{0,3}[^ \\t\\n][^\\n]*){2,}$"
+    else:
+        raise KeyError(family)
+    return BuiltSpec(
+        hard_spec={"kind": "ere", "pattern": pattern, "max_tokens": int(max_tokens)},
+        weak_rules=base.weak_rules,
     )

@@ -11,10 +11,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from .builders import SOFT_FAMILIES, build, empty_kwargs
+from .builders import MIXED_FAMILIES, SOFT_FAMILIES, build, build_mixed, empty_kwargs
 from .common import CACHE, DATA, SOURCE_DATA, file_hash, load_config, read_jsonl, stable_hash, write_json, write_jsonl
+from .hard_validation import hard_accepts_many
 
-TEST_MARKERS = [f"TEST-{i:02d}>" for i in range(25)]
+TEST_MARKERS = [f"TEST-{i:02d}>" for i in range(50)]
 CONSTRAINT_TEXT = {
     "format:sub-bullets": "Your response must include bullet points denoted by * and at least one sub-bullet point denoted by - for each bullet point.",
     "format:newline": "Write each word on a new line.",
@@ -77,7 +78,7 @@ def _word_ranges(used: dict[tuple[str, str], set[Any]]) -> list[tuple[int, int]]
             hi = lo + width
             if lo not in mins and hi not in maxs:
                 pairs.append((lo, hi))
-    return pairs[:25]
+    return pairs
 
 
 def _constraint(family: str, index: int, used: dict[tuple[str, str], set[Any]]) -> tuple[str, dict[str, Any]]:
@@ -187,6 +188,69 @@ def rebuild_source_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rebuilt
 
 
+def validate_rule_library(rows: list[dict[str, Any]]) -> None:
+    def escaped(text: str, index: int) -> bool:
+        backslashes = 0
+        index -= 1
+        while index >= 0 and text[index] == "\\":
+            backslashes += 1
+            index -= 1
+        return backslashes % 2 == 1
+
+    def empty_alternative(pattern: str) -> bool:
+        for index, character in enumerate(pattern):
+            if character != "|" or escaped(pattern, index):
+                continue
+            left_empty = index == 0 or (pattern[index - 1] == "(" and not escaped(pattern, index - 1))
+            right_empty = index + 1 == len(pattern) or (pattern[index + 1] == ")" and not escaped(pattern, index + 1))
+            if left_empty or right_empty:
+                return True
+        return False
+
+    checks = []
+    identities_by_check = []
+    for row in rows:
+        rules = row["weak_rules"]
+        if [rule["slot"] for rule in rules] != list(range(len(rules))):
+            raise RuntimeError(f"non-contiguous rule slots: {row['id']}")
+        identities = [(rule["polarity"], rule["pattern"]) for rule in rules]
+        if len(identities) != len(set(identities)):
+            raise RuntimeError(f"duplicate rules: {row['id']}")
+        for rule in rules:
+            pattern = rule["pattern"]
+            if not pattern or empty_alternative(pattern):
+                raise RuntimeError(f"empty pattern/alternative: {row['id']}:{rule['slot']}")
+            checks.append(({"kind": "ere", "pattern": pattern}, "", None))
+            identities_by_check.append(f"{row['id']}:{rule['slot']}")
+    for identity, accepts_empty in zip(
+        identities_by_check, hard_accepts_many(checks), strict=True
+    ):
+        if accepts_empty:
+            raise RuntimeError(f"rule accepts empty text: {identity}")
+
+
+def build_mixed_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output = []
+    for row in rows:
+        if row["family"] not in MIXED_FAMILIES:
+            continue
+        pair_id = row["id"]
+        for arm in ["text_weak", "coarse_hard_weak"]:
+            spec = (
+                build_mixed(row["family"], row["kwargs"][0], row["max_tokens"])
+                if arm == "coarse_hard_weak"
+                else build(row["family"], row["kwargs"][0], row["max_tokens"])
+            )
+            output.append({
+                **row, "id": f"mixed-{arm}-{pair_id}", "pair_id": pair_id,
+                "constraint_family": row["family"],
+                "family": f"{row['family']}@{arm}",
+                "mixed_arm": arm, "hard_spec": spec.hard_spec,
+                "weak_rules": spec.weak_rules,
+            })
+    return output
+
+
 def _remove_boundaries(pattern: str) -> str:
     replacements = [
         ("(^|[^A-Za-z0-9_])", ""), ("([^A-Za-z0-9_]|$)", ""),
@@ -279,6 +343,8 @@ def prepare_data() -> dict[str, Any]:
     ]
     test_generated = build_test_generated(calibration, dev, int(config["test_per_family"]))
     official = build_official()
+    validate_rule_library(calibration + dev + test_generated + official)
+    mixed = build_mixed_rows(calibration + dev + test_generated)
 
     if DATA.exists():
         shutil.rmtree(DATA)
@@ -286,15 +352,14 @@ def prepare_data() -> dict[str, Any]:
     for name, rows in [
         ("calibration", calibration), ("dev", dev), ("hard_sanity", hard),
         ("test_generated", test_generated), ("test_official", official),
+        ("mixed", mixed),
     ]:
         write_jsonl(DATA / f"{name}.jsonl", rows)
-    source_noise20 = read_jsonl(SOURCE_DATA / "noise_20.jsonl")
-    source_noise40 = read_jsonl(SOURCE_DATA / "noise_40.jsonl")
-    test_noise20, test_noise40 = make_overlay_pair(
-        test_generated + official, int(config["dataset_seed"])
+    noise20, noise40 = make_overlay_pair(
+        calibration + dev + test_generated + official, int(config["dataset_seed"])
     )
-    write_jsonl(DATA / "noise_20.jsonl", source_noise20 + test_noise20)
-    write_jsonl(DATA / "noise_40.jsonl", source_noise40 + test_noise40)
+    write_jsonl(DATA / "noise_20.jsonl", noise20)
+    write_jsonl(DATA / "noise_40.jsonl", noise40)
 
     instances_by_id = {
         row["id"]: row
@@ -302,8 +367,8 @@ def prepare_data() -> dict[str, Any]:
     }
     noise_effective = {}
     for level, overlays in [
-        (20, source_noise20 + test_noise20),
-        (40, source_noise40 + test_noise40),
+        (20, noise20),
+        (40, noise40),
     ]:
         changes = effective = 0
         for overlay in overlays:
@@ -323,11 +388,12 @@ def prepare_data() -> dict[str, Any]:
 
     manifest = {
         "dataset": "PWSeq-IFBench",
-        "experiment_revision": "2.0.0",
+        "experiment_revision": "3.0.0",
         "seed": config["dataset_seed"],
         "counts": {
             "calibration": len(calibration), "dev": len(dev), "hard_sanity": len(hard),
             "test_generated": len(test_generated), "test_official": len(official),
+            "mixed": len(mixed),
         },
         "families": SOFT_FAMILIES,
         "files": {
@@ -341,10 +407,28 @@ def prepare_data() -> dict[str, Any]:
         "builder_contract": "build(family, kwargs, max_tokens)",
         "official_evaluator_phase": "post_generation_only",
         "noise_protocol": (
-            "source calibration/dev overlays preserved byte-for-byte by record; "
-            "generated test overlays are effective, deterministic, and nested"
+            "all overlays regenerated deterministically from the active v3 rule library; "
+            "20 percent changes are nested in 40 percent changes"
         ),
         "noise_effective": noise_effective,
     }
+    write_json(DATA / "rules_provenance.json", {
+        "author": "OpenAI Codex (GPT-5)",
+        "author_type": "Codex-authored deterministic heuristic schemas",
+        "artifacts_authored": [
+            "test_generated prompts", "held-out kwargs and markers",
+            "weak rule schemas", "mixed hard-envelope tasks",
+            "test noise overlays",
+        ],
+        "experimental_models_used_for_authoring": False,
+        "experimental_models": ["Qwen3.5-4B", "Phi-4-mini-instruct"],
+        "experimental_model_role": "candidate generation only",
+        "verifier_blind": False,
+        "gold_labels_used_for_authoring": False,
+        "pilot_unlabeled_diagnostics_used": True,
+        "inputs": ["family", "kwargs", "max_tokens", "constraint prompts", "unlabeled calibration fire statistics"],
+        "excluded_inputs": ["soft official-verifier labels", "dev labels", "test labels"],
+    })
+    manifest["rules_provenance_sha256"] = file_hash(DATA / "rules_provenance.json")
     write_json(DATA / "manifest.json", manifest)
     return manifest

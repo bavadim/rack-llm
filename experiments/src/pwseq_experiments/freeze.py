@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 
-from .common import ACTIVE_RUN_FILE, ARTIFACT_ROOT, CACHE, DATA, EXPERIMENTS, REPO, CONFIG_PATH, file_hash, load_config, stable_hash, write_json
+from .common import ARTIFACT_ROOT, CACHE, DATA, EXPERIMENTS, REPO, CONFIG_PATH, file_hash, load_config, stable_hash, write_json
 
 
 def freeze() -> dict:
@@ -15,11 +15,12 @@ def freeze() -> dict:
     if dirty.strip():
         raise RuntimeError("cannot freeze a dirty Git worktree")
     files = [
-        CONFIG_PATH, EXPERIMENTS / "requirements.txt",
+        *sorted((EXPERIMENTS / "config").glob("*.json")),
+        EXPERIMENTS / "requirements.txt", EXPERIMENTS / "requirements-static.txt",
         EXPERIMENTS / "Makefile", EXPERIMENTS / "README.md",
     ]
     files.extend(sorted(DATA.glob("*.jsonl")))
-    files.append(DATA / "manifest.json")
+    files.extend(sorted(DATA.glob("*.json")))
     files.extend(sorted((EXPERIMENTS / "src").rglob("*.py")))
     files.extend(sorted((EXPERIMENTS / "racket").glob("*.rkt")))
     files.extend(sorted((EXPERIMENTS / "tests").glob("test_*.py")))
@@ -62,7 +63,19 @@ def freeze() -> dict:
     if missing:
         raise RuntimeError(f"cannot freeze with missing external inputs: {missing}")
     llama_root = Path(config["native"]["llama_cpp_dir"])
+    llama_revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=llama_root, text=True
+    ).strip()
+    ifbench_revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=CACHE / "ifbench", text=True
+    ).strip()
+    if llama_revision != config["native"]["llama_cpp_commit"]:
+        raise RuntimeError("configured llama.cpp revision does not match checkout")
+    if ifbench_revision != config["ifbench"]["commit"]:
+        raise RuntimeError("configured IFBench revision does not match checkout")
     manifest = {
+        "artifact_schema_version": 3,
+        "protocol_version": "paper-v3",
         "frozen_at_utc": datetime.now(timezone.utc).isoformat(),
         "git_revision": __import__("subprocess").check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
@@ -74,12 +87,8 @@ def freeze() -> dict:
         "external_files": {
             str(path): file_hash(path) for path in external_files if path.is_file()
         },
-        "llama_cpp_revision": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=llama_root, text=True
-        ).strip(),
-        "ifbench_revision": subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=CACHE / "ifbench", text=True
-        ).strip(),
+        "llama_cpp_revision": llama_revision,
+        "ifbench_revision": ifbench_revision,
     }
     run_id = stable_hash({key: value for key, value in manifest.items() if key != "frozen_at_utc"})[:16]
     manifest["run_id"] = run_id
@@ -87,6 +96,5 @@ def freeze() -> dict:
     if run_root.exists():
         raise RuntimeError(f"frozen run already exists: {run_id}")
     write_json(run_root / "frozen_manifest.json", manifest)
-    ACTIVE_RUN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ACTIVE_RUN_FILE.write_text(run_id + "\n", encoding="utf-8")
+    write_json(run_root / "RUN_STATE.json", {"run_id": run_id, "state": "FROZEN"})
     return manifest

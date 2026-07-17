@@ -1,7 +1,12 @@
 {
   "dataset_seed": 20260716,
   "test_per_family": 25,
+  "test_per_family_cap": 50,
+  "power_target_effect": 0.05,
+  "power_target": 0.8,
+  "power_alpha": 0.05,
   "calibration_temperatures": [0.7, 1.0],
+  "primary_temperature": 1.0,
   "calibration_seeds": [0, 1, 2, 3, 4, 5, 6, 7],
   "generation_seeds": [0, 1, 2, 3, 4],
   "runtime": {

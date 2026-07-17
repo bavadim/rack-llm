@@ -98,4 +98,4 @@ clean:
 	$(MAKE) -C native/regex clean
 
 distclean: clean
-	rm -rf experiments/.venv experiments/.cache experiments/artifacts
+	rm -rf experiments/.venv experiments/.venv-static experiments/.cache experiments/artifacts

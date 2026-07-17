@@ -1,4 +1,4 @@
-"""Explicit, independent FUSE reimplementation for discrete weak sources.
+"""FUSE-style independent reimplementation for discrete weak sources.
 
 This is not official FUSE code.  It follows the zero-label moment/triplet
 pipeline described in the paper and records that provenance in every model.
@@ -25,7 +25,7 @@ class FuseModel:
     accuracies: list[float]
     logistic_weights: list[float]
     logistic_intercept: float
-    provenance: str = "independent_reimplementation_of_FUSE_paper"
+    provenance: str = "fuse_style_zero_label_reimplementation"
     official_implementation: bool = False
     reason: str | None = None
 

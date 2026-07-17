@@ -43,14 +43,23 @@ def brier(y: np.ndarray, probability: np.ndarray) -> float:
     return float(np.mean((probability - y) ** 2))
 
 
-def ece(y: np.ndarray, probability: np.ndarray, bins: int = 15) -> float:
+def calibration_bins(y: np.ndarray, probability: np.ndarray, bins: int = 15) -> list[dict[str, float | int]]:
     order = np.argsort(probability, kind="stable")
-    total = len(y)
-    value = 0.0
-    for indices in np.array_split(order, min(bins, total)):
-        if len(indices):
-            value += len(indices) / total * abs(float(probability[indices].mean() - y[indices].mean()))
-    return value
+    return [{
+        "count": int(len(indices)),
+        "mean_probability": float(probability[indices].mean()),
+        "empirical_rate": float(y[indices].mean()),
+    } for indices in np.array_split(order, min(bins, len(y))) if len(indices)]
+
+
+def ece(y: np.ndarray, probability: np.ndarray, bins: int = 15) -> float:
+    groups = calibration_bins(y, probability, bins)
+    total = sum(int(group["count"]) for group in groups)
+    return sum(
+        int(group["count"]) / total
+        * abs(float(group["mean_probability"]) - float(group["empirical_rate"]))
+        for group in groups
+    ) if total else float("nan")
 
 
 def classification_metrics(
@@ -90,7 +99,10 @@ def effective_rank(matrix: np.ndarray) -> float:
 
 
 def selective_curve(rows: list[dict[str, Any]], confidence_key: str = "confidence") -> list[dict[str, float]]:
-    found = [row for row in rows if row["outcome"] != "NOT_FOUND"]
+    found = [
+        row for row in rows
+        if float(row.get("return_weight", row["outcome"] != "NOT_FOUND")) > 0
+    ]
     found.sort(key=lambda row: float(row[confidence_key]), reverse=True)
     curve = [{"coverage": 0.0, "risk": 0.0, "solve_rate": 0.0}]
     wrong = ok = 0
@@ -103,10 +115,9 @@ def selective_curve(rows: list[dict[str, Any]], confidence_key: str = "confidenc
             next_index < len(found)
             and float(found[next_index][confidence_key]) == confidence
         ):
-            if found[next_index]["outcome"] == "FOUND_OK":
-                ok += 1
-            else:
-                wrong += 1
+            row = found[next_index]
+            ok += float(row.get("ok_weight", row["outcome"] == "FOUND_OK"))
+            wrong += float(row.get("wrong_weight", row["outcome"] == "FOUND_WRONG"))
             next_index += 1
         curve.append({
             "coverage": (ok + wrong) / total,
@@ -117,12 +128,64 @@ def selective_curve(rows: list[dict[str, Any]], confidence_key: str = "confidenc
     return curve
 
 
-def aurc(curve: list[dict[str, float]]) -> float:
-    return float(np.trapezoid(
-        [point["risk"] for point in curve],
-        [point["coverage"] for point in curve],
-    ))
+def max_coverage(curve: list[dict[str, float]]) -> float:
+    return max((point["coverage"] for point in curve), default=0.0)
 
 
-def safe_solve(curve: list[dict[str, float]], target: float) -> float:
+def _curve_at(curve: list[dict[str, float]], coverage: float) -> float | None:
+    if coverage < 0 or coverage > max_coverage(curve):
+        return None
+    for point in curve:
+        if point["coverage"] >= coverage:
+            return point["risk"]
+    return None
+
+
+def normalized_partial_aurc(curve: list[dict[str, float]], limit: float) -> float | None:
+    if limit <= 0 or max_coverage(curve) < limit:
+        return None
+    points = [(point["coverage"], point["risk"]) for point in curve if point["coverage"] < limit]
+    risk = _curve_at(curve, limit)
+    if risk is None:
+        return None
+    points.append((limit, risk))
+    return float(np.trapezoid([value for _, value in points], [x for x, _ in points]) / limit)
+
+
+def common_coverage_metrics(
+    curves: dict[str, list[dict[str, float]]], targets: tuple[float, ...] = (.25, .50, .75),
+) -> dict[str, dict[str, float | None]]:
+    limit = min((max_coverage(curve) for curve in curves.values()), default=0.0)
+    return {method: {
+        "max_coverage": max_coverage(curve),
+        "common_coverage": limit,
+        "normalized_partial_aurc": normalized_partial_aurc(curve, limit),
+        **{f"risk_at_{int(target * 100):02d}": _curve_at(curve, target) for target in targets},
+    } for method, curve in curves.items()}
+
+
+def operating_metrics(rows: list[dict[str, Any]]) -> dict[str, float | int | None]:
+    ok = sum(row["outcome"] == "FOUND_OK" for row in rows)
+    wrong = sum(row["outcome"] == "FOUND_WRONG" for row in rows)
+    returned = ok + wrong
+    total = len(rows)
+    return {
+        "found_ok": ok, "found_wrong": wrong, "not_found": total - returned,
+        "solve_rate": ok / total if total else 0.0,
+        "coverage": returned / total if total else 0.0,
+        "risk": wrong / returned if returned else None,
+    }
+
+
+def oracle_safe_solve(curve: list[dict[str, float]], target: float) -> float:
+    """Test-label optimized oracle; appendix diagnostics only."""
     return max((point["solve_rate"] for point in curve if point["risk"] <= target), default=0.0)
+
+
+def corrected_bootstrap_p(values: Iterable[float]) -> float:
+    array = np.asarray(list(values), dtype=float)
+    repetitions = len(array)
+    if not repetitions:
+        return float("nan")
+    tail = min(int(np.sum(array <= 0)), int(np.sum(array >= 0)))
+    return float(min(1.0, 2.0 * (tail + 1) / (repetitions + 1)))

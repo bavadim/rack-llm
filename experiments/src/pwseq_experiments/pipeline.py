@@ -12,12 +12,12 @@ from typing import Any
 import numpy as np
 import regex
 
-from .common import ARTIFACTS, DATA, EXPERIMENTS, REPO, assert_frozen, atomic_jsonl_command, file_hash, frozen_manifest, issue, jsonl_count, load_config, python_env, read_jsonl, stable_hash, write_json, write_jsonl
+from .common import ARTIFACTS, DATA, EXPERIMENTS, REPO, assert_frozen, atomic_jsonl_command, file_hash, frozen_manifest, issue, jsonl_count, load_config, python_env, read_jsonl, stable_hash, write_json, write_jsonl, write_jsonl_once
 from .evaluator import official_check_many
 from .fuse import FuseModel, fit_fuse, predict_fuse
 from .metrics import (
-    aurc, classification_metrics, effective_rank, equal_probability,
-    majority_probability, safe_solve, selective_curve,
+    classification_metrics, effective_rank, equal_probability, max_coverage,
+    majority_probability, operating_metrics, selective_curve,
 )
 
 RACKET_RUNNER = EXPERIMENTS / "racket" / "rack_runner.rkt"
@@ -25,14 +25,14 @@ RACKET_RUNNER = EXPERIMENTS / "racket" / "rack_runner.rkt"
 
 def _model_config(model_name: str) -> dict[str, Any]:
     config = load_config()
-    return config["main_model"] if model_name == "main" else config["replication_model"]
+    return config["main_model"] if model_name.startswith("main") else config["replication_model"]
 
 
 def _budgets(model_name: str) -> list[int]:
     config = load_config()
-    return list(
-        config["budgets"] if model_name == "main" else config["replication_budgets"]
-    )
+    if model_name == "main":
+        return list(config["budgets"])
+    return list(config["replication_budgets"])
 
 
 def render_instances(rows: list[dict[str, Any]], model_name: str) -> list[dict[str, Any]]:
@@ -202,21 +202,31 @@ def generate_pool(model_name: str, splits: list[str], *, main_stream: bool = Fal
     rows = []
     for split in splits:
         rows.extend(read_jsonl(DATA / f"{split}.jsonl"))
+    if main_stream:
+        rows = [row for row in rows if row["split"] != "calibration"]
     rendered = render_instances(rows, model_name)
     input_path = ARTIFACTS / "inputs" / f"{model_name}_{'main' if main_stream else 'candidate'}_instances.jsonl"
     write_jsonl(input_path, rendered)
     pieces: list[Path] = []
     if main_stream:
-        protocols = [(1.0, config["generation_seeds"], max(_budgets(model_name)))]
+        protocols = [(1.0, config["generation_seeds"], max(_budgets(model_name)), None)]
     else:
-        protocols = [(value, config["calibration_seeds"], 1) for value in config["calibration_temperatures"]]
-    for index, (temperature, seeds, samples) in enumerate(protocols):
+        protocols = [
+            (value, config["calibration_seeds"], 1, {"calibration"} if float(value) != 1.0 else None)
+            for value in config["calibration_temperatures"]
+        ]
+    for index, (temperature, seeds, samples, allowed_splits) in enumerate(protocols):
+        protocol_rows = [row for row in rendered if allowed_splits is None or row["split"] in allowed_splits]
+        protocol_input = input_path
+        if allowed_splits is not None:
+            protocol_input = ARTIFACTS / "inputs" / f"{model_name}_candidate_{index}_instances.jsonl"
+            write_jsonl(protocol_input, protocol_rows)
         output = ARTIFACTS / "raw" / f"{model_name}_{'main' if main_stream else 'candidate'}_{index}.jsonl"
-        expected = len(rendered) * len(seeds) * samples
+        expected = len(protocol_rows) * len(seeds) * samples
         _run_racket_sharded(
             f"generate.{model_name}.{index}",
             [
-                "--mode", "candidates", "--input", str(input_path), "--output", str(output),
+                "--mode", "candidates", "--input", str(protocol_input), "--output", str(output),
                 "--model", model["gguf_path"], "--temperature", str(temperature),
                 "--seeds", ",".join(map(str, seeds)), "--samples-per-seed", str(samples),
                 "--max-attempts", str(config["hard_max_attempts"]),
@@ -347,6 +357,7 @@ def technical_filter(rows: list[dict[str, Any]], observations_path: Path) -> tup
     observations = [
         row for row in read_jsonl(observations_path)
         if row.get("record_type") == "observation" and row["split"] == "calibration"
+        and float(row.get("temperature", 1.0)) == 1.0
     ]
     by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in observations:
@@ -409,11 +420,34 @@ def filtered_instances(rows: list[dict[str, Any]], selected: dict[str, list[int]
     return output
 
 
+def enforce_technical_gate(
+    rows: list[dict[str, Any]], observations_path: Path, selected: dict[str, list[int]],
+) -> None:
+    example = {row["family"]: row for row in rows if row["split"] == "calibration"}
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in read_jsonl(observations_path):
+        if (row.get("record_type") == "observation" and row["split"] == "calibration"
+                and float(row.get("temperature", 1.0)) == 1.0):
+            grouped[row["family"]].append(row)
+    failures = []
+    for family, slots in selected.items():
+        polarities = [example[family]["weak_rules"][slot]["polarity"] for slot in slots]
+        matrix = np.asarray([[row["labels"][slot] for slot in slots] for row in grouped[family]])
+        conflict = bool(len(matrix) and np.logical_and(
+            (matrix > 0).any(axis=1), (matrix < 0).any(axis=1)
+        ).any())
+        if len(slots) < 5 or polarities.count("positive") < 2 or polarities.count("negative") < 1 or not conflict:
+            failures.append({"family": family, "slots": slots, "polarities": polarities, "conflict": conflict})
+    if failures:
+        raise RuntimeError(f"unlabeled technical rule gate failed: {failures}")
+
+
 def fit_score(model_name: str, candidates: Path, rows: list[dict[str, Any]], level: float) -> tuple[Path, Path]:
     model = _model_config(model_name)
     noise = int(level * 100)
     observed = observe(model_name, candidates, rows, level)
     selected, filter_report = technical_filter(rows, observed)
+    enforce_technical_gate(rows, observed, selected)
     write_json(ARTIFACTS / "reports" / f"{model_name}_noise_{noise:02d}_filter.json", {
         "selected_slots": selected, "rules": filter_report,
     })
@@ -482,6 +516,7 @@ def fit_score(model_name: str, candidates: Path, rows: list[dict[str, Any]], lev
         train = [
             row["labels"] for row in score_rows
             if row["family"] == family and row["split"] == "calibration"
+            and float(row.get("temperature", 1.0)) == 1.0
         ]
         fuse_model = fit_fuse(train)
         fuse_models[family] = fuse_model.to_dict()
@@ -497,7 +532,7 @@ def fit_score(model_name: str, candidates: Path, rows: list[dict[str, Any]], lev
                 row["fuse_status"] = "BLOCKED"
                 row["fuse_reason"] = fuse_model.reason
     write_json(models / "fuse_models.json", {
-        "provenance": "independent_reimplementation_of_FUSE_paper",
+        "provenance": "fuse_style_zero_label_reimplementation",
         "official_implementation": False,
         "families": fuse_models,
     })
@@ -641,7 +676,7 @@ def aggregation_report(model_name: str, level: float, scores_path: Path, labels_
     by_split_family: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     calibration_by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in all_scores:
-        if row["split"] == "calibration":
+        if row["split"] == "calibration" and float(row.get("temperature", 1.0)) == 1.0:
             calibration_by_family[row["family"]].append(row)
         elif row["split"] in {"test_generated", "test_official"}:
             by_split_family[(row["split"], row["family"])].append(row)
@@ -671,7 +706,7 @@ def aggregation_report(model_name: str, level: float, scores_path: Path, labels_
             }
             fuse_items = [row.get("fuse_posterior") for row in items]
             if all(value is not None for value in fuse_items):
-                methods["FUSE_reimplementation"] = [float(value) for value in fuse_items]
+                methods["fuse_style_reimplementation"] = [float(value) for value in fuse_items]
             oracle = oracle_by_family.get(family)
             if oracle is not None and not isinstance(oracle, Exception):
                 methods["supervised_logistic_oracle"] = oracle.predict_proba(
@@ -698,7 +733,7 @@ def aggregation_report(model_name: str, level: float, scores_path: Path, labels_
         if blocked_families:
             output.append({
                 "model": model_name, "noise": level, "split": split,
-                "family": "__ALL__", "aggregator": "FUSE_reimplementation",
+                "family": "__ALL__", "aggregator": "fuse_style_reimplementation",
                 "status": "PARTIALLY_BLOCKED", "blocked_families": blocked_families,
                 "official_implementation": False,
             })
@@ -763,7 +798,7 @@ def score_pool(model_name: str, level: float, instances_path: Path, candidates: 
     return output
 
 
-def generate_pwsg(model_name: str, level: float, instances_path: Path) -> Path:
+def generate_pwsg(model_name: str, level: float, instances_path: Path, proposal_pool: Path) -> Path:
     model = _model_config(model_name)
     config = load_config()
     noise = int(level * 100)
@@ -771,14 +806,28 @@ def generate_pwsg(model_name: str, level: float, instances_path: Path) -> Path:
         row for row in read_jsonl(instances_path)
         if row["split"] in {"dev", "test_generated", "test_official"}
     ]
-    rendered = render_instances(rows, model_name)
+    proposals: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    for proposal in read_jsonl(proposal_pool):
+        proposals[(proposal["prompt_id"], int(proposal["seed"]))].append(proposal)
+    for values in proposals.values():
+        values.sort(key=lambda value: int(value["sample_index"]))
+    budgets = _budgets(model_name)
+    rendered = []
+    for row in render_instances(rows, model_name):
+        caps = {}
+        for seed in config["generation_seeds"]:
+            stream = proposals.get((row["id"], int(seed)), [])
+            for budget in budgets:
+                caps[f"{seed}:{budget}"] = max(1, sum(
+                    int(value.get("model_draws", 0)) for value in stream[:budget]
+                ))
+        rendered.append({**row, "paired_draw_caps": caps})
     rendered_path = ARTIFACTS / "inputs" / f"{model_name}_noise_{noise:02d}_pwsg.jsonl"
     write_jsonl(rendered_path, rendered)
     models = ARTIFACTS / "weak_models" / model_name / f"noise_{noise:02d}"
     validate_model_manifest(
         models, model_name=model_name, level=level, instances_path=instances_path
     )
-    budgets = _budgets(model_name)
     maximum = max(budgets)
     piece = ARTIFACTS / "raw" / f"{model_name}_noise_{noise:02d}_pwsg_checkpoints.jsonl"
     _run_racket_sharded(
@@ -788,7 +837,7 @@ def generate_pwsg(model_name: str, level: float, instances_path: Path) -> Path:
             "--models-dir", str(models), "--model", model["gguf_path"],
             "--temperature", "1.0",
             "--seeds", ",".join(map(str, config["generation_seeds"])),
-            "--max-attempts", str(maximum),
+            "--max-attempts", str(config["hard_max_attempts"]),
             "--attempt-checkpoints", ",".join(map(str, budgets)),
             "--deadline-ms", str(config["hard_deadline_ms"]),
         ], piece, records_per_input=len(config["generation_seeds"]) * len(budgets),
@@ -872,6 +921,8 @@ def generation_report(
     proposal_labels: Path,
     pwsg_path: Path,
     pwsg_labels: Path,
+    instance_rows: list[dict[str, Any]] | None = None,
+    evaluation_splits: tuple[str, ...] = ("test_generated", "test_official"),
 ) -> Path:
     config = load_config()
     score_by_id = {
@@ -889,7 +940,7 @@ def generation_report(
     for values in proposals.values():
         values.sort(key=lambda row: int(row["sample_index"]))
 
-    instance_by_id = {row["id"]: row for row in all_instances()}
+    instance_by_id = {row["id"]: row for row in (instance_rows or all_instances())}
     outcomes = []
     expected_grid = [
         (row["id"], int(seed))
@@ -928,7 +979,7 @@ def generation_report(
                 "posterior_best_of_b": max(candidates, key=lambda row: (float(row["posterior"]), float(row.get("lm_logprob") or -math.inf))) if candidates else None,
             }
             fuse_candidates = [row for row in candidates if row.get("fuse_posterior") is not None]
-            methods["fuse_best_of_b"] = (
+            methods["fuse_style_best_of_b"] = (
                 max(
                     fuse_candidates,
                     key=lambda row: (
@@ -965,7 +1016,7 @@ def generation_report(
                     continue
                 if method.startswith("posterior"):
                     confidence = float(selected["posterior"])
-                elif method.startswith("fuse"):
+                elif method.startswith("fuse_style"):
                     confidence = float(selected["fuse_posterior"])
                 elif method.startswith("equal"):
                     confidence = equal_probability(selected["labels"])
@@ -1017,37 +1068,47 @@ def generation_report(
 
     summaries = []
     methods = sorted({row["method"] for row in outcomes})
-    posterior_dev = [
-        row for row in outcomes
-        if row["budget"] == 8 and row["method"] == "posterior_best_of_b"
-        and row["split"] == "dev"
-    ]
-    posterior_tau = (
-        _operational_threshold(posterior_dev, config["operational_risk"])
-        if posterior_dev else math.inf
-    )
-    fuse_dev = [
-        row for row in outcomes
-        if row["budget"] == 8 and row["method"] == "fuse_best_of_b"
-        and row["split"] == "dev"
-    ]
-    fuse_tau = (
-        _operational_threshold(fuse_dev, config["operational_risk"])
-        if fuse_dev else math.inf
-    )
-    operational_thresholds = {
-        method: (
-            posterior_tau if method in {"posterior_best_of_b", "exact_pwsg"}
-            else fuse_tau if method == "fuse_best_of_b"
-            else -math.inf
-        )
-        for method in methods
-    }
-    strict_methods = {"posterior_best_of_b", "fuse_best_of_b", "exact_pwsg"}
+    thresholds = []
+    operational_thresholds: dict[tuple[str, int], float] = {}
     for budget in _budgets(model_name):
         for method in methods:
-            threshold = operational_thresholds[method]
-            for split in ["test_generated", "test_official"]:
+            dev = [
+                row for row in outcomes
+                if row["budget"] == budget and row["method"] == method
+                and row["split"] == "dev"
+            ]
+            tau = (
+                _operational_threshold(dev, config["operational_risk"])
+                if dev and method != "gold_oracle" else -math.inf
+            )
+            operational_thresholds[(method, budget)] = tau
+            selected = [
+                {**row, "outcome": "NOT_FOUND"}
+                if row["outcome"] != "NOT_FOUND" and float(row["confidence"]) < tau
+                else row for row in dev
+            ]
+            thresholds.append({
+                "run_id": ARTIFACTS.name, "model": model_name, "noise": level,
+                "method": method, "budget": budget, "source_split": "dev",
+                "target_risk": config["operational_risk"],
+                "global_across_families": True,
+                "threshold": tau if math.isfinite(tau) else None,
+                "accept_if": (
+                    "confidence_gte" if math.isfinite(tau)
+                    else "never" if tau > 0 else "always"
+                ),
+                "dev_rows": len(dev), "dev_metrics": operating_metrics(selected),
+                "dev_sha256": stable_hash(dev), "config_sha256": stable_hash(config),
+            })
+    write_jsonl_once(
+        ARTIFACTS / "thresholds" / f"{model_name}_noise_{int(level*100):02d}.jsonl",
+        thresholds,
+    )
+    strict_methods = {"posterior_best_of_b", "fuse_style_best_of_b", "exact_pwsg"}
+    for budget in _budgets(model_name):
+        for method in methods:
+            threshold = operational_thresholds[(method, budget)]
+            for split in evaluation_splits:
                 rows = [
                     dict(row) for row in outcomes
                     if row["budget"] == budget and row["method"] == method and row["split"] == split
@@ -1064,19 +1125,14 @@ def generation_report(
                             policy_rows.append(row)
                     def summarize(items: list[dict[str, Any]]) -> dict[str, Any]:
                         curve = selective_curve(items)
-                        found_ok = sum(row["outcome"] == "FOUND_OK" for row in items)
-                        found_wrong = sum(row["outcome"] == "FOUND_WRONG" for row in items)
-                        not_found = sum(row["outcome"] == "NOT_FOUND" for row in items)
+                        point = operating_metrics(items)
+                        found_ok = int(point["found_ok"])
                         return {
-                            "aurc": aurc(curve),
-                            "safe_solve_01": safe_solve(curve, .01),
-                            "safe_solve_05": safe_solve(curve, .05),
-                            "safe_solve_10": safe_solve(curve, .10),
-                            "found_ok": found_ok, "found_wrong": found_wrong,
-                            "not_found": not_found, "prompts_x_seeds": len(items),
-                            "found_ok_rate": found_ok / len(items) if items else 0.0,
-                            "found_wrong_rate": found_wrong / len(items) if items else 0.0,
-                            "not_found_rate": not_found / len(items) if items else 0.0,
+                            **point, "max_coverage": max_coverage(curve),
+                            "prompts_x_seeds": len(items),
+                            "found_ok_rate": point["solve_rate"],
+                            "found_wrong_rate": int(point["found_wrong"]) / len(items) if items else 0.0,
+                            "not_found_rate": int(point["not_found"]) / len(items) if items else 0.0,
                             "mean_model_tokens": (
                                 float(np.mean([row["model_draws"] for row in items]))
                                 if items else 0.0
@@ -1106,9 +1162,9 @@ def generation_report(
                             **base, "aggregation": "family", "family": family, **value,
                         })
                     macro_metrics = [
-                        "aurc", "safe_solve_01", "safe_solve_05", "safe_solve_10",
+                        "solve_rate", "coverage",
                         "found_ok_rate", "found_wrong_rate", "not_found_rate",
-                        "mean_model_tokens", "mean_content_tokens",
+                        "max_coverage", "mean_model_tokens", "mean_content_tokens",
                     ]
                     summaries.append({
                         **base, "aggregation": "macro", "family": "__MACRO__",
@@ -1116,6 +1172,14 @@ def generation_report(
                             key: float(np.mean([value[key] for value in family_summaries]))
                             for key in macro_metrics
                         },
+                        "risk": (
+                            float(np.mean([
+                                value["risk"] for value in family_summaries
+                                if value["risk"] is not None
+                            ]))
+                            if any(value["risk"] is not None for value in family_summaries)
+                            else None
+                        ),
                         "found_ok": micro["found_ok"], "found_wrong": micro["found_wrong"],
                         "not_found": micro["not_found"],
                         "prompts_x_seeds": micro["prompts_x_seeds"],

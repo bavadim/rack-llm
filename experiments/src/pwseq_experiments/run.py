@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .common import ARTIFACTS, assert_frozen, issue, load_config, write_json
+from .common import ARTIFACTS, DATA, assert_frozen, issue, load_config, read_jsonl, run_state, set_run_state, write_json
 from .hard import analyze_synthetic, run_hard, run_synthetic
 from .preflight import preflight
 from .pipeline import (
@@ -78,7 +78,7 @@ def run_generation(model_name: str = "main", level: float = 0.0) -> None:
     instances, _scores = run_aggregation(model_name, level)
     proposal_pool, _proposal_instances, proposal_labels = _proposal_context(model_name)
     proposal_scores = score_pool(model_name, level, instances, proposal_pool)
-    pwsg = generate_pwsg(model_name, level, instances)
+    pwsg = generate_pwsg(model_name, level, instances, proposal_pool)
     pwsg_labels = ARTIFACTS / "labels" / f"{model_name}_noise_{int(level*100):02d}_pwsg.jsonl"
     evaluate_generations(instances, pwsg, pwsg_labels)
     generation_report(
@@ -87,10 +87,66 @@ def run_generation(model_name: str = "main", level: float = 0.0) -> None:
     )
 
 
+def run_mixed() -> None:
+    rows = read_jsonl(DATA / "mixed.jsonl")
+    candidate_pool = generate_pool("main_mixed", ["mixed"], main_stream=False)
+    candidate_instances = ARTIFACTS / "inputs" / "main_mixed_candidate_instances.jsonl"
+    candidate_labels = ARTIFACTS / "labels" / "main_mixed_candidate_labels.jsonl"
+    evaluate_candidates(candidate_instances, candidate_pool, candidate_labels)
+    instances, _scores = fit_score("main_mixed", candidate_pool, rows, 0.0)
+    proposal_pool = generate_pool("main_mixed", ["mixed"], main_stream=True)
+    proposal_instances = ARTIFACTS / "inputs" / "main_mixed_main_instances.jsonl"
+    proposal_labels = ARTIFACTS / "labels" / "main_mixed_main_labels.jsonl"
+    evaluate_candidates(proposal_instances, proposal_pool, proposal_labels)
+    proposal_scores = score_pool("main_mixed", 0.0, instances, proposal_pool)
+    pwsg = generate_pwsg("main_mixed", 0.0, instances, proposal_pool)
+    pwsg_labels = ARTIFACTS / "labels" / "main_mixed_noise_00_pwsg.jsonl"
+    evaluate_generations(instances, pwsg, pwsg_labels)
+    generation_report(
+        "main_mixed", 0.0, proposal_pool, proposal_scores,
+        proposal_labels, pwsg, pwsg_labels, instance_rows=rows,
+    )
+
+
+def run_design() -> None:
+    """Generate and label calibration/dev only; never materialize a test candidate."""
+    rows = [
+        row for split in ["calibration", "dev"]
+        for row in read_jsonl(DATA / f"{split}.jsonl")
+    ]
+    candidate_pool = generate_pool(
+        "main_design", ["calibration", "dev"], main_stream=False
+    )
+    candidate_instances = ARTIFACTS / "inputs" / "main_design_candidate_instances.jsonl"
+    candidate_labels = ARTIFACTS / "labels" / "main_design_candidate_labels.jsonl"
+    evaluate_candidates(candidate_instances, candidate_pool, candidate_labels)
+    instances, _scores = fit_score("main_design", candidate_pool, rows, 0.0)
+    proposal_pool = generate_pool("main_design", ["dev"], main_stream=True)
+    proposal_instances = ARTIFACTS / "inputs" / "main_design_main_instances.jsonl"
+    proposal_labels = ARTIFACTS / "labels" / "main_design_main_labels.jsonl"
+    evaluate_candidates(proposal_instances, proposal_pool, proposal_labels)
+    proposal_scores = score_pool("main_design", 0.0, instances, proposal_pool)
+    pwsg = generate_pwsg("main_design", 0.0, instances, proposal_pool)
+    pwsg_labels = ARTIFACTS / "labels" / "main_design_noise_00_pwsg.jsonl"
+    evaluate_generations(instances, pwsg, pwsg_labels)
+    generation_report(
+        "main_design", 0.0, proposal_pool, proposal_scores,
+        proposal_labels, pwsg, pwsg_labels, instance_rows=rows,
+        evaluation_splits=("dev",),
+    )
+
+
 def run_stage(stage: str, _check_preflight: bool = True) -> None:
     assert_frozen()
     if _check_preflight and not preflight()["full_ok"]:
         raise RuntimeError("full experiment preflight failed")
+    if stage == "all":
+        if run_state() != "FROZEN":
+            raise RuntimeError(f"run-all requires FROZEN state, got {run_state()}")
+        design = load_config().get("confirmatory_design", {})
+        if design.get("status") != "finalized":
+            raise RuntimeError("confirmatory run requires a finalized dev-only design decision")
+        set_run_state("RUNNING")
     config = load_config()
     if stage == "hard":
         synthetic = run_synthetic()
@@ -116,6 +172,12 @@ def run_stage(stage: str, _check_preflight: bool = True) -> None:
     elif stage == "replication":
         run_generation("replication", 0.0)
         run_generation("replication", max(config["noise_levels"]))
+    elif stage == "mixed":
+        run_mixed()
+    elif stage == "design":
+        if run_state() != "FROZEN":
+            raise RuntimeError(f"design requires FROZEN state, got {run_state()}")
+        run_design()
     elif stage == "all":
         failures = []
         def execute(name, thunk):
@@ -130,7 +192,7 @@ def run_stage(stage: str, _check_preflight: bool = True) -> None:
                 raise RuntimeError("corrected synthetic exactness gate failed")
             run_hard(cars_core=True, engineering_baselines=False)
         execute("hard-core", hard_core)
-        for name in ["audit", "aggregation", "generation", "noise", "replication"]:
+        for name in ["audit", "aggregation", "generation", "noise", "replication", "mixed"]:
             execute(name, lambda name=name: run_stage(name, False))
         execute("hard-engineering", lambda: run_hard(cars_core=False, engineering_baselines=True))
         write_json(ARTIFACTS / "stage_status.json", {
@@ -138,9 +200,12 @@ def run_stage(stage: str, _check_preflight: bool = True) -> None:
             "completed": [name for name in [
                 "hard-core", "audit", "aggregation", "generation", "noise",
                 "replication", "hard-engineering",
+                "mixed",
             ] if name not in failures],
         })
         if failures:
+            set_run_state("FAILED", failed=failures)
             raise RuntimeError(f"experiment stages failed: {', '.join(failures)}")
+        set_run_state("RUN_COMPLETE")
     else:
         raise ValueError(stage)
