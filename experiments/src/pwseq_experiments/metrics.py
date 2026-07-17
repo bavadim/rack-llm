@@ -141,6 +141,24 @@ def _curve_at(curve: list[dict[str, float]], coverage: float) -> float | None:
     return None
 
 
+def risk_at_coverage(curve: list[dict[str, float]], coverage: float) -> float | None:
+    """Risk on the right-continuous selective curve at a requested coverage."""
+    return _curve_at(curve, coverage)
+
+
+def risks_at_coverages(
+    curve: list[dict[str, float]], coverages: np.ndarray,
+) -> np.ndarray:
+    """Vectorized right-continuous curve lookup; unsupported points are NaN."""
+    x = np.asarray([point["coverage"] for point in curve], dtype=float)
+    risk = np.asarray([point["risk"] for point in curve], dtype=float)
+    indices = np.searchsorted(x, coverages, side="left")
+    valid = indices < len(x)
+    output = np.full(coverages.shape, np.nan, dtype=float)
+    output[valid] = risk[indices[valid]]
+    return output
+
+
 def normalized_partial_aurc(curve: list[dict[str, float]], limit: float) -> float | None:
     if limit <= 0 or max_coverage(curve) < limit:
         return None

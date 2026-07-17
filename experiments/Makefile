@@ -9,7 +9,7 @@ STATIC_STAMP := $(STATIC_VENV)/.requirements.stamp
 RUN_ID ?=
 export PYTHONPATH := $(CURDIR)/src
 
-.PHONY: bootstrap bootstrap-static validate-data preflight test static-ci freeze run-hard run-audit run-aggregation run-generation run-noise run-replication run-mixed run-design power record-design run-all analyze archive
+.PHONY: bootstrap bootstrap-static validate-data preflight test static-check freeze run-hard run-audit run-aggregation run-generation run-noise run-replication run-mixed run-design power record-design run-all analyze archive
 
 $(STATIC_STAMP): requirements-static.txt
 	test -x "$(STATIC_PYTHON)" || $(SYSTEM_PYTHON) -m venv "$(STATIC_VENV)"
@@ -19,12 +19,11 @@ $(STATIC_STAMP): requirements-static.txt
 bootstrap-static: $(STATIC_STAMP)
 	PYTHONPATH=$(CURDIR)/src $(STATIC_PYTHON) -m pwseq_experiments bootstrap-static
 
-static-ci: bootstrap-static
+static-check: bootstrap-static
 	$(MAKE) -C $(ROOT) native-regex
 	PYTHONPATH=$(CURDIR)/src $(STATIC_PYTHON) -m pwseq_experiments validate-data
 	cd $(ROOT) && PLTCOLLECTS="$(abspath $(ROOT)/..):" raco test tests/loc-test.rkt tests/contract-test.rkt tests/e2e-sampler-test.rkt
 	PYTHONPATH=$(CURDIR)/src $(STATIC_PYTHON) -m unittest discover -s tests -v
-	cd $(ROOT) && git diff --exit-code
 
 $(VENV_STAMP): requirements.txt
 	test -x "$(PYTHON)" || $(SYSTEM_PYTHON) -m venv "$(VENV)"

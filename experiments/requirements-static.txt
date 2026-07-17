@@ -1,6 +1,7 @@
 numpy==2.5.1
 scipy==1.18.0
 scikit-learn==1.7.2
+matplotlib==3.10.7
 regex==2026.6.28
 nltk==3.9.4
 emoji==2.15.0

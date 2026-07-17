@@ -9,7 +9,7 @@ from .preflight import preflight
 from .pipeline import (
     aggregation_report, all_instances, apply_noise, audit_report,
     evaluate_candidates, evaluate_generations, fit_score, generate_pool,
-    generate_pwsg, generation_report, observe, score_pool,
+    fit_temperature_ablation, generate_pwsg, generation_report, observe, score_pool,
 )
 
 _CANDIDATE_CONTEXT_CACHE: dict[str, tuple[Path, Path, Path]] = {}
@@ -69,6 +69,10 @@ def run_aggregation(model_name: str = "main", level: float = 0.0) -> tuple[Path,
     rows = apply_noise(all_instances(), level)
     instances, scores = fit_score(model_name, pool, rows, level)
     aggregation_report(model_name, level, scores, labels)
+    if model_name == "main" and float(level) == 0.0:
+        fit_temperature_ablation(
+            model_name, pool, rows, level, instances, scores, labels
+        )
     result = (instances, scores)
     _AGGREGATION_CONTEXT_CACHE[key] = result
     return result

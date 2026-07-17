@@ -98,6 +98,7 @@ def _hf_baseline(method: str, rows: list[dict[str, Any]], model_name: str) -> Pa
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     model_config = _model_config(model_name)
+    temperature = float(load_config()["primary_temperature"])
     tokenizer = AutoTokenizer.from_pretrained(model_config["hf_path"], local_files_only=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_config["hf_path"], local_files_only=True,
@@ -128,7 +129,7 @@ def _hf_baseline(method: str, rows: list[dict[str, Any]], model_name: str) -> Pa
                         processors[key] = generator
                     raw_text = str(generator(
                         row["model_prompt"], max_new_tokens=row["max_tokens"],
-                        temperature=1.0, do_sample=True,
+                        temperature=temperature, do_sample=True,
                     ))
                 else:
                     import guidance
@@ -137,7 +138,7 @@ def _hf_baseline(method: str, rows: list[dict[str, Any]], model_name: str) -> Pa
                     if grammar is None:
                         grammar = guidance.gen(
                             name="answer", regex=pattern,
-                            max_tokens=row["max_tokens"], temperature=1.0,
+                            max_tokens=row["max_tokens"], temperature=temperature,
                         )
                         processors[key] = grammar
                     result = backend + row["model_prompt"] + grammar
@@ -186,7 +187,8 @@ def run_hard(*, cars_core: bool = True, engineering_baselines: bool = True) -> N
     naive = ARTIFACTS / "hard" / "naive.jsonl"
     common = [
         "--input", str(input_path), "--model", model["gguf_path"],
-        "--temperature", "1.0", "--seeds", ",".join(map(str, config["generation_seeds"])),
+        "--temperature", str(config["primary_temperature"]),
+        "--seeds", ",".join(map(str, config["generation_seeds"])),
         "--samples-per-seed", "1", "--max-attempts", str(config["hard_max_attempts"]),
         "--deadline-ms", str(config["hard_deadline_ms"]),
     ]

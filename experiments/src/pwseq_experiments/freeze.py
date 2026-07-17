@@ -35,6 +35,8 @@ def freeze() -> dict:
         if path.is_file() and (path.suffix in {".c", ".h"} or path.name == "Makefile")
     ))
     config = load_config()
+    from .pipeline import temperature_policy
+    temperature_policy(config)
     required = [
         REPO / "native" / "llama" / "build" / "librackllm_llama.so",
         REPO / "native" / "regex" / "build" / "librackllm_pcre2.so",
@@ -78,7 +80,7 @@ def freeze() -> dict:
         raise RuntimeError("configured IFBench revision does not match checkout")
     manifest = {
         "artifact_schema_version": 3,
-        "protocol_version": "paper-v3",
+        "protocol_version": "paper-v4",
         "frozen_at_utc": datetime.now(timezone.utc).isoformat(),
         "git_revision": __import__("subprocess").check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO, text=True

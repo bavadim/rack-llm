@@ -319,7 +319,6 @@ class RuntimePlumbingTests(unittest.TestCase):
             }
             with (
                 mock.patch.object(analysis_module, "ARTIFACTS", artifacts),
-                mock.patch.object(analysis_module, "DATA", data),
                 mock.patch.object(analysis_module, "load_config", return_value=config),
             ):
                 result = analysis_module._bootstrap_generation()
@@ -344,13 +343,39 @@ class RuntimePlumbingTests(unittest.TestCase):
             (run / "CLAIMS.json").write_text("[]\n")
             (run / "tables").mkdir()
             (run / "tables" / "statistical_tests.jsonl").write_text("{}\n")
+            (run / "tables" / "table2b_temperature_ablation.csv").write_text("variant\n")
             (run / "tables" / "table3_generation.csv").write_text("method\n")
             (run / "tables" / "table5_mixed_hard_weak.csv").write_text("method\n")
             (run / "thresholds").mkdir()
             (run / "thresholds" / "main_noise_00.jsonl").write_text("{}\n")
             (run / "figures").mkdir()
             (run / "figures" / "risk_coverage.png").write_bytes(b"png")
-            (run / "figures" / "reliability_data.jsonl").write_text("{}\n")
+            (run / "figures" / "risk_coverage_data.jsonl").write_text(
+                '{"coverage":0,"risk":0,"risk_ci_low":0,"risk_ci_high":0,'
+                '"bootstrap_repetitions":10,"bootstrap_support":10,'
+                '"bootstrap_support_fraction":1}\n'
+            )
+            (run / "figures" / "quality_vs_budget.png").write_bytes(b"png")
+            (run / "figures" / "quality_vs_budget_data.jsonl").write_text(
+                '{"mean_model_tokens":1,"solve_rate":1,"solve_rate_ci_low":1,'
+                '"solve_rate_ci_high":1,"solve_rate_support":10}\n'
+            )
+            (run / "figures" / "noise_robustness.png").write_bytes(b"png")
+            (run / "figures" / "noise_robustness_data.jsonl").write_text(
+                '{"noise":0,"solve_rate":1,"solve_rate_ci_low":1,'
+                '"solve_rate_ci_high":1,"solve_rate_support":10,'
+                '"found_wrong_rate":0,"found_wrong_rate_ci_low":0,'
+                '"found_wrong_rate_ci_high":0,"found_wrong_rate_support":10,'
+                '"not_found_rate":0,"not_found_rate_ci_low":0,'
+                '"not_found_rate_ci_high":0,"not_found_rate_support":10}\n'
+            )
+            (run / "figures" / "found_wrong_vs_not_found.png").write_bytes(b"png")
+            (run / "figures" / "reliability.png").write_bytes(b"png")
+            (run / "figures" / "reliability_data.jsonl").write_text(
+                '{"mean_probability":1,"empirical_rate":1,'
+                '"empirical_rate_ci_low":1,"empirical_rate_ci_high":1,'
+                '"bootstrap_repetitions":10,"bootstrap_support":10}\n'
+            )
             destination = root / "release"
             with (
                 mock.patch.object(archive_module, "ARTIFACTS", run),

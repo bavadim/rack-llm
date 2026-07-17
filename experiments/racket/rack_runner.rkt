@@ -16,6 +16,8 @@
 (define models-dir (make-parameter #f))
 (define model-path (make-parameter #f))
 (define temperature (make-parameter 1.0))
+(define fit-temperatures (make-parameter '(1.0)))
+(define fit-variant (make-parameter "primary"))
 (define seeds (make-parameter '(0)))
 (define samples-per-seed (make-parameter 1))
 (define max-attempts (make-parameter 128))
@@ -40,6 +42,11 @@
  [("--models-dir") value "Weak model directory" (models-dir value)]
  [("--model") value "GGUF path" (model-path value)]
  [("--temperature") value "Temperature" (temperature (string->number value))]
+ [("--fit-temperatures") value "Comma separated calibration temperatures"
+                           (fit-temperatures
+                            (map string->number (string-split value ",")))]
+ [("--fit-variant") value "Weak-model variant recorded in fit rows"
+                    (fit-variant value)]
  [("--seeds") value "Comma separated seeds"
               (seeds (map string->number (string-split value ",")))]
  [("--samples-per-seed") value "Samples per seed"
@@ -84,6 +91,10 @@
   (error 'rack-runner "batch sizes and thread counts must be positive integers"))
 (when (> (ubatch-size) (batch-size))
   (error 'rack-runner "--ubatch-size cannot exceed --batch-size"))
+(unless (and (pair? (fit-temperatures))
+             (andmap (lambda (value) (and (real? value) (positive? value)))
+                     (fit-temperatures)))
+  (error 'rack-runner "--fit-temperatures must contain positive numbers"))
 
 (define (read-jsonl path)
   (call-with-input-file path
@@ -385,7 +396,8 @@
     (define labels
       (for/list ([raw (in-list family-persisted)]
                  #:when (and (string=? "calibration" (get raw 'split))
-                             (= 1.0 (get raw 'temperature 1.0))))
+                             (member (get raw 'temperature 1.0)
+                                     (fit-temperatures) =)))
         (get raw 'labels)))
     (with-handlers ([exn:fail?
                      (lambda (exn)
@@ -399,6 +411,9 @@
       (write-row out
                  (hash 'record_type "fit"
                        'family family
+                       'variant (fit-variant)
+                       'fit_temperatures (fit-temperatures)
+                       'fit_training_rows (length labels)
                        'weak_model_fingerprint (weak-model-fingerprint weak-model)
                        'diagnostics (weak-model-diagnostics weak-model)))
       (for ([raw (in-list family-persisted)])
@@ -407,6 +422,7 @@
          out
          (hash
           'record_type "score"
+          'variant (fit-variant)
           'prompt_id (get raw 'prompt_id)
           'family family
           'split (get raw 'split)

@@ -22,8 +22,9 @@ help:
 	  '  make native-llama  Build the llama.cpp shim (requires LLAMA_CPP_DIR).' \
 	  '  make fixed-cohort-model-matrix  Run bitwise replay tests on configured GGUF models.' \
 	  '  make lint          Build native regex support and compile the library.' \
+	  '  make unit-ci       Run the model-free library checks locally.' \
 	  '  make test          Run all tests (requires LLAMA_CPP_DIR and RACK_LLM_GGUF_MODEL).' \
-	  '  make experiments-ci Run the paper experiment static CI checks.' \
+	  '  make experiments-ci Run the paper experiment static checks locally.' \
 	  '  make ci            Run lint and tests.'
 
 install: native-regex
@@ -87,7 +88,7 @@ test: native
 	RACK_LLM_GGUF_MODEL="$(RACK_LLM_GGUF_MODEL)" $(LOCAL_COLLECTIONS) $(RACO) test tests
 
 experiments-ci:
-	$(MAKE) -C experiments test
+	$(MAKE) -C experiments static-check
 
 clean:
 	find . \( -path ./experiments/.venv -o -path ./experiments/.cache \) -prune -o \
