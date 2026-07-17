@@ -9,7 +9,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("bootstrap")
     sub.add_parser("bootstrap-static")
-    sub.add_parser("prepare")
+    sub.add_parser("validate-data")
     sub.add_parser("preflight")
     sub.add_parser("freeze")
     run_parser = sub.add_parser("run")
@@ -24,8 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     archive_parser.add_argument("--run-id", required=True)
     power_parser = sub.add_parser("power")
     power_parser.add_argument("--run-id", required=True)
-    finalize_parser = sub.add_parser("finalize-design")
-    finalize_parser.add_argument("--run-id", required=True)
+    record_parser = sub.add_parser("record-design")
+    record_parser.add_argument("--run-id", required=True)
     args = parser.parse_args(argv)
     if hasattr(args, "run_id"):
         os.environ["PWSEQ_RUN_ID"] = args.run_id
@@ -36,9 +36,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "bootstrap-static":
             from .bootstrap_static import bootstrap_static
             bootstrap_static()
-        elif args.command == "prepare":
-            from .prepare import prepare_data
-            prepare_data()
+        elif args.command == "validate-data":
+            from .data_validation import validate_dataset
+            validate_dataset()
         elif args.command == "preflight":
             from .preflight import preflight
             if not preflight()["full_ok"]:
@@ -58,9 +58,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "power":
             from .power import power_analysis
             power_analysis()
-        elif args.command == "finalize-design":
-            from .power import finalize_design
-            finalize_design()
+        elif args.command == "record-design":
+            from .power import record_design
+            record_design()
         return 0
     except Exception as exc:
         from .common import issue

@@ -14,7 +14,7 @@ from unittest import mock
 import numpy as np
 
 from pwseq_experiments.builders import MIXED_FAMILIES, SOFT_FAMILIES, build, build_mixed
-from pwseq_experiments.common import DATA, EXPERIMENTS, SOURCE_DATA, atomic_jsonl_command, read_jsonl, write_jsonl, write_jsonl_once
+from pwseq_experiments.common import DATA, EXPERIMENTS, atomic_jsonl_command, file_hash, read_jsonl, write_jsonl, write_jsonl_once
 from pwseq_experiments.fuse import fit_fuse, predict_fuse
 from pwseq_experiments.hard_validation import hard_accepts
 from pwseq_experiments.metrics import (
@@ -22,7 +22,7 @@ from pwseq_experiments.metrics import (
     corrected_bootstrap_p, effective_rank, normalized_partial_aurc,
     operating_metrics, oracle_safe_solve, selective_curve,
 )
-from pwseq_experiments.prepare import prepare_data
+from pwseq_experiments.data_validation import validate_dataset
 from pwseq_experiments.pipeline import _operational_threshold
 from pwseq_experiments.analysis import _accepts_threshold
 from pwseq_experiments import common, pipeline
@@ -33,7 +33,7 @@ from pwseq_experiments import analysis as analysis_module
 
 class BuilderTests(unittest.TestCase):
     def test_frozen_builders_reproduce_prepared_data(self):
-        for split in ["calibration", "dev", "test_generated", "test_official"]:
+        for split in ["calibration", "dev", "test", "test_official"]:
             for row in read_jsonl(DATA / f"{split}.jsonl"):
                 built = build(row["family"], row["kwargs"][0], row["max_tokens"])
                 self.assertEqual(built.hard_spec, row["hard_spec"], row["id"])
@@ -58,20 +58,18 @@ class BuilderTests(unittest.TestCase):
 class PreparedDataTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        prepare_data()
+        validate_dataset()
 
     def test_counts_and_balance(self):
-        config = json.loads((EXPERIMENTS / "config" / "paper.json").read_text())
         expected = {
             "calibration": 360, "dev": 120, "hard_sanity": 60,
-            "test_generated": 12 * config["test_per_family"], "test_official": 67,
-            "mixed": 2 * len(MIXED_FAMILIES) * (30 + 10 + config["test_per_family"]),
+            "test": 600, "test_official": 67, "mixed": 720,
         }
         for split, count in expected.items():
             rows = read_jsonl(DATA / f"{split}.jsonl")
             self.assertEqual(len(rows), count)
             self.assertTrue(all("rack_llm_spec" not in row for row in rows))
-            if split in {"calibration", "dev", "test_generated"}:
+            if split in {"calibration", "dev", "test"}:
                 family_counts = Counter(row["family"] for row in rows)
                 self.assertEqual(set(family_counts), set(SOFT_FAMILIES))
                 self.assertEqual(len(set(family_counts.values())), 1)
@@ -94,15 +92,22 @@ class PreparedDataTests(unittest.TestCase):
             self.assertNotEqual(weak["hard_spec"], hard["hard_spec"])
 
     def test_codex_authorship_and_model_separation_are_recorded(self):
-        provenance = json.loads((DATA / "rules_provenance.json").read_text())
+        provenance = json.loads((DATA / "authoring_provenance.json").read_text())
         self.assertEqual(provenance["author"], "OpenAI Codex (GPT-5)")
         self.assertFalse(provenance["experimental_models_used_for_authoring"])
         self.assertEqual(provenance["experimental_model_role"], "candidate generation only")
-        self.assertIn("test_generated prompts", provenance["artifacts_authored"])
+        self.assertIn("test prompts", provenance["artifacts_authored"])
+
+    def test_validation_never_rewrites_dataset(self):
+        before = {path.name: file_hash(path) for path in DATA.iterdir() if path.is_file()}
+        validate_dataset()
+        after = {path.name: file_hash(path) for path in DATA.iterdir() if path.is_file()}
+        self.assertEqual(before, after)
 
     def test_test_prompts_and_parameters_are_disjoint(self):
         train = read_jsonl(DATA / "calibration.jsonl") + read_jsonl(DATA / "dev.jsonl")
-        test = read_jsonl(DATA / "test_generated.jsonl")
+        test = read_jsonl(DATA / "test.jsonl")
+        self.assertEqual(len({row["base_prompt"] for row in test}), 600)
         self.assertFalse({row["prompt"] for row in train} & {row["prompt"] for row in test})
         train_values = defaultdict(set)
         test_values = defaultdict(set)
@@ -114,9 +119,20 @@ class PreparedDataTests(unittest.TestCase):
         for key in train_values.keys() & test_values.keys():
             self.assertFalse(train_values[key] & test_values[key], key)
 
-    def test_noise_preserves_source_and_extends_test_deterministically(self):
+    def test_runtime_has_no_dataset_authoring_path(self):
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (EXPERIMENTS / "src" / "pwseq_experiments").glob("*.py")
+        )
+        for forbidden in [
+            "build_test_generated", "test_per_family", "shutil.rmtree(DATA)",
+            "write_jsonl(DATA", "prepare_data",
+        ]:
+            self.assertNotIn(forbidden, source)
+
+    def test_frozen_noise_is_effective_and_nested(self):
         base = {}
-        for split in ["calibration", "dev", "test_generated", "test_official"]:
+        for split in ["calibration", "dev", "test", "test_official"]:
             base.update({row["id"]: row for row in read_jsonl(DATA / f"{split}.jsonl")})
         expected_types = {
             "polarity_flip", "narrow_literal", "over_broad_pattern",
@@ -131,7 +147,7 @@ class PreparedDataTests(unittest.TestCase):
                 row = base[overlay["instance_id"]]
                 for change in overlay["changes"]:
                     clean = row["weak_rules"][change["slot"]]
-                    if row["split"] in {"test_generated", "test_official"}:
+                    if row["split"] in {"test", "test_official"}:
                         self.assertNotEqual(
                             (clean["polarity"], clean["pattern"]),
                             (change["polarity"], change["pattern"]),
@@ -148,7 +164,7 @@ class PreparedDataTests(unittest.TestCase):
         }
         generated_ids = {
             row["id"] for row in base.values()
-            if row["split"] in {"test_generated", "test_official"}
+            if row["split"] in {"test", "test_official"}
         }
         for instance_id in generated_ids:
             self.assertLessEqual(noise_20[instance_id], noise_40[instance_id])
@@ -277,7 +293,7 @@ class RuntimePlumbingTests(unittest.TestCase):
                 {"id": "p0", "family": "family-a"},
                 {"id": "p1", "family": "family-a"},
             ]
-            write_jsonl(data / "test_generated.jsonl", prompts)
+            write_jsonl(data / "test.jsonl", prompts)
             methods = [
                 "hard_only_cars", "equal_score_best_of_b",
                 "posterior_best_of_b", "exact_pwsg",
@@ -287,7 +303,7 @@ class RuntimePlumbingTests(unittest.TestCase):
                 for prompt in prompts:
                     for seed in [0, 1]:
                         raw.append({
-                            "split": "test_generated", "budget": 8,
+                            "split": "test", "budget": 8,
                             "method": method, "prompt_id": prompt["id"],
                             "family": prompt["family"], "seed": seed,
                             "outcome": "FOUND_OK", "confidence": .8,

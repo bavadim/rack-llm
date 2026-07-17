@@ -10,6 +10,12 @@ from .common import ARTIFACTS, CACHE, DATA, REPO, issue, load_config, write_json
 
 def preflight() -> dict:
     config = load_config()
+    from .data_validation import validate_dataset
+    dataset_valid = False
+    try:
+        dataset_valid = bool(validate_dataset()["valid"])
+    except Exception as exc:
+        issue("preflight.dataset", exc)
     checks = {
         "racket": shutil.which("racket") is not None,
         "native_llama": (REPO / "native" / "llama" / "build" / "librackllm_llama.so").exists(),
@@ -29,6 +35,7 @@ def preflight() -> dict:
                              "taggers/averaged_perceptron_tagger_eng"]
         ),
         "dataset_manifest": (DATA / "manifest.json").exists(),
+        "frozen_dataset_valid": dataset_valid,
         "sklearn": importlib.util.find_spec("sklearn") is not None,
         "matplotlib": importlib.util.find_spec("matplotlib") is not None,
         "guidance": importlib.util.find_spec("guidance") is not None,

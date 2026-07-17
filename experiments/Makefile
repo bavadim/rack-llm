@@ -9,7 +9,7 @@ STATIC_STAMP := $(STATIC_VENV)/.requirements.stamp
 RUN_ID ?=
 export PYTHONPATH := $(CURDIR)/src
 
-.PHONY: bootstrap bootstrap-static prepare preflight test static-ci freeze run-hard run-audit run-aggregation run-generation run-noise run-replication run-mixed run-design power finalize-design run-all analyze archive
+.PHONY: bootstrap bootstrap-static validate-data preflight test static-ci freeze run-hard run-audit run-aggregation run-generation run-noise run-replication run-mixed run-design power record-design run-all analyze archive
 
 $(STATIC_STAMP): requirements-static.txt
 	test -x "$(STATIC_PYTHON)" || $(SYSTEM_PYTHON) -m venv "$(STATIC_VENV)"
@@ -21,7 +21,7 @@ bootstrap-static: $(STATIC_STAMP)
 
 static-ci: bootstrap-static
 	$(MAKE) -C $(ROOT) native-regex
-	PYTHONPATH=$(CURDIR)/src $(STATIC_PYTHON) -m pwseq_experiments prepare
+	PYTHONPATH=$(CURDIR)/src $(STATIC_PYTHON) -m pwseq_experiments validate-data
 	cd $(ROOT) && PLTCOLLECTS="$(abspath $(ROOT)/..):" raco test tests/loc-test.rkt tests/contract-test.rkt tests/e2e-sampler-test.rkt
 	PYTHONPATH=$(CURDIR)/src $(STATIC_PYTHON) -m unittest discover -s tests -v
 	cd $(ROOT) && git diff --exit-code
@@ -34,8 +34,8 @@ $(VENV_STAMP): requirements.txt
 bootstrap: $(VENV_STAMP)
 	$(PYTHON) -m pwseq_experiments bootstrap
 
-prepare: $(VENV_STAMP)
-	$(PYTHON) -m pwseq_experiments prepare
+validate-data: $(VENV_STAMP)
+	$(PYTHON) -m pwseq_experiments validate-data
 
 preflight: $(VENV_STAMP)
 	$(PYTHON) -m pwseq_experiments preflight
@@ -87,9 +87,9 @@ power: $(VENV_STAMP)
 	@test -n "$(RUN_ID)" || { echo 'RUN_ID is required' >&2; exit 2; }
 	$(PYTHON) -m pwseq_experiments power --run-id "$(RUN_ID)"
 
-finalize-design: $(VENV_STAMP)
+record-design: $(VENV_STAMP)
 	@test -n "$(RUN_ID)" || { echo 'RUN_ID is required' >&2; exit 2; }
-	$(PYTHON) -m pwseq_experiments finalize-design --run-id "$(RUN_ID)"
+	$(PYTHON) -m pwseq_experiments record-design --run-id "$(RUN_ID)"
 
 run-all: $(VENV_STAMP)
 	@test -n "$(RUN_ID)" || { echo 'RUN_ID is required' >&2; exit 2; }

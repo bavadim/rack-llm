@@ -54,35 +54,38 @@ def power_analysis() -> dict:
     target = float(config["power_target_effect"])
     alpha = float(config["power_alpha"])
     desired = float(config["power_target"])
-    rows = []
-    selected = None
-    for prompts_per_family in range(25, int(config["test_per_family_cap"]) + 1):
-        variance = sum(
-            float(np.var(values, ddof=1)) / prompts_per_family
-            for values in differences.values() if len(values) > 1
-        ) / max(1, len(differences)) ** 2
-        standard_error = math.sqrt(variance)
-        power = float(norm.cdf(target / standard_error - norm.ppf(1 - alpha / 2))) if standard_error else 1.0
-        rows.append({"prompts_per_family": prompts_per_family, "standard_error": standard_error, "power": power})
-        if selected is None and power >= desired:
-            selected = prompts_per_family
+    test_rows = read_jsonl(DATA / "test.jsonl")
+    prompts_per_family = len(test_rows) // len(differences)
+    if prompts_per_family != 50 or len(test_rows) != 600:
+        raise RuntimeError("power analysis requires the frozen 600-row test dataset")
+    variance = sum(
+        float(np.var(values, ddof=1)) / prompts_per_family
+        for values in differences.values() if len(values) > 1
+    ) / max(1, len(differences)) ** 2
+    standard_error = math.sqrt(variance)
+    power = float(norm.cdf(target / standard_error - norm.ppf(1 - alpha / 2))) if standard_error else 1.0
+    mde = (
+        (norm.ppf(1 - alpha / 2) + norm.ppf(desired)) * standard_error
+        if standard_error else 0.0
+    )
     result = {
         "source_split": "dev", "gold_test_labels_read": False,
         "comparison": "exact_pwsg-minus-posterior_best_of_b",
         "budget": 8, "target_effect": target, "alpha": alpha,
-        "desired_power": desired,
-        "selected_prompts_per_family": selected or int(config["test_per_family_cap"]),
-        "underpowered": selected is None, "grid": rows,
+        "desired_power": desired, "test_size_is_fixed": True,
+        "prompts_per_family": prompts_per_family,
+        "standard_error": standard_error, "achieved_power": power,
+        "minimum_detectable_effect": float(mde),
     }
     write_json(ARTIFACTS / "design" / "power_mde.json", result)
     return result
 
 
-def finalize_design() -> dict:
-    """Persist a dev-only sample-size decision, then regenerate Codex-authored tests."""
+def record_design() -> dict:
+    """Record a dev-only design decision without touching the frozen dataset."""
     assert_frozen()
     if run_state() != "FROZEN":
-        raise RuntimeError(f"finalize-design requires FROZEN state, got {run_state()}")
+        raise RuntimeError(f"record-design requires FROZEN state, got {run_state()}")
     path = ARTIFACTS / "design" / "power_mde.json"
     if not path.is_file():
         raise RuntimeError("run the dev-only power analysis first")
@@ -90,10 +93,6 @@ def finalize_design() -> dict:
     if result.get("gold_test_labels_read") is not False:
         raise RuntimeError("design artifact does not prove test-label blindness")
     config = load_config()
-    selected = int(result["selected_prompts_per_family"])
-    if not 25 <= selected <= int(config["test_per_family_cap"]):
-        raise RuntimeError(f"invalid selected test size: {selected}")
-    config["test_per_family"] = selected
     config["confirmatory_design"] = {
         "status": "finalized",
         "source_run_id": ARTIFACTS.name,
@@ -101,10 +100,9 @@ def finalize_design() -> dict:
         "gold_test_labels_read": False,
         "power_artifact_sha256": file_hash(path),
         "decision_sha256": stable_hash(result),
-        "selected_prompts_per_family": selected,
+        "frozen_test_prompts": 600,
+        "test_dataset_sha256": file_hash(DATA / "test.jsonl"),
     }
     write_json(CONFIG_PATH, config)
-    from .prepare import prepare_data
-    manifest = prepare_data()
-    set_run_state("SUPERSEDED", reason="design finalized into a new confirmatory input revision")
-    return {"config": config["confirmatory_design"], "dataset": manifest["counts"]}
+    set_run_state("SUPERSEDED", reason="dev design recorded into a new confirmatory config revision")
+    return config["confirmatory_design"]

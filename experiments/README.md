@@ -20,28 +20,29 @@ Both CARS and naive rejection are evaluated against the same `Q_T` conditioned
 on hard acceptance.
 
 Dataset authoring and model evaluation are deliberately separate. OpenAI
-Codex deterministically authors `test_generated`, its held-out parameters and
+Codex authored the committed 600-row `test.jsonl`, its held-out parameters and
 markers, the weak-rule schemas, noise overlays, and the paired mixed hard+weak
-tasks. Qwen and Phi do not author or revise any task or rule; they are only the
-candidate generators being evaluated. The exact provenance declaration is
-frozen in `data/pwseq-ifbench/rules_provenance.json`.
+tasks exactly once. No experiment command regenerates these files. Qwen and
+Phi do not author or revise any task or rule; they are only the candidate
+generators being evaluated. Exact provenance is frozen in
+`data/pwseq-ifbench/authoring_provenance.json`.
 
 The first frozen run is a dev-only design run. It never generates a test
 candidate and cannot read a test label:
 
 ```bash
 make -C experiments bootstrap
-make -C experiments prepare
+make -C experiments validate-data
 make -C experiments test
 DESIGN_RUN=$(make -s -C experiments freeze)
 make -C experiments run-design RUN_ID=$DESIGN_RUN
 make -C experiments power RUN_ID=$DESIGN_RUN
-make -C experiments finalize-design RUN_ID=$DESIGN_RUN
+make -C experiments record-design RUN_ID=$DESIGN_RUN
 ```
 
-`finalize-design` records the dev-derived sample-size decision, regenerates
-the Codex-authored held-out tasks, and supersedes the design run. Commit those
-frozen inputs, then create the separate confirmatory run:
+`record-design` stores the dev-derived operating design and supersedes the
+design run. It cannot change the dataset. Commit the resulting config, then
+create the separate confirmatory run:
 
 ```bash
 RUN_ID=$(make -s -C experiments freeze)
@@ -50,7 +51,7 @@ make -C experiments analyze RUN_ID=$RUN_ID
 make -C experiments archive RUN_ID=$RUN_ID
 ```
 
-Generated data lives in `data/pwseq-ifbench/`. Runtime artifacts live under
+The immutable dataset snapshot lives in `data/pwseq-ifbench/`. Runtime artifacts live under
 `experiments/artifacts/<run-id>/` and are entirely ignored by Git. `archive`
 creates an immutable tar.zst plus SHA-256 under
 `/mnt/storage/work/rack-llm-results` (override with `PWSEQ_ARCHIVE_DIR`).

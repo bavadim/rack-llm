@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .common import ARTIFACTS, DATA, assert_frozen, issue, load_config, read_jsonl, run_state, set_run_state, write_json
+from .common import ARTIFACTS, DATA, assert_frozen, file_hash, issue, load_config, read_jsonl, run_state, set_run_state, write_json
 from .hard import analyze_synthetic, run_hard, run_synthetic
 from .preflight import preflight
 from .pipeline import (
@@ -22,7 +22,7 @@ def _candidate_context(model_name: str) -> tuple[Path, Path, Path]:
         return _CANDIDATE_CONTEXT_CACHE[model_name]
     pool = generate_pool(
         model_name,
-        ["calibration", "dev", "test_generated", "test_official"],
+        ["calibration", "dev", "test", "test_official"],
         main_stream=False,
     )
     instances = ARTIFACTS / "inputs" / f"{model_name}_candidate_instances.jsonl"
@@ -37,7 +37,7 @@ def _proposal_context(model_name: str) -> tuple[Path, Path, Path]:
     if model_name in _PROPOSAL_CONTEXT_CACHE:
         return _PROPOSAL_CONTEXT_CACHE[model_name]
     pool = generate_pool(
-        model_name, ["dev", "test_generated", "test_official"], main_stream=True
+        model_name, ["dev", "test", "test_official"], main_stream=True
     )
     instances = ARTIFACTS / "inputs" / f"{model_name}_main_instances.jsonl"
     labels = ARTIFACTS / "labels" / f"{model_name}_main_labels.jsonl"
@@ -146,6 +146,11 @@ def run_stage(stage: str, _check_preflight: bool = True) -> None:
         design = load_config().get("confirmatory_design", {})
         if design.get("status") != "finalized":
             raise RuntimeError("confirmatory run requires a finalized dev-only design decision")
+        if (
+            design.get("frozen_test_prompts") != 600
+            or design.get("test_dataset_sha256") != file_hash(DATA / "test.jsonl")
+        ):
+            raise RuntimeError("confirmatory design does not match the frozen test dataset")
         set_run_state("RUNNING")
     config = load_config()
     if stage == "hard":

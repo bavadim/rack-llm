@@ -101,7 +101,7 @@ def _rule_table(path: Path) -> list[dict[str, Any]]:
     return output
 
 
-def _generation_table(path: Path, *, split: str = "test_generated", policy: str = "operational") -> list[dict[str, Any]]:
+def _generation_table(path: Path, *, split: str = "test", policy: str = "operational") -> list[dict[str, Any]]:
     rows = [
         row for row in read_jsonl(path)
         if row["split"] == split and row["policy"] == policy
@@ -119,7 +119,7 @@ def _generation_table(path: Path, *, split: str = "test_generated", policy: str 
 def _mixed_table(path: Path) -> list[dict[str, Any]]:
     rows = [
         row for row in read_jsonl(path)
-        if row["split"] == "test_generated" and row["policy"] == "operational"
+        if row["split"] == "test" and row["policy"] == "operational"
         and row.get("aggregation") == "family"
     ]
     return [{
@@ -142,7 +142,7 @@ def _pass_at_five() -> list[dict[str, Any]]:
     }
     groups: dict[tuple[str, int, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in read_jsonl(raw_path):
-        if row["split"] == "test_generated":
+        if row["split"] == "test":
             groups[(row["method"], int(row["budget"]), row["family"], row["prompt_id"])].append(row)
     family_values: dict[tuple[str, int, str], list[bool]] = defaultdict(list)
     for (method, budget, family, _prompt), values in groups.items():
@@ -176,7 +176,7 @@ def _bootstrap_aggregation() -> list[dict[str, Any]]:
     gold = {row["candidate_id"]: int(row["gold_pass"]) for row in read_jsonl(labels_path)}
     rows = [
         row for row in read_jsonl(scores_path)
-        if row.get("record_type") == "score" and row["split"] == "test_generated"
+        if row.get("record_type") == "score" and row["split"] == "test"
         and row.get("candidate_id") in gold
     ]
     by_family_prompt: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
@@ -233,7 +233,7 @@ def _bootstrap_generation() -> list[dict[str, Any]]:
         return []
     rows = [
         row for row in read_jsonl(path)
-        if row["split"] == "test_generated" and row["budget"] == 8
+        if row["split"] == "test" and row["budget"] == 8
     ]
     threshold_path = ARTIFACTS / "thresholds" / "main_noise_00.jsonl"
     if not threshold_path.exists():
@@ -285,7 +285,7 @@ def _bootstrap_generation() -> list[dict[str, Any]]:
         raise RuntimeError(f"missing dev thresholds: {missing_thresholds}")
     prompts_by_family: dict[str, list[str]] = defaultdict(list)
     instance_family = {
-        row["id"]: row["family"] for row in read_jsonl(DATA / "test_generated.jsonl")
+        row["id"]: row["family"] for row in read_jsonl(DATA / "test.jsonl")
     }
     for prompt in raw_by_method["exact_pwsg"]:
         prompts_by_family[instance_family[prompt]].append(prompt)
@@ -387,7 +387,7 @@ def _figures() -> None:
         raw = read_jsonl(raw_path)
         plt.figure()
         for method in ["hard_only_cars", "equal_score_best_of_b", "posterior_best_of_b", "exact_pwsg"]:
-            rows = [row for row in raw if row["split"] == "test_generated" and row["budget"] == 8 and row["method"] == method]
+            rows = [row for row in raw if row["split"] == "test" and row["budget"] == 8 and row["method"] == method]
             if rows:
                 curve = selective_curve(rows)
                 plt.plot([x["coverage"] for x in curve], [x["risk"] for x in curve], label=method)
@@ -402,7 +402,7 @@ def _figures() -> None:
     if summaries:
         frame = pd.DataFrame(summaries)
         subset = frame[
-            (frame["split"] == "test_generated")
+            (frame["split"] == "test")
             & (frame["policy"] == "operational")
             & (frame["aggregation"] == "macro")
         ]
@@ -433,7 +433,7 @@ def _figures() -> None:
     labels_path = ARTIFACTS / "labels" / "main_candidate_labels.jsonl"
     if scores_path.exists() and labels_path.exists():
         gold = {row["candidate_id"]: int(row["gold_pass"]) for row in read_jsonl(labels_path)}
-        rows = [row for row in read_jsonl(scores_path) if row.get("record_type") == "score" and row["split"] == "test_generated" and row.get("candidate_id") in gold]
+        rows = [row for row in read_jsonl(scores_path) if row.get("record_type") == "score" and row["split"] == "test" and row.get("candidate_id") in gold]
         y = np.asarray([gold[row["candidate_id"]] for row in rows], dtype=int)
         p = np.asarray([row["posterior"] for row in rows], dtype=float)
         groups = calibration_bins(y, p, bins=load_config()["ece_bins"])
@@ -472,7 +472,7 @@ def analyze() -> None:
         if path.exists():
             noise_rows.extend([
                 row for row in read_jsonl(path)
-                if row["split"] == "test_generated" and row["policy"] == "operational"
+                if row["split"] == "test" and row["policy"] == "operational"
                 and row.get("aggregation") == "macro"
             ])
     if noise_rows:

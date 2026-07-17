@@ -13,7 +13,6 @@ from typing import Any, Iterable
 REPO = Path(__file__).resolve().parents[3]
 EXPERIMENTS = REPO / "experiments"
 DATA = REPO / "data" / "pwseq-ifbench"
-SOURCE_DATA = REPO / "data" / "pwseq-ifbench-v0.2-min" / "data"
 ARTIFACT_ROOT = EXPERIMENTS / "artifacts"
 ACTIVE_RUN_FILE = ARTIFACT_ROOT / "active_run"  # legacy pilot pointer; never used by new runs
 _run_id = os.environ.get("PWSEQ_RUN_ID", "setup")

@@ -9,6 +9,8 @@ from .common import ARTIFACT_ROOT, CACHE, DATA, EXPERIMENTS, REPO, CONFIG_PATH, 
 
 
 def freeze() -> dict:
+    from .data_validation import validate_dataset
+    validate_dataset()
     dirty = subprocess.check_output(
         ["git", "status", "--porcelain", "--untracked-files=all"], cwd=REPO, text=True
     )
@@ -21,6 +23,7 @@ def freeze() -> dict:
     ]
     files.extend(sorted(DATA.glob("*.jsonl")))
     files.extend(sorted(DATA.glob("*.json")))
+    files.append(DATA / "README.md")
     files.extend(sorted((EXPERIMENTS / "src").rglob("*.py")))
     files.extend(sorted((EXPERIMENTS / "racket").glob("*.rkt")))
     files.extend(sorted((EXPERIMENTS / "tests").glob("test_*.py")))

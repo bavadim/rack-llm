@@ -272,7 +272,7 @@ def evaluate_candidates(instances_path: Path, candidates_path: Path, output_path
 
 def all_instances() -> list[dict[str, Any]]:
     rows = []
-    for split in ["calibration", "dev", "test_generated", "test_official"]:
+    for split in ["calibration", "dev", "test", "test_official"]:
         rows.extend(read_jsonl(DATA / f"{split}.jsonl"))
     return rows
 
@@ -671,14 +671,14 @@ def aggregation_report(model_name: str, level: float, scores_path: Path, labels_
     ]
     rows = [
         row for row in all_scores
-        if row["split"] in {"test_generated", "test_official"}
+        if row["split"] in {"test", "test_official"}
     ]
     by_split_family: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     calibration_by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in all_scores:
         if row["split"] == "calibration" and float(row.get("temperature", 1.0)) == 1.0:
             calibration_by_family[row["family"]].append(row)
-        elif row["split"] in {"test_generated", "test_official"}:
+        elif row["split"] in {"test", "test_official"}:
             by_split_family[(row["split"], row["family"])].append(row)
     oracle_by_family: dict[str, Any] = {}
     for family, train in calibration_by_family.items():
@@ -693,7 +693,7 @@ def aggregation_report(model_name: str, level: float, scores_path: Path, labels_
             oracle_by_family[family] = exc
             issue("aggregation.supervised_oracle", exc, family=family, model=model_name)
     output = []
-    for split in ["test_generated", "test_official"]:
+    for split in ["test", "test_official"]:
         split_rows = [row for row in rows if row["split"] == split]
         for family in sorted({family for (row_split, family) in by_split_family if row_split == split}):
             items = by_split_family[(split, family)]
@@ -804,7 +804,7 @@ def generate_pwsg(model_name: str, level: float, instances_path: Path, proposal_
     noise = int(level * 100)
     rows = [
         row for row in read_jsonl(instances_path)
-        if row["split"] in {"dev", "test_generated", "test_official"}
+        if row["split"] in {"dev", "test", "test_official"}
     ]
     proposals: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
     for proposal in read_jsonl(proposal_pool):
@@ -922,7 +922,7 @@ def generation_report(
     pwsg_path: Path,
     pwsg_labels: Path,
     instance_rows: list[dict[str, Any]] | None = None,
-    evaluation_splits: tuple[str, ...] = ("test_generated", "test_official"),
+    evaluation_splits: tuple[str, ...] = ("test", "test_official"),
 ) -> Path:
     config = load_config()
     score_by_id = {
@@ -945,7 +945,7 @@ def generation_report(
     expected_grid = [
         (row["id"], int(seed))
         for row in instance_by_id.values()
-        if row["split"] in {"dev", "test_generated", "test_official"}
+        if row["split"] in {"dev", "test", "test_official"}
         for seed in config["generation_seeds"]
     ]
     for prompt_id, seed in sorted(expected_grid):
