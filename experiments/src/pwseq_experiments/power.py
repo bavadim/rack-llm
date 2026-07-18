@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 from scipy.stats import norm
@@ -15,6 +15,8 @@ from .common import (
 def power_analysis() -> dict:
     """Dev-only paired design calculation; never reads a test label."""
     assert_frozen()
+    if run_state() != "DESIGN_COMPLETE":
+        raise RuntimeError(f"power analysis requires DESIGN_COMPLETE state, got {run_state()}")
     config = load_config()
     raw = ARTIFACTS / "results" / "main_design_noise_00_generation_raw.jsonl"
     thresholds = ARTIFACTS / "thresholds" / "main_design_noise_00.jsonl"
@@ -24,21 +26,39 @@ def power_analysis() -> dict:
         (row["method"], int(row["budget"])): row
         for row in read_jsonl(thresholds)
     }
+    for method in ("exact_pwsg", "posterior_best_of_b"):
+        decision = tau.get((method, 8))
+        if decision is None or decision.get("source_split") != "dev":
+            raise RuntimeError(f"missing dev-only threshold for {method}/8")
     by_method_prompt: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     for row in read_jsonl(raw):
         if row["split"] == "dev" and int(row["budget"]) == 8 and row["method"] in {
             "exact_pwsg", "posterior_best_of_b",
         }:
             by_method_prompt[row["method"]][row["prompt_id"]].append(row)
+    dev_rows = read_jsonl(DATA / "dev.jsonl")
+    expected_prompts = {row["id"]: row["family"] for row in dev_rows}
+    if len(expected_prompts) != len(dev_rows):
+        raise RuntimeError("dev dataset contains duplicate prompt ids")
     expected = set(map(int, config["generation_seeds"]))
+    for method in ("exact_pwsg", "posterior_best_of_b"):
+        actual_prompts = set(by_method_prompt[method])
+        if actual_prompts != set(expected_prompts):
+            raise RuntimeError(
+                f"invalid dev prompt cohort for {method}: "
+                f"missing={len(set(expected_prompts) - actual_prompts)}, "
+                f"extra={len(actual_prompts - set(expected_prompts))}"
+            )
     differences: dict[str, list[float]] = defaultdict(list)
-    for prompt, ours in by_method_prompt["exact_pwsg"].items():
-        baseline = by_method_prompt["posterior_best_of_b"].get(prompt)
-        if baseline is None:
-            raise RuntimeError(f"missing paired dev prompt: {prompt}")
+    for prompt, family in sorted(expected_prompts.items()):
+        ours = by_method_prompt["exact_pwsg"][prompt]
+        baseline = by_method_prompt["posterior_best_of_b"][prompt]
         def solve(values: list[dict], method: str) -> float:
-            if {int(row["seed"]) for row in values} != expected:
+            seeds = [int(row["seed"]) for row in values]
+            if set(seeds) != expected or len(seeds) != len(expected):
                 raise RuntimeError(f"invalid dev seed cohort: {method}/{prompt}")
+            if any(row["family"] != family for row in values):
+                raise RuntimeError(f"dev family mismatch: {method}/{prompt}")
             decision = tau[(method, 8)]
             mode = decision["accept_if"]
             return float(np.mean([
@@ -49,15 +69,18 @@ def power_analysis() -> dict:
                 )
                 for row in values
             ]))
-        family = ours[0]["family"]
         differences[family].append(solve(ours, "exact_pwsg") - solve(baseline, "posterior_best_of_b"))
     target = float(config["power_target_effect"])
     alpha = float(config["power_alpha"])
     desired = float(config["power_target"])
     test_rows = read_jsonl(DATA / "test.jsonl")
-    prompts_per_family = len(test_rows) // len(differences)
-    if prompts_per_family != 50 or len(test_rows) != 600:
+    test_counts = Counter(row["family"] for row in test_rows)
+    if (
+        len(test_rows) != 600 or set(test_counts) != set(differences)
+        or set(test_counts.values()) != {50}
+    ):
         raise RuntimeError("power analysis requires the frozen 600-row test dataset")
+    prompts_per_family = 50
     variance = sum(
         float(np.var(values, ddof=1)) / prompts_per_family
         for values in differences.values() if len(values) > 1
@@ -84,8 +107,8 @@ def power_analysis() -> dict:
 def record_design() -> dict:
     """Record a dev-only design decision without touching the frozen dataset."""
     assert_frozen()
-    if run_state() != "FROZEN":
-        raise RuntimeError(f"record-design requires FROZEN state, got {run_state()}")
+    if run_state() != "DESIGN_COMPLETE":
+        raise RuntimeError(f"record-design requires DESIGN_COMPLETE state, got {run_state()}")
     path = ARTIFACTS / "design" / "power_mde.json"
     if not path.is_file():
         raise RuntimeError("run the dev-only power analysis first")

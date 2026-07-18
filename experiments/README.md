@@ -26,13 +26,14 @@ STOP after exactly `T` content tokens.  EOG is not part of the returned text.
 Both CARS and naive rejection are evaluated against the same `Q_T` conditioned
 on hard acceptance.
 
-Dataset authoring and model evaluation are deliberately separate. OpenAI
-Codex authored the committed 600-row `test.jsonl`, its held-out parameters and
-markers, the weak-rule schemas, noise overlays, and the paired mixed hard+weak
-tasks exactly once. No experiment command regenerates these files. Qwen and
-Phi do not author or revise any task or rule; they are only the candidate
-generators being evaluated. Exact provenance is frozen in
-`data/pwseq-ifbench/authoring_provenance.json`.
+Dataset authoring and model evaluation are deliberately separate. Two isolated
+verifier-blind Codex authors supplied the ten weak rules per family, and a
+third isolated reviewer audited them before any v4 candidate generation. The
+two replacement-family splits, noise overlays, and mixed tasks were then
+materialized exactly once as the committed dataset. No experiment command
+regenerates these files. Qwen and Phi are candidate generators only. Exact
+packets, reviewer decisions, coordinator disclosure, and hashes are frozen in
+`data/pwseq-ifbench/`.
 
 The first frozen run is a dev-only design run. It never generates a test
 candidate and cannot read a test label:
@@ -78,9 +79,10 @@ bootstrap repetitions. Figure JSONL files contain the same point estimates and
 95% intervals used by the tables; PNG files are rendered only from those
 machine-readable artifacts.
 
-The primary weak model is fitted only on calibration candidates sampled at
-`T=1.0`, which is also the generation temperature. Calibration candidates at
-`T=0.7` are retained for the rule audit and for one clean-main-model appendix
+The primary weak model is fitted on 20 fixed `T=1.0` seeds per calibration
+prompt (600 candidates per family), which is also the generation temperature.
+Eight fixed `T=1.0` seeds form each dev/test candidate pool. Eight calibration
+seeds at `T=0.7` are retained for the rule audit and one clean-main-model appendix
 ablation, `mixture_0p7_1p0`. That ablation reuses the rule slots selected by
 the primary fit, scores the identical `T=1.0` dev/test/official candidates,
 and never participates in PWSG, noise runs, or generation.
@@ -117,6 +119,17 @@ cohort width.
 `observe` opens only the tokenizer vocabulary; `fit-score` and `score` do not
 open llama.cpp at all.  Generation cohorts always save the
 post-prefill prompt state and corresponding logits for exact lane-local reset.
+
+The v4 weak matcher sends the translated ERE directly to PCRE2's search API;
+it no longer surrounds anchored rules with greedy whole-text wildcards. On the
+retired v3.1 word-count pilot, the optional legacy checker reports 3 changed
+labels out of 3,360: those old rows had exhausted the backtracking match limit
+and therefore were backend-error artifacts, not a language-equivalence oracle.
+The native terminal matcher now runs exact DFA matching first, without paying a
+backtracking or JIT match limit before reaching the exact engine. No v3.1
+observation or score is reused by v4. `make regex-benchmark` compiles and
+matches the original ambiguous `*`-separator pattern shape over the former
+480-candidate hotspot without a model.
 
 Each resource configuration is included in the runner command fingerprint.
 Changing threads, devices, context size, or cohort width therefore

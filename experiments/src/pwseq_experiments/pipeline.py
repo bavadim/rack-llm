@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import regex
 
 from .common import ARTIFACTS, DATA, EXPERIMENTS, REPO, assert_frozen, atomic_jsonl_command, file_hash, frozen_manifest, issue, jsonl_count, load_config, python_env, read_jsonl, stable_hash, write_json, write_jsonl, write_jsonl_once
 from .evaluator import official_check_many
 from .fuse import FuseModel, fit_fuse, predict_fuse
+from .hard_validation import ere_compiles_many
 from .metrics import (
     classification_metrics, effective_rank, equal_probability, max_coverage,
     majority_probability, operating_metrics, selective_curve,
@@ -51,10 +51,28 @@ def temperature_policy(config: dict[str, Any] | None = None) -> dict[str, Any]:
     mixture = normalized.get("mixture_0p7_1p0")
     if mixture != {"fit_temperatures": audit, "aggregation_only": True}:
         raise ValueError("mixture_0p7_1p0 must be an aggregation-only fit on all audit temperatures")
+    seed_groups = {
+        "primary_calibration_seeds": list(map(int, config["primary_calibration_seeds"])),
+        "audit_calibration_seeds": list(map(int, config["audit_calibration_seeds"])),
+        "candidate_evaluation_seeds": list(map(int, config["candidate_evaluation_seeds"])),
+    }
+    for name, seeds in seed_groups.items():
+        if not seeds or len(seeds) != len(set(seeds)) or any(seed < 0 for seed in seeds):
+            raise ValueError(f"{name} must contain unique non-negative seeds")
+    expected_seed_groups = {
+        "primary_calibration_seeds": list(range(20)),
+        "audit_calibration_seeds": list(range(8)),
+        "candidate_evaluation_seeds": list(range(8)),
+    }
+    if seed_groups != expected_seed_groups:
+        raise ValueError(
+            "paper-v5 fixes primary/audit/evaluation seeds to 0..19/0..7/0..7"
+        )
     return {
         "primary_temperature": primary,
         "rule_audit_temperatures": audit,
         "weak_model_variants": normalized,
+        **seed_groups,
     }
 
 
@@ -268,15 +286,33 @@ def generate_pool(model_name: str, splits: list[str], *, main_stream: bool = Fal
             max(_budgets(model_name)), None,
         )]
     else:
+        # The primary weak model gets 600 T=1.0 calibration candidates per
+        # family.  Candidate-level dev/test evaluation remains an independent
+        # fixed eight-seed pool; the T=0.7 stream is calibration-only audit
+        # data and never changes the primary fit.
         protocols = [
             (
-                value, config["calibration_seeds"], 1,
-                {"calibration"} if value != policy["primary_temperature"] else None,
-            )
-            for value in policy["rule_audit_temperatures"]
+                policy["primary_temperature"],
+                policy["primary_calibration_seeds"], 1, {"calibration"},
+            ),
+            (
+                policy["primary_temperature"],
+                policy["candidate_evaluation_seeds"], 1,
+                {split for split in splits if split != "calibration"},
+            ),
+            *[
+                (
+                    value, policy["audit_calibration_seeds"], 1,
+                    {"calibration"},
+                )
+                for value in policy["rule_audit_temperatures"]
+                if value != policy["primary_temperature"]
+            ],
         ]
     for index, (temperature, seeds, samples, allowed_splits) in enumerate(protocols):
         protocol_rows = [row for row in rendered if allowed_splits is None or row["split"] in allowed_splits]
+        if not protocol_rows:
+            continue
         protocol_input = input_path
         if allowed_splits is not None:
             protocol_input = ARTIFACTS / "inputs" / f"{model_name}_candidate_{index}_instances.jsonl"
@@ -413,42 +449,119 @@ def filter_observations(
     return output_path
 
 
+def primary_observation_cohort_report(
+    rows: list[dict[str, Any]], observations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Check the exact prompt x seed cohort used by the unlabeled rule gate."""
+    policy = temperature_policy()
+    primary_temperature = policy["primary_temperature"]
+    primary_seeds = policy["primary_calibration_seeds"]
+    calibration = {
+        row["id"]: row for row in rows if row["split"] == "calibration"
+    }
+    expected: dict[str, set[tuple[str, int, int]]] = defaultdict(set)
+    for prompt_id, row in calibration.items():
+        for seed in primary_seeds:
+            expected[row["family"]].add((prompt_id, seed, 0))
+    actual: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
+    for row in observations:
+        if (
+            row.get("record_type") == "observation"
+            and row.get("split") == "calibration"
+            and _has_temperature(row, [primary_temperature])
+        ):
+            actual[str(row.get("family"))].append((
+                str(row.get("prompt_id")), int(row.get("seed", -1)),
+                int(row.get("sample_index", -1)),
+            ))
+    families = sorted(set(expected) | set(actual))
+    details = []
+    for family in families:
+        expected_keys = expected.get(family, set())
+        actual_keys = actual.get(family, [])
+        actual_set = set(actual_keys)
+        missing = sorted(expected_keys - actual_set)
+        extra = sorted(actual_set - expected_keys)
+        duplicates = len(actual_keys) - len(actual_set)
+        details.append({
+            "family": family,
+            "expected": len(expected_keys),
+            "observed": len(actual_keys),
+            "missing": len(missing),
+            "extra": len(extra),
+            "duplicates": duplicates,
+            "missing_examples": [list(value) for value in missing[:5]],
+            "extra_examples": [list(value) for value in extra[:5]],
+            "passed": not missing and not extra and duplicates == 0,
+        })
+    return {
+        "source_split": "calibration",
+        "temperature": primary_temperature,
+        "seeds": primary_seeds,
+        "families": details,
+        "passed": bool(details) and all(row["passed"] for row in details),
+    }
+
+
 def technical_filter(rows: list[dict[str, Any]], observations_path: Path) -> tuple[dict[str, list[int]], list[dict[str, Any]]]:
     primary_temperature = temperature_policy()["primary_temperature"]
+    all_observations = read_jsonl(observations_path)
     observations = [
-        row for row in read_jsonl(observations_path)
+        row for row in all_observations
         if row.get("record_type") == "observation" and row["split"] == "calibration"
         and _has_temperature(row, [primary_temperature])
     ]
+    cohort = primary_observation_cohort_report(rows, all_observations)
+    cohort_by_family = {row["family"]: row for row in cohort["families"]}
     by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in observations:
         by_family[row["family"]].append(row)
     rows_by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         rows_by_family[row["family"]].append(row)
+    compile_keys = sorted({
+        (family, rule["slot"], rule["pattern"])
+        for family, instances in rows_by_family.items()
+        for instance in instances
+        for rule in instance["weak_rules"]
+    })
+    compile_status = dict(zip(
+        compile_keys,
+        ere_compiles_many([key[2] for key in compile_keys]),
+        strict=True,
+    ))
     selected: dict[str, list[int]] = {}
     report = []
     for family in sorted(rows_by_family):
         family_obs = by_family[family]
         rule_count = len(rows_by_family[family][0]["weak_rules"])
         matrix = np.asarray([row["labels"] for row in family_obs], dtype=int)
+        if not len(family_obs):
+            matrix = np.empty((0, rule_count), dtype=int)
+        elif matrix.ndim != 2 or matrix.shape[1] != rule_count:
+            raise RuntimeError(f"invalid observation width for {family}")
         keep = []
         vectors: dict[int, np.ndarray] = {}
+        family_cohort = cohort_by_family.get(family, {
+            "expected": 0, "observed": len(family_obs), "passed": False,
+        })
+        expected_candidates = int(family_cohort["expected"])
+        minimum_fires = math.ceil(0.04 * expected_candidates)
         for slot in range(rule_count):
-            invalid = False
-            for instance in rows_by_family[family]:
-                try:
-                    regex.compile(instance["weak_rules"][slot]["pattern"])
-                except regex.error:
-                    invalid = True
-                    break
+            invalid = any(
+                not compile_status[(family, slot, instance["weak_rules"][slot]["pattern"])]
+                for instance in rows_by_family[family]
+            )
             fires = matrix[:, slot] != 0
-            coverage = float(fires.mean()) if len(fires) else 0.0
+            coverage = (
+                float(fires.sum()) / expected_candidates
+                if expected_candidates else 0.0
+            )
             reason = None
             if invalid:
                 reason = "invalid_ere"
-            elif fires.sum() < 20:
-                reason = "fewer_than_20_fires"
+            elif fires.sum() < minimum_fires:
+                reason = "fewer_than_4pct_fires"
             elif coverage < .01:
                 reason = "coverage_below_1pct"
             elif coverage > .90:
@@ -465,7 +578,11 @@ def technical_filter(rows: list[dict[str, Any]], observations_path: Path) -> tup
                 vectors[slot] = fires
             report.append({
                 "family": family, "slot": slot, "coverage": coverage,
-                "fires": int(fires.sum()), "kept": reason is None, "reason": reason,
+                "fires": int(fires.sum()), "minimum_fires": minimum_fires,
+                "calibration_candidates": expected_candidates,
+                "observed_candidates": len(family_obs),
+                "cohort_passed": bool(family_cohort["passed"]),
+                "kept": reason is None, "reason": reason,
             })
         selected[family] = keep
     return selected, report
@@ -486,20 +603,42 @@ def enforce_technical_gate(
 ) -> None:
     primary_temperature = temperature_policy()["primary_temperature"]
     example = {row["family"]: row for row in rows if row["split"] == "calibration"}
+    all_observations = read_jsonl(observations_path)
+    cohort = primary_observation_cohort_report(rows, all_observations)
+    cohort_by_family = {row["family"]: row for row in cohort["families"]}
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in read_jsonl(observations_path):
+    for row in all_observations:
         if (row.get("record_type") == "observation" and row["split"] == "calibration"
                 and _has_temperature(row, [primary_temperature])):
             grouped[row["family"]].append(row)
     failures = []
-    for family, slots in selected.items():
+    for family in sorted(set(example) | set(selected) | set(cohort_by_family)):
+        slots = selected.get(family, [])
+        if family not in example:
+            failures.append({"family": family, "reason": "unexpected_family"})
+            continue
         polarities = [example[family]["weak_rules"][slot]["polarity"] for slot in slots]
-        matrix = np.asarray([[row["labels"][slot] for slot in slots] for row in grouped[family]])
+        labels_have_slots = all(
+            all(slot < len(row.get("labels", [])) for slot in slots)
+            for row in grouped[family]
+        )
+        matrix = np.asarray([
+            [row["labels"][slot] for slot in slots] for row in grouped[family]
+        ]) if labels_have_slots else np.empty((0, len(slots)), dtype=int)
         conflict = bool(len(matrix) and np.logical_and(
             (matrix > 0).any(axis=1), (matrix < 0).any(axis=1)
         ).any())
-        if len(slots) < 5 or polarities.count("positive") < 2 or polarities.count("negative") < 1 or not conflict:
-            failures.append({"family": family, "slots": slots, "polarities": polarities, "conflict": conflict})
+        cohort_status = cohort_by_family.get(family, {"passed": False})
+        if (
+            not cohort_status["passed"] or not labels_have_slots
+            or len(slots) < 5 or polarities.count("positive") < 2
+            or polarities.count("negative") < 1 or not conflict
+        ):
+            failures.append({
+                "family": family, "slots": slots, "polarities": polarities,
+                "conflict": conflict, "observation_width_valid": labels_have_slots,
+                "cohort": cohort_status,
+            })
     if failures:
         raise RuntimeError(f"unlabeled technical rule gate failed: {failures}")
 
@@ -524,12 +663,15 @@ def fit_score(
     stem = _variant_stem(model_name, noise, variant)
     observed = observations_path or observe(model_name, candidates, rows, level)
     if variant == "primary":
-        selected, filter_report = technical_filter(rows, observed)
+        if selected_slots is None:
+            selected, filter_report = technical_filter(rows, observed)
+            write_json(ARTIFACTS / "reports" / f"{model_name}_noise_{noise:02d}_filter.json", {
+                "selected_slots": selected, "rules": filter_report,
+                "selection_temperature": policy["primary_temperature"],
+            })
+        else:
+            selected = selected_slots
         enforce_technical_gate(rows, observed, selected)
-        write_json(ARTIFACTS / "reports" / f"{model_name}_noise_{noise:02d}_filter.json", {
-            "selected_slots": selected, "rules": filter_report,
-            "selection_temperature": policy["primary_temperature"],
-        })
     else:
         if not variant_config["aggregation_only"]:
             raise ValueError("non-primary weak-model variants must be aggregation-only")

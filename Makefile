@@ -9,7 +9,7 @@ LLAMA_CPP_CFLAGS ?= -I$(LLAMA_CPP_DIR)/ggml/include
 
 LOCAL_COLLECTIONS := PLTCOLLECTS="$(abspath ..):"
 
-.PHONY: help install lint compile ci cold-ci unit-ci test native native-llama native-regex \
+.PHONY: help install lint compile ci cold-ci unit-ci test regex-benchmark native native-llama native-regex \
 	native-conformance fixed-cohort-model-matrix experiments-ci clean distclean check-no-orphan-bytecode
 
 help:
@@ -23,6 +23,7 @@ help:
 	  '  make fixed-cohort-model-matrix  Run bitwise replay tests on configured GGUF models.' \
 	  '  make lint          Build native regex support and compile the library.' \
 	  '  make unit-ci       Run the model-free library checks locally.' \
+	  '  make regex-benchmark Benchmark terminal weak-rule matching.' \
 	  '  make test          Run all tests (requires LLAMA_CPP_DIR and RACK_LLM_GGUF_MODEL).' \
 	  '  make experiments-ci Run the paper experiment static checks locally.' \
 	  '  make ci            Run lint and tests.'
@@ -79,6 +80,9 @@ cold-ci: clean unit-ci
 
 unit-ci: native-regex compile check-no-orphan-bytecode
 	$(RACO) test tests/private tests/loc-test.rkt tests/contract-test.rkt tests/e2e-sampler-test.rkt
+
+regex-benchmark: native-regex
+	$(RACKET) tests/benchmarks/weak-regex.rkt
 
 test: native
 	@test -n "$(RACK_LLM_GGUF_MODEL)" || { \

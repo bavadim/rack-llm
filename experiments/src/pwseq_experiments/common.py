@@ -223,11 +223,14 @@ def run_state() -> str | None:
 def set_run_state(state: str, **details: Any) -> None:
     allowed = {
         None: {"FROZEN"},
-        "FROZEN": {"RUNNING", "SUPERSEDED"},
+        "FROZEN": {"RUNNING", "DESIGN_RUNNING", "SUPERSEDED"},
+        "DESIGN_RUNNING": {"DESIGN_COMPLETE", "FAILED", "SUPERSEDED"},
+        "DESIGN_COMPLETE": {"SUPERSEDED"},
         "RUNNING": {"RUN_COMPLETE", "FAILED", "SUPERSEDED"},
         "RUN_COMPLETE": {"ANALYZED", "SUPERSEDED"},
         "ANALYZED": {"READY_TO_ARCHIVE", "SUPERSEDED"},
         "READY_TO_ARCHIVE": {"ARCHIVED", "SUPERSEDED"},
+        "FAILED": {"SUPERSEDED"},
     }
     current = run_state()
     if state not in allowed.get(current, set()):

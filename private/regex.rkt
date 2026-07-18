@@ -127,8 +127,11 @@
 (define (make-hard-regex p vocab)
   (open-machine (format "\\A(?:~a)\\z" (ere-pattern-source p)) vocab (ere-pattern-restart? p)))
 (define (make-text-regex p)
-  (open-machine (format "\\A(?:[\\s\\S]*)(?:~a)[\\s\\S]*\\z" (ere-pattern-source p))
-                empty-vocabulary #f))
+  ;; pcre2_match searches an unanchored pattern from the supplied start offset.
+  ;; Keep translated ^/$ as absolute anchors instead of simulating search with
+  ;; greedy wildcards: that wrapper caused catastrophic backtracking for rules
+  ;; which already describe the complete text.
+  (open-machine (ere-pattern-source p) empty-vocabulary #f))
 (define (regex-start m)
   (define a (force native)) (define owner (machine-native m))
   (define ptr ((api-start a) (mh-ptr owner)))

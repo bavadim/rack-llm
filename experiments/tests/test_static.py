@@ -25,7 +25,7 @@ from pwseq_experiments.metrics import (
 from pwseq_experiments.data_validation import validate_dataset
 from pwseq_experiments.pipeline import _operational_threshold
 from pwseq_experiments.analysis import _accepts_threshold
-from pwseq_experiments import common, pipeline
+from pwseq_experiments import common, pipeline, run as run_module
 from pwseq_experiments import evaluator
 from pwseq_experiments import archive as archive_module
 from pwseq_experiments import analysis as analysis_module
@@ -91,12 +91,31 @@ class PreparedDataTests(unittest.TestCase):
             self.assertEqual(weak["weak_rules"], hard["weak_rules"])
             self.assertNotEqual(weak["hard_spec"], hard["hard_spec"])
 
-    def test_codex_authorship_and_model_separation_are_recorded(self):
+    def test_blind_authorship_and_model_separation_are_recorded(self):
         provenance = json.loads((DATA / "authoring_provenance.json").read_text())
-        self.assertEqual(provenance["author"], "OpenAI Codex (GPT-5)")
+        manifest = json.loads((DATA / "manifest.json").read_text())
+        reviewer = json.loads((DATA / "reviewer.json").read_text())
+        self.assertEqual(provenance["authoring_protocol"], "verifier-blind-v1")
+        self.assertTrue(provenance["authors_isolated_from_coordinator_context"])
+        self.assertTrue(provenance["coordinator_had_prior_failed_pilot_access"])
+        self.assertFalse(provenance["semantic_rule_edits_by_coordinator"])
+        self.assertFalse(provenance["gold_labels_used_for_authoring"])
         self.assertFalse(provenance["experimental_models_used_for_authoring"])
         self.assertEqual(provenance["experimental_model_role"], "candidate generation only")
-        self.assertIn("test prompts", provenance["artifacts_authored"])
+        self.assertIn("two new family task splits", provenance["artifacts_authored"])
+        packet_hashes = provenance["authoring_packets_sha256"]
+        self.assertEqual(manifest["authoring_packets_sha256"], packet_hashes)
+        self.assertEqual(
+            packet_hashes,
+            {
+                name: file_hash(DATA / name)
+                for name in ("author_a.json", "author_b.json", "reviewer.json")
+            },
+        )
+        self.assertEqual(
+            reviewer["approved_packet_sha256"],
+            {name: packet_hashes[name] for name in ("author_a.json", "author_b.json")},
+        )
 
     def test_validation_never_rewrites_dataset(self):
         before = {path.name: file_hash(path) for path in DATA.iterdir() if path.is_file()}
@@ -281,6 +300,20 @@ class MetricTests(unittest.TestCase):
 
 
 class RuntimePlumbingTests(unittest.TestCase):
+    def test_failed_design_run_is_terminal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "RUN_STATE.json"
+            common.write_json(state, {"run_id": "test", "state": "FROZEN"})
+            with (
+                mock.patch.object(common, "STATE_FILE", state),
+                mock.patch.object(run_module, "assert_frozen"),
+                mock.patch.object(run_module, "preflight", return_value={"full_ok": True}),
+                mock.patch.object(run_module, "run_design", side_effect=RuntimeError("gate failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "gate failed"):
+                    run_module.run_stage("design")
+                self.assertEqual(common.run_state(), "FAILED")
+
     def test_generation_bootstrap_uses_complete_prompt_seed_cohorts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

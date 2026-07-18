@@ -27,6 +27,9 @@ def _validate_rules(rows: list[dict[str, Any]]) -> None:
         if built.hard_spec != row["hard_spec"] or built.weak_rules != row["weak_rules"]:
             raise RuntimeError(f"frozen builder mismatch: {row['id']}")
         rules = row["weak_rules"]
+        polarities = [rule["polarity"] for rule in rules]
+        if len(rules) != 10 or polarities.count("positive") != 6 or polarities.count("negative") != 4:
+            raise RuntimeError(f"invalid two-author rule inventory: {row['id']}")
         if [rule["slot"] for rule in rules] != list(range(len(rules))):
             raise RuntimeError(f"non-contiguous rule slots: {row['id']}")
         keys = [(rule["polarity"], rule["pattern"]) for rule in rules]
@@ -83,7 +86,7 @@ def _validate_noise(instances: dict[str, dict[str, Any]]) -> None:
 def validate_dataset() -> dict[str, Any]:
     """Validate the committed snapshot without creating or modifying any data."""
     manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("experiment_revision") != "3.1.0":
+    if manifest.get("experiment_revision") != "4.0.0":
         raise RuntimeError("unexpected dataset revision")
     rows_by_split = {name: read_jsonl(DATA / f"{name}.jsonl") for name in EXPECTED_COUNTS}
     actual = {name: len(rows) for name, rows in rows_by_split.items()}
@@ -132,6 +135,31 @@ def validate_dataset() -> dict[str, Any]:
     for key in train_values.keys() & test_values.keys():
         if train_values[key] & test_values[key]:
             raise RuntimeError(f"test parameter overlap: {key}")
+    for family in ("format:parentheses", "sentence:keyword"):
+        family_rows = {
+            split: [row for row in rows_by_split[split] if row["family"] == family]
+            for split in ("calibration", "dev", "test")
+        }
+        bases = {
+            split: {row.get("base_prompt") for row in rows}
+            for split, rows in family_rows.items()
+        }
+        if any(None in values for values in bases.values()):
+            raise RuntimeError(f"new-family base prompt is missing: {family}")
+        for left, right in (("calibration", "dev"), ("calibration", "test"), ("dev", "test")):
+            if bases[left] & bases[right]:
+                raise RuntimeError(f"new-family base prompt overlap: {family}/{left}/{right}")
+        parameter_values: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for split, rows in family_rows.items():
+            for row in rows:
+                for key, value in row["kwargs"][0].items():
+                    if value is not None:
+                        parameter_values[(split, key)].add(json.dumps(value, sort_keys=True))
+        parameter_keys = {key for _split, key in parameter_values}
+        for key in parameter_keys:
+            for left, right in (("calibration", "dev"), ("calibration", "test"), ("dev", "test")):
+                if parameter_values[(left, key)] & parameter_values[(right, key)]:
+                    raise RuntimeError(f"new-family parameter overlap: {family}/{key}/{left}/{right}")
 
     _validate_rules(clean)
     _validate_mixed(rows_by_split["mixed"])
@@ -144,4 +172,27 @@ def validate_dataset() -> dict[str, Any]:
         raise RuntimeError("one-time dataset provenance is missing")
     if provenance.get("experimental_models_used_for_authoring") is not False:
         raise RuntimeError("experimental model authoring separation is missing")
+    if not provenance.get("authors_isolated_from_coordinator_context"):
+        raise RuntimeError("independent author isolation is missing")
+    if provenance.get("gold_labels_used_for_authoring") is not False:
+        raise RuntimeError("gold-label authoring separation is missing")
+    if provenance.get("coordinator_had_prior_failed_pilot_access") is not True:
+        raise RuntimeError("coordinator pilot access is not disclosed")
+    packet_hashes = provenance.get("authoring_packets_sha256", {})
+    if set(packet_hashes) != {"author_a.json", "author_b.json", "reviewer.json"}:
+        raise RuntimeError("authoring packet inventory mismatch")
+    if manifest.get("authoring_packets_sha256") != packet_hashes:
+        raise RuntimeError("manifest/provenance authoring packet hashes disagree")
+    for name, expected in packet_hashes.items():
+        if file_hash(DATA / name) != expected:
+            raise RuntimeError(f"authoring packet drift: {name}")
+    reviewer = json.loads((DATA / "reviewer.json").read_text(encoding="utf-8"))
+    if reviewer.get("verdict") != "APPROVED":
+        raise RuntimeError("blind reviewer did not approve the final rule packets")
+    approved_hashes = reviewer.get("approved_packet_sha256")
+    expected_approved_hashes = {
+        name: packet_hashes[name] for name in ("author_a.json", "author_b.json")
+    }
+    if approved_hashes != expected_approved_hashes:
+        raise RuntimeError("blind reviewer approval is not bound to the final author packets")
     return {"revision": manifest["experiment_revision"], "counts": actual, "valid": True}

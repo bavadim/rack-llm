@@ -10,6 +10,7 @@
 #endif
 
 #define INITIAL_WORKSPACE_SIZE 128
+#define TERMINAL_WORKSPACE_SIZE 4096
 
 struct rackllm_vocab {
     char *bytes;
@@ -498,7 +499,31 @@ int rackllm_regex_match_compiled(rackllm_regex *regex, const char *text) {
     if (!regex || !text) return -1;
     pcre2_match_data *data = pcre2_match_data_create_from_pattern(regex->code, NULL);
     if (!data) return -1;
-    int rc = pcre2_match(regex->code, (PCRE2_SPTR) text, strlen(text), 0, 0, data, NULL);
+    size_t workspace_size = TERMINAL_WORKSPACE_SIZE;
+    int *workspace = calloc(workspace_size, sizeof(int));
+    if (!workspace) {
+        pcre2_match_data_free(data);
+        return -1;
+    }
+    const size_t length = strlen(text);
+    int rc;
+    /* Weak rules use the accepted regular ERE subset and need only boolean
+       existence of a match.  Run the exact DFA directly: trying the
+       backtracking/JIT engine first can spend its full match limit on
+       ambiguous counted repetitions before an exact fallback is reached. */
+    for (;;) {
+        rc = pcre2_dfa_match(regex->code, (PCRE2_SPTR) text, length,
+                             0, PCRE2_DFA_SHORTEST, data, NULL,
+                             workspace, workspace_size);
+        if (rc != PCRE2_ERROR_DFA_WSSIZE) break;
+        if (!grow_workspace(&workspace, &workspace_size)) {
+            rc = PCRE2_ERROR_NOMEMORY;
+            break;
+        }
+    }
+    free(workspace);
     pcre2_match_data_free(data);
-    return rc >= 0;
+    if (rc >= 0) return 1;
+    if (rc == PCRE2_ERROR_NOMATCH) return 0;
+    return -1;
 }

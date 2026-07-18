@@ -16,6 +16,9 @@ class TemperaturePolicyTests(unittest.TestCase):
         policy = pipeline.temperature_policy()
         self.assertEqual(policy["primary_temperature"], 1.0)
         self.assertEqual(policy["rule_audit_temperatures"], [0.7, 1.0])
+        self.assertEqual(policy["primary_calibration_seeds"], list(range(20)))
+        self.assertEqual(policy["audit_calibration_seeds"], list(range(8)))
+        self.assertEqual(policy["candidate_evaluation_seeds"], list(range(8)))
         self.assertEqual(
             policy["weak_model_variants"]["primary"],
             {"fit_temperatures": [1.0], "aggregation_only": False},
@@ -33,6 +36,12 @@ class TemperaturePolicyTests(unittest.TestCase):
         source = "\n".join(sources)
         self.assertNotIn('config["calibration_temperatures"]', source)
         self.assertNotIn('"--temperature", "1.0"', source)
+
+    def test_paper_v5_seed_cardinalities_are_not_tunable(self):
+        config = pipeline.load_config()
+        changed = {**config, "primary_calibration_seeds": list(range(19))}
+        with self.assertRaisesRegex(ValueError, "paper-v5 fixes"):
+            pipeline.temperature_policy(changed)
 
     def test_racket_fit_temperature_selection_is_model_free_and_variant_tagged(self):
         with tempfile.TemporaryDirectory() as directory:
