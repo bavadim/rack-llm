@@ -36,36 +36,34 @@
 
       (test-case "real llama session runs terminal-only PWSG rules"
         (define spec
-          (with-rules (text 12)
-                      (positive (lit "clear"))
-                      (positive (lit "answer"))
-                      (negative (lit "sorry"))
-                      (negative (lit "unknown"))))
+          (with-rules
+           (text 12)
+           (rule-set "real-pwsg@1"
+                     (positive "clear" (lit "clear"))
+                     (positive "answer" (lit "answer"))
+                     (negative "sorry" (lit "sorry"))
+                     (negative "unknown" (lit "unknown")))))
         (define compiled (compile-spec backend spec))
-        (define clear-answer '#(1 1 0 0))
-        (define clear-only '#(1 0 0 0))
-        (define answer-only '#(0 1 0 0))
-        (define bad-both '#(0 0 -1 -1))
-        (define sorry-only '#(0 0 -1 0))
-        (define unknown-only '#(0 0 0 -1))
         (define calibration
-          (append (make-list 80 clear-answer)
-                  (make-list 30 clear-only)
-                  (make-list 25 answer-only)
-                  (make-list 70 bad-both)
-                  (make-list 20 sorry-only)
-                  (make-list 18 unknown-only)))
-        (define weak-model
-          (fit-weak-model calibration))
+          (append (make-list 80 (observe compiled "clear answer"))
+                  (make-list 30 (observe compiled "clear"))
+                  (make-list 25 (observe compiled "answer"))
+                  (make-list 70 (observe compiled "sorry unknown"))
+                  (make-list 20 (observe compiled "sorry"))
+                  (make-list 18 (observe compiled "unknown"))))
+        (define guided
+          (attach-calibration compiled (fit-calibration calibration)))
         (define result
           (car (generate-batch
                 (list (generation-request
-                       compiled "Give a short direct answer to: What is 2+2?"
-                       #:max-attempts 50 #:weak-model weak-model
+                       guided "Give a short direct answer to: What is 2+2?"
+                       #:max-attempts 50
                        #:temperature 0.7 #:max-tokens 12 #:seed 11
                        #:deadline-ms 60000)))))
         (check-equal? (generation-result-status result) 'found)
-        (check-true (real? (generation-result-posterior result))))
+        (check-true (real? (generation-result-posterior result)))
+        (check-true (real? (generation-result-terminal-mass result)))
+        (check-true (string? (generation-result-calibration-fingerprint result))))
 
       (test-case "fixed cohort keeps four hard streams independent"
         (define compiled

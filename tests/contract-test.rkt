@@ -8,17 +8,23 @@
 (module+ test
   (test-case "compact public API"
     (for ([name '(backend-close! llama-cpp-backend lit ere seq choice repeat text
-                  with-rules positive negative compile-spec accepts? observe-token-ids
-                  fit-weak-model weak-posterior weak-model-fingerprint weak-model-diagnostics
-                  save-weak-model load-weak-model generation-request generate-batch
+                  rule-set with-rules positive negative compile-spec attach-calibration
+                  accepts? observe observe-token-ids observation? observation-schema
+                  observation-labels observation->datum datum->observation
+                  fit-calibration calibration-posterior calibration-fingerprint
+                  calibration-diagnostics save-calibration load-calibration
+                  generation-request generate-batch
                   generation-result-status generation-result-reason generation-result-token-ids
                   generation-result-text generation-result-lm-logprob
                   generation-result-latency-ms generation-result-tokenizer-fingerprint
-                  generation-result-posterior generation-result-attempts
+                  generation-result-posterior generation-result-terminal-mass
+                  generation-result-calibration-fingerprint generation-result-attempts
                   generation-result-proposed-tokens
                   generation-result-model-draws generation-result-trie-nodes)])
       (check-not-equal? (exported core name) 'missing (symbol->string name)))
     (for ([name '(rx ban control prefer avoid cars-sampler make-generation-request generate
+                  observe-text fit-weak-model weak-posterior weak-model-fingerprint
+                  weak-model-diagnostics save-weak-model load-weak-model
                   compiled-spec-schema-fingerprint model-close! llama-cpp-model)])
       (check-equal? (exported core name) 'missing (symbol->string name))))
   (test-case "backend extension is public"
@@ -38,4 +44,4 @@
   (test-case "constructors validate"
     (check-exn exn:fail? (lambda () (seq)))
     (check-exn exn:fail? (lambda () (choice)))
-    (check-exn #rx"lit or ere" (lambda () (positive (text 2))))))
+    (check-exn #rx"lit or ere" (lambda () (positive "bad" (text 2))))))

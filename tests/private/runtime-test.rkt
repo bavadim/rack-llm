@@ -95,7 +95,7 @@
                (positive? (generation-result-trie-nodes result)))
              results)))
 
-  (test-case "soft rules require an explicit weak policy before backend mutation"
+  (test-case "rule-bearing compiled specs remain hard-only until calibration is attached"
     (define opens (box 0))
     (define guarded-provider
       (make-fake-cohort-provider
@@ -106,11 +106,19 @@
        #:commit-lane! (lambda (_session _id) (void))))
     (define guarded-model (make-backend tokenizer* guarded-provider void))
     (define compiled
-      (compile-spec guarded-model (with-rules (text 1) (positive (lit " a")))))
-    (check-exn #rx"weak-model-required"
+      (compile-spec guarded-model
+                    (with-rules (text 1)
+                                (rule-set "plain@1"
+                                          (positive "has-a" (lit " a"))))))
+    (define result (car (generate-batch (list (request compiled 1)))))
+    (check-equal? (generation-result-status result) 'found)
+    (check-false (generation-result-posterior result))
+    (check-false (generation-result-terminal-mass result))
+    (check-false (generation-result-calibration-fingerprint result))
+    (check-true (positive? (unbox opens)))
+    (check-exn #rx"keyword"
                (lambda ()
-                 (generate-batch (list (request compiled 1)))))
-    (check-equal? (unbox opens) 0)
+                 (generation-request compiled "" #:max-attempts 1 #:weak-model 'removed)))
     (backend-close! guarded-model))
 
   (test-case "backend failure returns aligned errors and closes a poisoned cohort"

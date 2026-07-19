@@ -62,31 +62,72 @@ def _validate_mixed(rows: list[dict[str, Any]]) -> None:
             raise RuntimeError(f"invalid mixed pair: {pair_id}")
 
 
-def _validate_noise(instances: dict[str, dict[str, Any]]) -> None:
+def _validate_noise(
+    instances: dict[str, dict[str, Any]], manifest: dict[str, Any],
+) -> None:
     levels = {
         level: {row["instance_id"]: row for row in read_jsonl(DATA / f"noise_{level}.jsonl")}
         for level in (20, 40)
     }
+    plans = manifest.get("noise_family_plans", {})
+    if set(plans) != set(SOFT_FAMILIES):
+        raise RuntimeError("noise family-plan inventory mismatch")
+    observed_types: set[str] = set()
+    signatures: dict[tuple[int, str], set[tuple[tuple[str, str], ...]]] = defaultdict(set)
+    compile_checks: list[tuple[dict[str, Any], str, None]] = []
     for level, overlays in levels.items():
         if set(overlays) != set(instances):
             raise RuntimeError(f"noise {level} instance set mismatch")
         for instance_id, overlay in overlays.items():
-            clean = instances[instance_id]["weak_rules"]
+            instance = instances[instance_id]
+            clean = instance["weak_rules"]
+            changes = overlay["changes"]
+            expected = plans[instance["family"]][:(2 if level == 20 else 4)]
+            descriptors = [
+                {key: change[key] for key in ("slot", "noise_type", "source_slot")
+                 if key in change}
+                for change in changes
+            ]
+            if descriptors != expected or len({change["slot"] for change in changes}) != len(changes):
+                raise RuntimeError(f"noise family plan mismatch: {level}/{instance_id}")
+            corrupted = [dict(rule) for rule in clean]
             for change in overlay["changes"]:
                 source = clean[change["slot"]]
                 if (source["polarity"], source["pattern"]) == (change["polarity"], change["pattern"]):
                     raise RuntimeError(f"no-op noise change: {level}/{instance_id}/{change['slot']}")
+                corrupted[change["slot"]].update(
+                    polarity=change["polarity"], pattern=change["pattern"],
+                )
+                observed_types.add(change["noise_type"])
+                compile_checks.append((
+                    {"kind": "ere", "pattern": change["pattern"]}, "", None,
+                ))
+            signatures[(level, instance["family"])].add(tuple(
+                (rule["rule_id"], rule["polarity"]) for rule in corrupted
+            ))
     for instance_id in instances:
-        low = {(x["slot"], x["noise_type"]) for x in levels[20][instance_id]["changes"]}
-        high = {(x["slot"], x["noise_type"]) for x in levels[40][instance_id]["changes"]}
-        if not low <= high:
+        low = levels[20][instance_id]["changes"]
+        high = levels[40][instance_id]["changes"]
+        if low != high[:2]:
             raise RuntimeError(f"noise levels are not nested: {instance_id}")
+    if any(len(values) != 1 for values in signatures.values()):
+        raise RuntimeError("noise changes do not preserve one rule schema per family")
+    expected_types = {
+        "polarity_flip", "narrow_literal", "over_broad_pattern",
+        "word_boundary_removal", "case_sensitivity_error",
+        "duplicate_conflicting_rule",
+    }
+    if observed_types != expected_types:
+        raise RuntimeError(f"noise corruption-type mismatch: {sorted(observed_types)}")
+    # Compilation is the assertion; accepting the empty string is allowed for
+    # deliberately over-broad corrupted rules.
+    hard_accepts_many(compile_checks)
 
 
 def validate_dataset() -> dict[str, Any]:
     """Validate the committed snapshot without creating or modifying any data."""
     manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("experiment_revision") != "4.0.0":
+    if manifest.get("experiment_revision") != "5.0.0":
         raise RuntimeError("unexpected dataset revision")
     rows_by_split = {name: read_jsonl(DATA / f"{name}.jsonl") for name in EXPECTED_COUNTS}
     actual = {name: len(rows) for name, rows in rows_by_split.items()}
@@ -163,7 +204,7 @@ def validate_dataset() -> dict[str, Any]:
 
     _validate_rules(clean)
     _validate_mixed(rows_by_split["mixed"])
-    _validate_noise({row["id"]: row for row in clean})
+    _validate_noise({row["id"]: row for row in clean}, manifest)
     provenance_path = DATA / "authoring_provenance.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     if file_hash(provenance_path) != manifest.get("authoring_provenance_sha256"):

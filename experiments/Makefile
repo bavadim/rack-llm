@@ -9,7 +9,7 @@ STATIC_STAMP := $(STATIC_VENV)/.requirements.stamp
 RUN_ID ?=
 export PYTHONPATH := $(CURDIR)/src
 
-.PHONY: bootstrap bootstrap-static validate-data preflight test static-check freeze run-hard run-audit run-aggregation run-generation run-noise run-replication run-mixed run-design power record-design run-all analyze archive
+.PHONY: bootstrap bootstrap-static validate-data preflight test static-check freeze run-hard run-audit run-aggregation run-generation run-noise run-replication run-mixed run-design diagnose-failed power record-design run-all analyze archive
 
 $(STATIC_STAMP): requirements-static.txt
 	test -x "$(STATIC_PYTHON)" || $(SYSTEM_PYTHON) -m venv "$(STATIC_VENV)"
@@ -81,6 +81,10 @@ run-mixed: $(VENV_STAMP)
 run-design: $(VENV_STAMP)
 	@test -n "$(RUN_ID)" || { echo 'RUN_ID is required' >&2; exit 2; }
 	$(PYTHON) -m pwseq_experiments run --run-id "$(RUN_ID)" design
+
+diagnose-failed: $(VENV_STAMP)
+	@test -n "$(SOURCE_RUN_ID)" || { echo 'SOURCE_RUN_ID is required' >&2; exit 2; }
+	$(PYTHON) -m pwseq_experiments diagnose-failed --source-run-id "$(SOURCE_RUN_ID)"
 
 power: $(VENV_STAMP)
 	@test -n "$(RUN_ID)" || { echo 'RUN_ID is required' >&2; exit 2; }

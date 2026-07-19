@@ -15,6 +15,29 @@ _EVALUATOR: Any | None = None
 _EVALUATOR_FINGERPRINT: str | None = None
 
 
+def evaluator_fingerprint() -> str:
+    """Hash every frozen file that can affect an official IFBench verdict."""
+    global _EVALUATOR_FINGERPRINT
+    if _EVALUATOR_FINGERPRINT is None:
+        digest = hashlib.sha256()
+        root = CACHE / "ifbench"
+        paths = [
+            root / name for name in (
+                "evaluation_lib.py", "instructions.py",
+                "instructions_registry.py", "instructions_util.py",
+            )
+        ]
+        nltk = root / ".nltk_data"
+        if nltk.is_dir():
+            paths.extend(path for path in nltk.rglob("*") if path.is_file())
+        for path in sorted(paths, key=lambda value: str(value.relative_to(root))):
+            relative = str(path.relative_to(root))
+            digest.update(relative.encode("utf-8"))
+            digest.update(path.read_bytes())
+        _EVALUATOR_FINGERPRINT = digest.hexdigest()
+    return _EVALUATOR_FINGERPRINT
+
+
 def load_evaluator() -> Any:
     global _EVALUATOR
     if _EVALUATOR is not None:
@@ -43,21 +66,9 @@ def official_check(row: dict[str, Any], text: str, evaluator: Any) -> bool:
 
 
 def _cache_key(row: dict[str, Any], text: str) -> str:
-    global _EVALUATOR_FINGERPRINT
-    if _EVALUATOR_FINGERPRINT is None:
-        digest = hashlib.sha256()
-        root = CACHE / "ifbench"
-        for name in (
-            "evaluation_lib.py", "instructions.py",
-            "instructions_registry.py", "instructions_util.py",
-        ):
-            path = root / name
-            digest.update(name.encode("utf-8"))
-            digest.update(path.read_bytes())
-        _EVALUATOR_FINGERPRINT = digest.hexdigest()
     payload = {
         "format": "ifbench-official-check-v1",
-        "evaluator_fingerprint": _EVALUATOR_FINGERPRINT,
+        "evaluator_fingerprint": evaluator_fingerprint(),
         "prompt": row["prompt"],
         "instruction_id_list": row["instruction_id_list"],
         "kwargs": row["kwargs"],

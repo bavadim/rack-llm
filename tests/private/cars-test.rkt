@@ -105,28 +105,95 @@
                         results))
     (backend-close! prefix-model))
 
-  (test-case "posterior-weighted generation reports its terminal posterior"
-    (define spec
-      (with-rules
-       (apply choice (map lit '(" a" " b" " c" " d")))
-       (positive (lit " a")) (positive (lit " b"))
-       (negative (lit " c")) (negative (lit " d"))))
-    (define compiled (compile-spec model* spec))
+  (test-case "affine posterior mass preserves the exact finite target distribution"
+    (define compiled
+      (compile-spec
+       model*
+       (with-rules
+        (apply choice (map lit '(" a" " b" " c" " d")))
+        (rule-set "finite-policy@1"
+                  (positive "a" (lit " a")) (positive "b" (lit " b"))
+                  (negative "c" (lit " c")) (negative "d" (lit " d"))))))
     (define calibration
       (append (make-list 100 (observe-token-ids compiled '(0)))
               (make-list 90 (observe-token-ids compiled '(1)))
               (make-list 40 (observe-token-ids compiled '(2)))
               (make-list 30 (observe-token-ids compiled '(3)))))
-    (define weak-model
-      (fit-weak-model calibration #:seed 7))
+    (define fitted (fit-calibration calibration #:seed 7))
+    (define good 0.8)
+    (define bad 0.2)
+    (define guided (attach-calibration compiled fitted #:good good #:bad bad))
+    (define texts '(" a" " b" " c" " d"))
+    (define posterior-by-text
+      (for/hash ([text (in-list texts)])
+        (values text (calibration-posterior fitted (observe compiled text)))))
     (define rs
-      (for/list ([seed (in-range 200)])
+      (for/list ([seed (in-range 5000)])
         (generation-request
-         compiled "" #:max-attempts 100 #:weak-model weak-model
-         #:temperature 1.0 #:max-tokens 1 #:seed seed)))
+         guided "" #:max-attempts 100
+         #:temperature 1.0 #:max-tokens 1 #:seed (+ 1000003 (* 7919 seed)))))
     (define results (generate-batch rs))
+    (define raw
+      (for/list ([text (in-list texts)] [q (in-list (take probabilities 4))])
+        (define p (hash-ref posterior-by-text text))
+        (* q (/ (+ (* good p) (* bad (- 1.0 p))) (max good bad)))))
+    (define z (apply + raw))
+    (define tv
+      (* 0.5
+         (for/sum ([text (in-list texts)] [weight (in-list raw)])
+           (abs (- (/ (count (lambda (result)
+                              (string=? text (generation-result-text result)))
+                            results)
+                      (length results))
+                   (/ weight z))))))
+    (check-true (< tv 0.04) (format "guided tv=~a" tv))
     (for ([result (in-list results)])
-      (check-true (<= 0.0 (generation-result-posterior result) 1.0))))
+      (define p (hash-ref posterior-by-text (generation-result-text result)))
+      (check-= (generation-result-posterior result) p 1e-12)
+      (check-= (generation-result-terminal-mass result)
+               (/ (+ (* good p) (* bad (- 1.0 p))) (max good bad)) 1e-12)
+      (check-equal? (generation-result-calibration-fingerprint result)
+                    (calibration-fingerprint fitted)))
+    (define default-result
+      (car (generate-batch
+            (list (generation-request (attach-calibration compiled fitted) ""
+                                      #:max-attempts 100 #:temperature 1.0
+                                      #:max-tokens 1 #:seed 7000)))))
+    (check-= (generation-result-terminal-mass default-result)
+             (generation-result-posterior default-result) 1e-12)
+    ;; Parameters may vary across tasks, but logical rule identity and order may not.
+    (define parameterized
+      (compile-spec
+       model*
+       (with-rules
+        (seq (lit " a") (lit " b"))
+        (rule-set "finite-policy@1"
+                  (positive "a" (lit " b")) (positive "b" (lit " a"))
+                  (negative "c" (lit " d")) (negative "d" (lit " c"))))))
+    (define guided-parameterized (attach-calibration parameterized fitted))
+    (define stopped
+      (car (generate-batch
+            (list (generation-request guided-parameterized "" #:max-attempts 10
+                                      #:max-model-draws 1 #:temperature 1.0
+                                      #:max-tokens 2 #:seed 71)))))
+    (check-equal? (generation-result-status stopped) 'not-found-model-draw-budget)
+    (check-equal? (generation-result-calibration-fingerprint stopped)
+                  (calibration-fingerprint fitted))
+    (define reordered
+      (compile-spec
+       model*
+       (with-rules
+        (text 1)
+        (rule-set "finite-policy@1"
+                  (positive "b" (lit " b")) (positive "a" (lit " a"))
+                  (negative "c" (lit " c")) (negative "d" (lit " d"))))))
+    (check-exn #rx"schema does not match"
+               (lambda () (attach-calibration reordered fitted)))
+    (for ([weights (in-list '((0 0) (-1 1) (1 -1) (+inf.0 1) (+nan.0 1)))])
+      (check-exn exn:fail?
+                 (lambda ()
+                   (attach-calibration compiled fitted
+                                       #:good (car weights) #:bad (cadr weights))))))
 
   (test-case "model draw budget stops inside an attempt"
     (define compiled

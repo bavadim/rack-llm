@@ -11,29 +11,36 @@ from .preflight import preflight
 from .pipeline import (
     aggregation_report, all_instances, apply_noise, audit_report,
     evaluate_candidates, evaluate_generations, fit_score, generate_pool,
-    fit_temperature_ablation, generate_pwsg, generation_report, observe, score_pool,
-    enforce_technical_gate, technical_filter, temperature_policy,
+    generate_pwsg, generation_report, observe, score_pool, temperature_policy,
 )
 
-_CANDIDATE_CONTEXT_CACHE: dict[str, tuple[Path, Path, Path]] = {}
+_CANDIDATE_INPUT_CACHE: dict[str, tuple[Path, Path]] = {}
+_CANDIDATE_LABEL_CACHE: dict[str, Path] = {}
 _PROPOSAL_CONTEXT_CACHE: dict[str, tuple[Path, Path, Path]] = {}
 _AGGREGATION_CONTEXT_CACHE: dict[tuple[str, float], tuple[Path, Path]] = {}
 
 
-def _candidate_context(model_name: str) -> tuple[Path, Path, Path]:
-    if model_name in _CANDIDATE_CONTEXT_CACHE:
-        return _CANDIDATE_CONTEXT_CACHE[model_name]
+def _candidate_inputs(model_name: str) -> tuple[Path, Path]:
+    if model_name in _CANDIDATE_INPUT_CACHE:
+        return _CANDIDATE_INPUT_CACHE[model_name]
     pool = generate_pool(
         model_name,
         ["calibration", "dev", "test", "test_official"],
         main_stream=False,
     )
     instances = ARTIFACTS / "inputs" / f"{model_name}_candidate_instances.jsonl"
+    result = (pool, instances)
+    _CANDIDATE_INPUT_CACHE[model_name] = result
+    return result
+
+
+def _candidate_labels(model_name: str, pool: Path, instances: Path) -> Path:
+    if model_name in _CANDIDATE_LABEL_CACHE:
+        return _CANDIDATE_LABEL_CACHE[model_name]
     labels = ARTIFACTS / "labels" / f"{model_name}_candidate_labels.jsonl"
     evaluate_candidates(instances, pool, labels)
-    result = (pool, instances, labels)
-    _CANDIDATE_CONTEXT_CACHE[model_name] = result
-    return result
+    _CANDIDATE_LABEL_CACHE[model_name] = labels
+    return labels
 
 
 def _proposal_context(model_name: str) -> tuple[Path, Path, Path]:
@@ -51,31 +58,26 @@ def _proposal_context(model_name: str) -> tuple[Path, Path, Path]:
 
 
 def run_audit(model_name: str = "main", level: float = 0.0) -> None:
-    pool, _instances, labels = _candidate_context(model_name)
+    # Audit may inspect gold, so force the zero-label fit to exist first even
+    # when this stage is invoked directly or before `aggregation` in run-all.
+    run_aggregation(model_name, level)
+    pool, candidate_instances = _candidate_inputs(model_name)
     rows = apply_noise(all_instances(), level)
     observations = observe(model_name, pool, rows, level)
-    from .common import ARTIFACTS, write_json
-    from .pipeline import technical_filter
-    selected, filter_report = technical_filter(rows, observations)
-    write_json(
-        ARTIFACTS / "reports" / f"{model_name}_noise_{int(level*100):02d}_filter.json",
-        {"selected_slots": selected, "rules": filter_report},
-    )
-    audit_report(model_name, level, observations, labels, selected, rows)
+    labels = _candidate_labels(model_name, pool, candidate_instances)
+    audit_report(model_name, level, observations, labels, instances=rows)
 
 
 def run_aggregation(model_name: str = "main", level: float = 0.0) -> tuple[Path, Path]:
     key = (model_name, level)
     if key in _AGGREGATION_CONTEXT_CACHE:
         return _AGGREGATION_CONTEXT_CACHE[key]
-    pool, _instances, labels = _candidate_context(model_name)
+    pool, candidate_instances = _candidate_inputs(model_name)
     rows = apply_noise(all_instances(), level)
+    # Freeze the zero-label fit before materializing any official labels.
     instances, scores = fit_score(model_name, pool, rows, level)
+    labels = _candidate_labels(model_name, pool, candidate_instances)
     aggregation_report(model_name, level, scores, labels)
-    if model_name == "main" and float(level) == 0.0:
-        fit_temperature_ablation(
-            model_name, pool, rows, level, instances, scores, labels
-        )
     result = (instances, scores)
     _AGGREGATION_CONTEXT_CACHE[key] = result
     return result
@@ -99,8 +101,8 @@ def run_mixed() -> None:
     candidate_pool = generate_pool("main_mixed", ["mixed"], main_stream=False)
     candidate_instances = ARTIFACTS / "inputs" / "main_mixed_candidate_instances.jsonl"
     candidate_labels = ARTIFACTS / "labels" / "main_mixed_candidate_labels.jsonl"
-    evaluate_candidates(candidate_instances, candidate_pool, candidate_labels)
     instances, _scores = fit_score("main_mixed", candidate_pool, rows, 0.0)
+    evaluate_candidates(candidate_instances, candidate_pool, candidate_labels)
     proposal_pool = generate_pool("main_mixed", ["mixed"], main_stream=True)
     proposal_instances = ARTIFACTS / "inputs" / "main_mixed_main_instances.jsonl"
     proposal_labels = ARTIFACTS / "labels" / "main_mixed_main_labels.jsonl"
@@ -121,10 +123,6 @@ def design_candidate_protocol_report(
     """Validate the exact unlabeled calibration/dev candidate design."""
     policy = temperature_policy()
     primary = policy["primary_temperature"]
-    audit_temperatures = [
-        value for value in policy["rule_audit_temperatures"]
-        if abs(value - primary) >= 1e-12
-    ]
 
     def temperature_key(value: Any) -> float:
         return round(float(value), 12)
@@ -135,11 +133,7 @@ def design_candidate_protocol_report(
     for row in rows:
         split = row["split"]
         if split == "calibration":
-            protocols = [
-                (primary, policy["primary_calibration_seeds"]),
-                *[(value, policy["audit_calibration_seeds"])
-                  for value in audit_temperatures],
-            ]
+            protocols = [(primary, policy["primary_calibration_seeds"])]
         elif split == "dev":
             protocols = [(primary, policy["candidate_evaluation_seeds"])]
         else:
@@ -195,7 +189,7 @@ def design_candidate_protocol_report(
         metadata_errors, invalid_returns,
     ])
     return {
-        "protocol": "paper-v5-design-candidates",
+        "protocol": "paper-v6-design-candidates",
         "expected_candidates": len(expected), "actual_candidates": len(candidates),
         "duplicate_instance_ids": duplicate_rows,
         "missing": len(missing), "extra": len(extra),
@@ -281,28 +275,19 @@ def run_design() -> None:
     )
     if not candidate_protocol["passed"]:
         raise RuntimeError(f"design candidate protocol failed: {candidate_protocol}")
-    # The unlabeled gate is evaluated and persisted before the official
-    # evaluator is called.  A failed rule inventory therefore cannot be
-    # repaired after looking at gold outcomes under the same design run.
     observations = observe("main_design", candidate_pool, rows, 0.0)
-    selected, filter_report = technical_filter(rows, observations)
-    write_json(ARTIFACTS / "reports" / "main_design_noise_00_filter.json", {
-        "selected_slots": selected,
-        "rules": filter_report,
-        "selection_temperature": temperature_policy()["primary_temperature"],
-    })
-    enforce_technical_gate(rows, observations, selected)
+    # Fit and persist every zero-label calibration before the official
+    # evaluator is invoked.  This executable ordering prevents gold outcomes
+    # from influencing either the schema or the fit.
+    instances, _scores = fit_score(
+        "main_design", candidate_pool, rows, 0.0,
+        observations_path=observations,
+    )
     evaluate_candidates(candidate_instances, candidate_pool, candidate_labels)
     support = gold_class_support_report(
         rows, candidates, read_jsonl(candidate_labels), minimum_per_class=50,
     )
     write_json(ARTIFACTS / "reports" / "main_design_class_support.json", support)
-    if not support["passed"]:
-        raise RuntimeError(f"gold class-support gate failed: {support}")
-    instances, _scores = fit_score(
-        "main_design", candidate_pool, rows, 0.0,
-        selected_slots=selected, observations_path=observations,
-    )
     proposal_pool = generate_pool("main_design", ["dev"], main_stream=True)
     proposal_instances = ARTIFACTS / "inputs" / "main_design_main_instances.jsonl"
     proposal_labels = ARTIFACTS / "labels" / "main_design_main_labels.jsonl"
@@ -368,6 +353,7 @@ def run_stage(stage: str, _check_preflight: bool = True) -> None:
             run_audit("main", level)
             run_generation("main", level)
     elif stage == "replication":
+        run_audit("replication", max(config["noise_levels"]))
         run_generation("replication", 0.0)
         run_generation("replication", max(config["noise_levels"]))
     elif stage == "mixed":

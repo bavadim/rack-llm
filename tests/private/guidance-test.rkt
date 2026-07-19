@@ -30,20 +30,32 @@
   (test-case "repeat preserves ambiguous parses"
     (define p (compile (repeat 1 2 (choice (lit "a") (lit "ab")))))
     (for ([s '("a" "ab" "aa" "aab" "aba" "abab")]) (check-true (accepts? p s) s)))
-  (test-case "nested weak scopes use structural slots and OR over parses"
+  (test-case "top-level rules use stable schema order"
     (define p
       (compile
-       (repeat 1 2
-               (choice (with-rules (lit "a") (positive (lit "a")))
-                       (with-rules (lit "aa") (negative (lit "aa")))))))
-    (check-equal? (observe-token-ids p (encode "aa")) #(1 -1)))
-  (test-case "weak rules are scoped"
+       (with-rules
+        (choice (lit "a") (lit "aa"))
+        (rule-set "guidance/order@1"
+                  (positive "has-a" (lit "a"))
+                  (negative "has-aa" (lit "aa"))))))
+    (check-equal? (observation-labels (observe-token-ids p (encode "aa"))) #(1 -1)))
+  (test-case "weak rules observe the complete completion"
     (define p
-      (compile (seq (with-rules (choice (lit "a") (lit "ab"))
-                                (positive (ere "b$")) (negative (lit "x")))
-                    (lit "x"))))
-    (check-equal? (observe-token-ids p (encode "abx")) #(1 0))
-    (check-equal? (observe-token-ids p (encode "ax")) #(0 0)))
+      (compile
+       (with-rules
+        (choice (lit "abx") (lit "ax"))
+        (rule-set "guidance/whole@1"
+                  (positive "has-b" (ere "b")) (negative "ends-x" (ere "x$"))))))
+    (check-equal? (observation-labels (observe-token-ids p (encode "abx"))) #(1 -1))
+    (check-equal? (observation-labels (observe-token-ids p (encode "ax"))) #(0 -1)))
+  (test-case "rule sets cannot be nested"
+    (define ruled
+      (with-rules (lit "a")
+                  (rule-set "guidance/top-level@1" (positive "a" (lit "a")))))
+    (check-exn #rx"hard program" (lambda () (seq ruled (lit "x"))))
+    (check-exn #rx"top-level" (lambda () (with-rules ruled
+                                                       (rule-set "guidance/again@1"
+                                                                 (positive "a" (lit "a")))))))
   (test-case "invalid layouts fail at compile"
     (check-exn #rx"tail position" (lambda () (compile (seq (text 2) (lit "x")))))
     (check-exn #rx"text cannot be repeated" (lambda () (compile (repeat 1 2 (text 2)))))

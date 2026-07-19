@@ -48,6 +48,21 @@ make -C experiments power RUN_ID=$DESIGN_RUN
 make -C experiments record-design RUN_ID=$DESIGN_RUN
 ```
 
+Legacy failed `paper-v5` design runs can be evaluated only as an explicit
+retrospective diagnostic, stored under a separate content-addressed `diag-*`
+artifact root:
+
+```bash
+make -C experiments diagnose-failed SOURCE_RUN_ID=$DESIGN_RUN
+```
+
+This command rejects test rows, never writes canonical labels into the source
+run, and marks every result posthoc/non-confirmatory. It reports the historical
+gate blockers separately from retrospective signals; it cannot repair or
+resume the failed run. The current protocol has no technical rule-selection
+gate: every frozen rule is passed to calibration, and an unidentifiable family
+is recorded as a failed calibration cohort without a fallback posterior.
+
 `record-design` stores the dev-derived operating design and supersedes the
 design run. It cannot change the dataset. Commit the resulting config, then
 create the separate confirmatory run:
@@ -79,13 +94,38 @@ bootstrap repetitions. Figure JSONL files contain the same point estimates and
 95% intervals used by the tables; PNG files are rendered only from those
 machine-readable artifacts.
 
-The primary weak model is fitted on 20 fixed `T=1.0` seeds per calibration
-prompt (600 candidates per family), which is also the generation temperature.
-Eight fixed `T=1.0` seeds form each dev/test candidate pool. Eight calibration
-seeds at `T=0.7` are retained for the rule audit and one clean-main-model appendix
-ablation, `mixture_0p7_1p0`. That ablation reuses the rule slots selected by
-the primary fit, scores the identical `T=1.0` dev/test/official candidates,
-and never participates in PWSG, noise runs, or generation.
+Calibration and candidate evaluation both use 20 fixed `T=1.0` seeds per
+prompt (600 candidates per calibration family and 20 per dev/test/OOD task).
+`T=1.0` is also the generation temperature. There is no `T=0.7` fit mixture,
+technical filtering, selected-slot representation, or fit fallback. Ordered
+rule IDs and polarities define a schema identified by dataset revision, family,
+and noise level; concrete parameterized matchers remain instance-specific.
+Observations and saved calibrations carry that schema and fail closed on a
+mismatch.
+
+For each family and base model, the 30 calibration prompts define the
+unlabelled target population used by EM: the model produces 20 hard-only
+strings per prompt, the ten expert rules are applied to those strings, and EM
+sees only the resulting rule matrix. It never receives the official IFBench
+outcome. Dev, committed test, and official OOD prompts are disjoint and are
+used only after that family/model/noise calibration has been frozen.
+
+The primary PWSG policy is frozen explicitly as `good_multiplier=1` and
+`bad_multiplier=0`, so terminal mass equals the learned posterior. Affine
+reweighting with positive bad-class mass is supported by the library but is
+not silently substituted into the primary experiment.
+
+The frozen Qwen calibration strings from run `3783162ba5b7f01a` may be
+imported only through the cache-lineage entry in `config/paper.json`. The
+source manifest, rendered prompts, exact GGUF bytes, tokenizer fingerprint,
+llama.cpp revision, execution profile, clean split hashes, candidate
+identities, and cardinality are verified before import. Imported v2 rows are
+normalized explicitly to the current artifact schema, a new run writes a
+complete lineage artifact, and every weak observation is recomputed. Missing
+dev seeds and all test/OOD/Phi candidates are generated normally.
+Import is additionally restricted to the free-text hard envelope used by
+calibration/dev, so no candidate produced through the pre-fix nontrivial CARS
+prefix path is reused.
 
 ## Runtime resources
 

@@ -1,9 +1,9 @@
 # rack-llm
 
 `rack-llm` is a compact Racket library for exact hard-constrained generation
-and zero-label posterior-weighted selective generation. Its public surface is a
-small DSL, a batched generation call, weak-model fitting, and an extensible
-backend protocol.
+and zero-label posterior-weighted generation. Its public surface is a small
+DSL, EM calibration of noisy rules, one batched generation call, and an
+extensible backend protocol.
 
 The production Racket runtime is intentionally capped at 1500 physical lines.
 `tests/loc-test.rkt` enforces the cap over `main.rkt`, `backend.rkt`,
@@ -43,22 +43,28 @@ make native-llama LLAMA_CPP_DIR="$LLAMA_CPP_DIR"
    #:model-path (getenv "RACK_LLM_GGUF_MODEL")
    #:cohort-width 8 #:context-per-lane 256 #:gpu-layers -1))
 
-(define answer
-  (with-rules
-   (seq (choice (lit " yes") (lit " no")) (repeat 0 1 (lit ".")))
-   (positive (ere "yes"))
-   (negative (ere "no"))))
-(define compiled (compile-spec backend answer))
+(define quality-rules
+  (rule-set
+   "reply-quality@1"
+   (positive "explicit-yes" (ere "(^| )yes([^A-Za-z]|$)"))
+   (positive "clear"        (ere "clear"))
+   (negative "explicit-no"  (ere "(^| )no([^A-Za-z]|$)"))
+   (negative "uncertain"    (ere "(maybe|unknown)"))))
 
-;; A weak model is fitted from label vectors only; official/gold labels are not
-;; accepted by this API.
-(define weak (fit-weak-model calibration-observations #:seed 0))
+;; The strings are unlabelled examples from the target population.  EM learns
+;; rule reliabilities and conflicts; this API cannot accept gold labels.
+(define calibration
+  (fit-calibration quality-rules real-reply-strings #:seed 0))
+(define compiled
+  (compile-spec backend (with-rules (text 32) quality-rules)))
+(define guided
+  (attach-calibration compiled calibration #:good 20.0 #:bad 1.0))
 (define requests
   (for/list ([seed (in-range 8)])
     (generation-request
-     compiled "Reply with yes or no:"
-     #:max-attempts 100 #:max-model-draws 1000 #:weak-model weak
-     #:temperature 0.7 #:max-tokens 3 #:seed seed #:deadline-ms 30000)))
+     guided "Reply clearly:"
+     #:max-attempts 100 #:max-model-draws 1000
+     #:temperature 0.7 #:max-tokens 32 #:seed seed #:deadline-ms 30000)))
 (define results (generate-batch requests))
 (backend-close! backend)
 ```
@@ -73,21 +79,47 @@ The forms are:
 | `(choice p ...)` | Non-empty union. |
 | `(repeat min max p)` | Bounded repetition of a consuming program. |
 | `(text max-tokens)` | Arbitrary tail content up to the token bound. |
-| `(with-rules p rule ...)` | A nestable weak-rule scope. |
-| `(positive (lit/ere ...))` | Positive weak observation. |
-| `(negative (lit/ere ...))` | Negative weak observation. |
+| `(rule-set "schema@version" rule ...)` | Ordered logical rule schema. |
+| `(positive "rule-id" (lit/ere ...))` | Positive noisy observation. |
+| `(negative "rule-id" (lit/ere ...))` | Negative noisy observation. |
+| `(with-rules hard rule-set)` | Attach whole-answer rules to a hard program. |
 
-`observe-token-ids` returns an immutable vector in `{-1,0,+1}` in structural
-rule order. `fit-weak-model` learns a polarity-constrained three-state latent
-model without gold labels. Models are versioned through `save-weak-model` and
-`load-weak-model`; clients persist their own ordered rule identities beside a
-model.
+For fixed rules, `(fit-calibration rules strings)` is the short path. For
+parameterized tasks, compile each task with the same schema ID, ordered rule
+IDs, and polarities; collect schema-bound values with `observe` or
+`observe-token-ids`; then call `(fit-calibration observations)`. Concrete
+literal/ERE parameters may vary between tasks and are deliberately excluded
+from the schema fingerprint. Reordering a rule, changing its polarity, or
+attaching a calibration from another schema fails closed.
+
+The polarity-constrained EM model uses labels in `{-1,0,+1}` and requires no
+gold outcomes. Constant and exact-duplicate columns are projected out
+deterministically. `calibration-diagnostics` reports learned fire-versus-
+abstain log-likelihood weights by stable rule ID and explains every dropped
+column. It is a latent-class conditional-independence model; pairwise
+correlation remains a diagnostic and is not silently modeled as extra
+independent evidence. `save-calibration` and `load-calibration` persist the
+schema, projection, model parameters, diagnostics, and fingerprint in one
+versioned artifact.
+
+A compiled program is hard-only until `attach-calibration` returns a guided
+copy. The optional policy weights good and bad latent classes separately. For
+posterior `r(x)`, CARS receives terminal mass
+
+```text
+(b_good r(x) + b_bad (1-r(x))) / max(b_good, b_bad).
+```
+
+The default `(good=1, bad=0)` is selective posterior weighting; positive bad
+mass, such as `(20,1)`, downweights rather than removes uncertain support.
+Only a hard rule can make a string impossible.
 
 `generate-batch` is the only generation entry point. Requests are independent,
 results preserve input order, and the scheduler partitions them into fixed
 physical cohorts. A backend admits only one active batch. Results expose status,
-reason, output, posterior, latency, attempts, proposed tokens, model draws, and
-CARS trie size. A `found` result is hard-valid by construction; rejected
+reason, output, weak posterior, terminal mass, calibration fingerprint,
+latency, attempts, proposed tokens, model draws, and CARS trie size. A `found`
+result is hard-valid by construction; rejected
 attempts are `attempts - 1` for `found` and `attempts` otherwise. Failure returns
 no fallback candidate.
 
@@ -113,17 +145,19 @@ internals and RNG state remain frontend-owned.
 
 ```text
 main.rkt
-  -> program.rkt + regex.rkt       DSL, continuation VM, weak observations
-  -> weak.rkt                      zero-label posterior
+  -> program.rkt + regex.rkt       hard VM, rule schemas and observations
+  -> weak.rkt                      schema-bound zero-label EM calibration
   -> generate.rkt + cars.rkt       exact CARS and fixed-cohort scheduler
   -> model.rkt / backend.rkt       public provider protocol
   -> model-llama-cpp.rkt           llama.cpp implementation
 ```
 
-Hard CARS targets the temperature-scaled model distribution conditioned on the
-hard language. With terminal posterior `p(x)`, PWSG targets the same hard
-distribution additionally weighted by `p(x)`. There is no top-k mask, scalar
-generation path, or approximate fallback.
+Hard CARS targets the temperature-scaled backend distribution conditioned on
+the hard language. Guided CARS targets that distribution additionally weighted
+by the affine terminal utility above; normalization to mass at most one changes
+only the global partition function. Within one weak-rule signature, the base
+model probability ratios are preserved exactly. There is no prompt steering,
+top-k mask, scalar generation path, or approximate fallback.
 
 The fixed-cohort replay matrix checks that changing neighbouring lanes cannot
 change a replayed lane inside the same CPU or CUDA execution profile:

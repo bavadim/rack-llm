@@ -14,46 +14,27 @@ import numpy as np
 from .common import ARTIFACTS, DATA, EXPERIMENTS, REPO, assert_frozen, atomic_jsonl_command, file_hash, frozen_manifest, issue, jsonl_count, load_config, python_env, read_jsonl, stable_hash, write_json, write_jsonl, write_jsonl_once
 from .evaluator import official_check_many
 from .fuse import FuseModel, fit_fuse, predict_fuse
-from .hard_validation import ere_compiles_many
 from .metrics import (
     classification_metrics, effective_rank, equal_probability, max_coverage,
     majority_probability, operating_metrics, selective_curve,
 )
 
 RACKET_RUNNER = EXPERIMENTS / "racket" / "rack_runner.rkt"
+ARTIFACT_SCHEMA_VERSION = 4
 
 
 def temperature_policy(config: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Return and validate the frozen temperature/weak-model policy."""
+    """Return the single frozen calibration/deployment temperature policy."""
     config = load_config() if config is None else config
     primary = float(config["primary_temperature"])
-    audit = [float(value) for value in config["rule_audit_temperatures"]]
-    variants = config["weak_model_variants"]
-    if primary <= 0 or not audit or any(value <= 0 for value in audit):
-        raise ValueError("temperatures must be positive")
-    if len(audit) != len(set(audit)) or primary not in audit:
-        raise ValueError("rule-audit temperatures must be unique and include primary_temperature")
-    if "primary" not in variants:
-        raise ValueError("weak_model_variants must define primary")
-    normalized = {}
-    for name, raw in variants.items():
-        fit = [float(value) for value in raw["fit_temperatures"]]
-        if not fit or len(fit) != len(set(fit)) or any(value not in audit for value in fit):
-            raise ValueError(f"invalid fit temperatures for weak-model variant {name}")
-        normalized[name] = {
-            "fit_temperatures": fit,
-            "aggregation_only": bool(raw["aggregation_only"]),
-        }
-    if normalized["primary"] != {
-        "fit_temperatures": [primary], "aggregation_only": False,
+    if primary <= 0:
+        raise ValueError("primary_temperature must be positive")
+    if config.get("posterior_policy") != {
+        "good_multiplier": 1.0, "bad_multiplier": 0.0,
     }:
-        raise ValueError("primary weak model must fit only primary_temperature")
-    mixture = normalized.get("mixture_0p7_1p0")
-    if mixture != {"fit_temperatures": audit, "aggregation_only": True}:
-        raise ValueError("mixture_0p7_1p0 must be an aggregation-only fit on all audit temperatures")
+        raise ValueError("primary posterior policy must be frozen to good=1, bad=0")
     seed_groups = {
         "primary_calibration_seeds": list(map(int, config["primary_calibration_seeds"])),
-        "audit_calibration_seeds": list(map(int, config["audit_calibration_seeds"])),
         "candidate_evaluation_seeds": list(map(int, config["candidate_evaluation_seeds"])),
     }
     for name, seeds in seed_groups.items():
@@ -61,17 +42,14 @@ def temperature_policy(config: dict[str, Any] | None = None) -> dict[str, Any]:
             raise ValueError(f"{name} must contain unique non-negative seeds")
     expected_seed_groups = {
         "primary_calibration_seeds": list(range(20)),
-        "audit_calibration_seeds": list(range(8)),
-        "candidate_evaluation_seeds": list(range(8)),
+        "candidate_evaluation_seeds": list(range(20)),
     }
     if seed_groups != expected_seed_groups:
         raise ValueError(
-            "paper-v5 fixes primary/audit/evaluation seeds to 0..19/0..7/0..7"
+            "the paper protocol fixes calibration/evaluation seeds to 0..19/0..19"
         )
     return {
         "primary_temperature": primary,
-        "rule_audit_temperatures": audit,
-        "weak_model_variants": normalized,
         **seed_groups,
     }
 
@@ -82,16 +60,35 @@ def _has_temperature(row: dict[str, Any], temperatures: list[float]) -> bool:
                for expected in temperatures)
 
 
-def _variant_stem(model_name: str, noise: int, variant: str) -> str:
-    if not re.fullmatch(r"[a-z0-9_]+", variant):
-        raise ValueError(f"invalid weak-model variant name: {variant}")
-    base = f"{model_name}_noise_{noise:02d}"
-    return base if variant == "primary" else f"{base}_{variant}"
+def _dataset_revision() -> str:
+    manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
+    revision = str(manifest.get("experiment_revision", ""))
+    if not revision:
+        raise RuntimeError("dataset manifest has no experiment_revision")
+    return revision
 
 
-def _variant_models_dir(model_name: str, noise: int, variant: str) -> Path:
-    base = ARTIFACTS / "weak_models" / model_name / f"noise_{noise:02d}"
-    return base if variant == "primary" else base / "variants" / variant
+def rule_schema_id(family: str, level: float) -> str:
+    """Stable calibration schema identity, independent of concrete matchers."""
+    noise = int(round(float(level) * 100))
+    return f"pwseq-ifbench/{_dataset_revision()}/{family}/noise-{noise:02d}@1"
+
+
+def bind_rule_schemas(
+    rows: list[dict[str, Any]], level: float,
+) -> list[dict[str, Any]]:
+    revision = _dataset_revision()
+    noise = int(round(float(level) * 100))
+    return [{
+        **row,
+        "weak_schema_id": rule_schema_id(str(row["family"]), level),
+        "weak_schema_revision": revision,
+        "weak_schema_noise": noise,
+        "weak_schema_signature": stable_hash([
+            {"rule_id": rule["rule_id"], "polarity": rule["polarity"]}
+            for rule in row["weak_rules"]
+        ]),
+    } for row in rows]
 
 
 def _model_config(model_name: str) -> dict[str, Any]:
@@ -155,7 +152,7 @@ def _run_racket(stage: str, args: list[str], output: Path, expected_rows: int | 
     if devices:
         env["CUDA_VISIBLE_DEVICES"] = str(devices[worker % len(devices)])
     resource_fingerprint = stable_hash({
-        "artifact_schema_version": 2,
+        "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
         "frozen_sources": {
             "files": frozen.get("files", {}),
             "external_files": frozen.get("external_files", {}),
@@ -238,11 +235,12 @@ def _run_racket_sharded(
         prompt_order[row["prompt_id"]],
         int(row.get("seed", -1)),
         int(row.get("sample_index", -1)),
+        int(row.get("checkpoint_budget", -1)),
         str(row.get("record_type", "")),
     ))
     identities = [
         (row.get("prompt_id"), row.get("seed"), row.get("sample_index"),
-         row.get("record_type"))
+         row.get("checkpoint_budget"), row.get("record_type"))
         for row in merged
     ]
     if len(identities) != len(set(identities)):
@@ -266,6 +264,232 @@ def _candidate_id(row: dict[str, Any], model_family: str) -> str:
     })
 
 
+def _candidate_key(row: dict[str, Any]) -> tuple[str, float, int, int]:
+    return (
+        str(row["prompt_id"]), round(float(row["temperature"]), 12),
+        int(row["seed"]), int(row["sample_index"]),
+    )
+
+
+def _import_candidate_cache(
+    model: dict[str, Any], rendered: list[dict[str, Any]],
+    expected: set[tuple[str, float, int, int]], model_name: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Import frozen hard-only strings only after full lineage validation."""
+    config = load_config()
+    specification = config.get("candidate_cache_import")
+    lineage: dict[str, Any] = {
+        "status": "not_configured", "model": model_name,
+        "model_family": model["family"], "imported_rows": 0,
+    }
+    if (
+        not specification
+        or specification.get("model_family") != model["family"]
+        or model_name not in specification.get("eligible_model_names", [])
+    ):
+        return [], lineage
+    source = (
+        EXPERIMENTS / "artifacts" / str(specification["source_run_id"])
+        / str(specification["source_relative_path"])
+    )
+    source_root = source.parents[1]
+    source_manifest_path = source_root / "frozen_manifest.json"
+    source_instances_path = source_root / str(
+        specification["source_instances_relative_path"]
+    )
+    lineage.update({
+        "source_run_id": specification["source_run_id"],
+        "source_path": str(source),
+        "expected_sha256": specification["sha256"],
+        "source_manifest_path": str(source_manifest_path),
+        "source_instances_path": str(source_instances_path),
+    })
+    if not source.is_file():
+        lineage["status"] = "unavailable"
+        return [], lineage
+    for required in (source_manifest_path, source_instances_path):
+        if not required.is_file():
+            raise RuntimeError(f"candidate cache lineage file is missing: {required}")
+
+    def require_hash(path: Path, expected_hash: str, label: str) -> str:
+        actual = file_hash(path)
+        if actual != expected_hash:
+            raise RuntimeError(
+                f"candidate cache {label} hash mismatch: {actual} != {expected_hash}"
+            )
+        return actual
+
+    actual_hash = file_hash(source)
+    if actual_hash != specification["sha256"]:
+        raise RuntimeError(
+            f"candidate cache hash mismatch: {actual_hash} != "
+            f"{specification['sha256']}"
+        )
+    source_manifest_hash = require_hash(
+        source_manifest_path, specification["source_frozen_manifest_sha256"],
+        "frozen manifest",
+    )
+    source_instances_hash = require_hash(
+        source_instances_path, specification["source_instances_sha256"],
+        "rendered instances",
+    )
+    source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    expected_manifest = {
+        "run_id": specification["source_run_id"],
+        "artifact_schema_version": specification["source_manifest_schema_version"],
+        "protocol_version": specification["source_protocol_revision"],
+        "git_revision": specification["source_git_revision"],
+        "llama_cpp_revision": specification["source_llama_cpp_revision"],
+    }
+    manifest_mismatches = {
+        key: {"expected": expected, "actual": source_manifest.get(key)}
+        for key, expected in expected_manifest.items()
+        if source_manifest.get(key) != expected
+    }
+    if manifest_mismatches:
+        raise RuntimeError(
+            f"candidate cache frozen manifest mismatch: {manifest_mismatches}"
+        )
+    if config["native"]["llama_cpp_commit"] != source_manifest["llama_cpp_revision"]:
+        raise RuntimeError("candidate cache llama.cpp revision differs from current run")
+    if config.get("runtime") != specification.get("source_runtime"):
+        raise RuntimeError("candidate cache execution profile differs from current run")
+    source_gguf_path = str(specification["source_gguf_path"])
+    source_gguf_hash = source_manifest.get("external_files", {}).get(source_gguf_path)
+    if source_gguf_hash != specification["source_gguf_sha256"]:
+        raise RuntimeError("candidate cache source GGUF is not bound by frozen manifest")
+    current_gguf_hash = file_hash(Path(model["gguf_path"]))
+    if current_gguf_hash != source_gguf_hash:
+        raise RuntimeError(
+            "candidate cache model mismatch: current GGUF differs from source GGUF"
+        )
+    dataset_files = specification.get("dataset_files", {})
+    actual_dataset_hashes = {
+        name: file_hash(DATA / name) for name in dataset_files
+    }
+    mismatches = {
+        name: {"expected": digest, "actual": actual_dataset_hashes[name]}
+        for name, digest in dataset_files.items()
+        if actual_dataset_hashes[name] != digest
+    }
+    if mismatches:
+        raise RuntimeError(f"candidate cache dataset lineage mismatch: {mismatches}")
+    instances = {str(row["id"]): row for row in rendered}
+    source_instance_rows = read_jsonl(source_instances_path)
+    source_instance_ids = [str(row["id"]) for row in source_instance_rows]
+    if len(source_instance_ids) != len(set(source_instance_ids)):
+        raise RuntimeError("candidate cache rendered instances contain duplicate IDs")
+    source_instances = {
+        str(row["id"]): row for row in source_instance_rows
+    }
+    source_rows = read_jsonl(source)
+    tokenizer_fingerprints = {
+        str(row.get("tokenizer_fingerprint", "")) for row in source_rows
+    }
+    if tokenizer_fingerprints != {specification["tokenizer_fingerprint"]}:
+        raise RuntimeError(
+            "candidate cache tokenizer fingerprint is missing or not unique: "
+            f"{sorted(tokenizer_fingerprints)}"
+        )
+    source_candidate_versions = sorted({
+        int(row.get("artifact_schema_version", -1)) for row in source_rows
+    })
+    if source_candidate_versions != [int(specification["source_candidate_schema_version"])]:
+        raise RuntimeError(
+            "candidate cache artifact schema mismatch: "
+            f"{source_candidate_versions}"
+        )
+    runtime_fingerprints = sorted({
+        str(row.get("runtime_fingerprint", "")) for row in source_rows
+    })
+    if len(runtime_fingerprints) != 1 or not runtime_fingerprints[0]:
+        raise RuntimeError("candidate cache runtime fingerprint is missing or not unique")
+    imported: list[dict[str, Any]] = []
+    seen: set[tuple[str, float, int, int]] = set()
+    matched_prompt_ids: set[str] = set()
+    allowed_splits = set(map(str, specification["allowed_splits"]))
+    for row in source_rows:
+        key = _candidate_key(row)
+        if key not in expected or str(row.get("split")) not in allowed_splits:
+            continue
+        instance = instances.get(key[0])
+        if instance is None:
+            continue
+        source_instance = source_instances.get(key[0])
+        if source_instance is None:
+            raise RuntimeError(
+                f"candidate cache has no rendered source instance for {key[0]}"
+            )
+        if key in seen:
+            raise RuntimeError(f"duplicate imported candidate key: {key}")
+        prompt_fields = ("model_prompt", "hard_spec", "max_tokens")
+        prompt_mismatches = {
+            field: {
+                "source": source_instance.get(field), "current": instance.get(field),
+            }
+            for field in prompt_fields
+            if source_instance.get(field) != instance.get(field)
+        }
+        if prompt_mismatches:
+            raise RuntimeError(
+                f"candidate cache prompt mismatch for {key[0]}: {prompt_mismatches}"
+            )
+        if source_instance.get("hard_spec", {}).get("kind") != "text":
+            raise RuntimeError(
+                "candidate cache import is restricted to free-text hard envelopes"
+            )
+        if (
+            row.get("model_family") != model["family"]
+            or row.get("family") != instance["family"]
+            or row.get("split") != instance["split"]
+            or source_instance.get("model_family") != model["family"]
+            or source_instance.get("family") != instance["family"]
+            or source_instance.get("split") != instance["split"]
+            or row.get("status") != "found"
+            or row.get("hard_valid") is not True
+            or row.get("candidate_id") != _candidate_id(row, model["family"])
+        ):
+            raise RuntimeError(f"invalid imported candidate metadata: {key}")
+        seen.add(key)
+        matched_prompt_ids.add(key[0])
+        imported.append({
+            **row, "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+            "terminal_mass": False, "calibration_fingerprint": False,
+        })
+    lineage.update({
+        "status": "imported", "source_sha256": actual_hash,
+        "source_rows": len(source_rows), "imported_rows": len(imported),
+        "imported_keys_sha256": stable_hash(sorted(seen)),
+        "imported_prompt_ids_sha256": stable_hash(sorted(matched_prompt_ids)),
+        "imported_prompt_contract_sha256": stable_hash([
+            {
+                "id": prompt_id,
+                "model_prompt": source_instances[prompt_id]["model_prompt"],
+                "hard_spec": source_instances[prompt_id]["hard_spec"],
+                "max_tokens": source_instances[prompt_id]["max_tokens"],
+            }
+            for prompt_id in sorted(matched_prompt_ids)
+        ]),
+        "dataset_files": dataset_files,
+        "source_frozen_manifest_sha256": source_manifest_hash,
+        "source_manifest": expected_manifest,
+        "source_rendered_instances_sha256": source_instances_hash,
+        "source_gguf_sha256": source_gguf_hash,
+        "current_gguf_sha256": current_gguf_hash,
+        "tokenizer_fingerprint": next(iter(tokenizer_fingerprints)),
+        "source_runtime_fingerprint": runtime_fingerprints[0],
+        "source_runtime": specification["source_runtime"],
+        "source_candidate_artifact_schema_versions": source_candidate_versions,
+        "normalized_artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "normalized_fields": {
+            "terminal_mass": False, "calibration_fingerprint": False,
+        },
+        "allowed_splits": sorted(allowed_splits),
+        "hard_envelope": "text-only",
+    })
+    return imported, lineage
+
+
 def generate_pool(model_name: str, splits: list[str], *, main_stream: bool = False) -> Path:
     assert_frozen()
     config = load_config()
@@ -286,10 +510,9 @@ def generate_pool(model_name: str, splits: list[str], *, main_stream: bool = Fal
             max(_budgets(model_name)), None,
         )]
     else:
-        # The primary weak model gets 600 T=1.0 calibration candidates per
-        # family.  Candidate-level dev/test evaluation remains an independent
-        # fixed eight-seed pool; the T=0.7 stream is calibration-only audit
-        # data and never changes the primary fit.
+        # Calibration and deployment use one frozen distribution (T=1.0).
+        # Candidate-level dev/test evaluation remains an independent fixed
+        # twenty-seed pool.
         protocols = [
             (
                 policy["primary_temperature"],
@@ -300,47 +523,99 @@ def generate_pool(model_name: str, splits: list[str], *, main_stream: bool = Fal
                 policy["candidate_evaluation_seeds"], 1,
                 {split for split in splits if split != "calibration"},
             ),
-            *[
-                (
-                    value, policy["audit_calibration_seeds"], 1,
-                    {"calibration"},
-                )
-                for value in policy["rule_audit_temperatures"]
-                if value != policy["primary_temperature"]
-            ],
         ]
-    for index, (temperature, seeds, samples, allowed_splits) in enumerate(protocols):
+    expected_keys = {
+        (str(row["id"]), round(float(protocol_temperature), 12), int(seed), sample)
+        for protocol_temperature, protocol_seeds, samples, allowed_splits in protocols
+        for row in rendered
+        if allowed_splits is None or row["split"] in allowed_splits
+        for seed in protocol_seeds
+        for sample in range(samples)
+    }
+    imported: list[dict[str, Any]] = []
+    lineage = {
+        "status": "not_applicable", "model": model_name,
+        "model_family": model["family"], "imported_rows": 0,
+    }
+    if not main_stream:
+        imported, lineage = _import_candidate_cache(
+            model, rendered, expected_keys, model_name
+        )
+    imported_keys = {_candidate_key(row) for row in imported}
+    piece_index = 0
+    for protocol_index, (temperature, seeds, samples, allowed_splits) in enumerate(protocols):
         protocol_rows = [row for row in rendered if allowed_splits is None or row["split"] in allowed_splits]
         if not protocol_rows:
             continue
-        protocol_input = input_path
-        if allowed_splits is not None:
-            protocol_input = ARTIFACTS / "inputs" / f"{model_name}_candidate_{index}_instances.jsonl"
+        missing_groups: dict[tuple[int, ...], list[dict[str, Any]]] = defaultdict(list)
+        for row in protocol_rows:
+            missing = tuple(
+                int(seed) for seed in seeds
+                if any(
+                    (str(row["id"]), round(float(temperature), 12), int(seed), sample)
+                    not in imported_keys
+                    for sample in range(samples)
+                )
+            )
+            if missing:
+                missing_groups[missing].append(row)
+        for missing_seeds, missing_rows in sorted(missing_groups.items()):
+            protocol_input = (
+                input_path if allowed_splits is None and len(missing_groups) == 1
+                else ARTIFACTS / "inputs"
+                / f"{model_name}_candidate_{protocol_index}_{piece_index}_instances.jsonl"
+            )
             write_jsonl(protocol_input, protocol_rows)
-        output = ARTIFACTS / "raw" / f"{model_name}_{'main' if main_stream else 'candidate'}_{index}.jsonl"
-        expected = len(protocol_rows) * len(seeds) * samples
-        _run_racket_sharded(
-            f"generate.{model_name}.{index}",
-            [
-                "--mode", "candidates", "--input", str(protocol_input), "--output", str(output),
-                "--model", model["gguf_path"], "--temperature", str(temperature),
-                "--seeds", ",".join(map(str, seeds)), "--samples-per-seed", str(samples),
-                "--max-attempts", str(config["hard_max_attempts"]),
-                "--deadline-ms", str(config["hard_deadline_ms"]),
-            ], output, records_per_input=len(seeds) * samples,
-        )
-        pieces.append(output)
-    merged = []
+            if missing_rows != protocol_rows:
+                write_jsonl(protocol_input, missing_rows)
+            output = (
+                ARTIFACTS / "raw"
+                / f"{model_name}_{'main' if main_stream else 'candidate'}_{piece_index}.jsonl"
+            )
+            _run_racket_sharded(
+                f"generate.{model_name}.{piece_index}",
+                [
+                    "--mode", "candidates", "--input", str(protocol_input),
+                    "--output", str(output), "--model", model["gguf_path"],
+                    "--temperature", str(temperature),
+                    "--seeds", ",".join(map(str, missing_seeds)),
+                    "--samples-per-seed", str(samples),
+                    "--max-attempts", str(config["hard_max_attempts"]),
+                    "--deadline-ms", str(config["hard_deadline_ms"]),
+                ], output, records_per_input=len(missing_seeds) * samples,
+            )
+            pieces.append(output)
+            piece_index += 1
+    merged = list(imported)
     for piece in pieces:
         for row in read_jsonl(piece):
             row["model_family"] = model["family"]
             row["candidate_id"] = _candidate_id(row, model["family"])
             merged.append(row)
+    prompt_order = {str(row["id"]): index for index, row in enumerate(rendered)}
+    merged.sort(key=lambda row: (
+        prompt_order[str(row["prompt_id"])], round(float(row["temperature"]), 12),
+        int(row["seed"]), int(row["sample_index"]),
+    ))
     destination = ARTIFACTS / "raw" / f"{model_name}_{'main' if main_stream else 'candidate'}_pool.jsonl"
     write_jsonl(destination, merged)
-    expected_merged = sum(jsonl_count(piece) for piece in pieces)
-    if len(merged) != expected_merged:
-        raise RuntimeError("candidate merge cardinality mismatch")
+    actual_keys = [_candidate_key(row) for row in merged]
+    if len(actual_keys) != len(set(actual_keys)) or set(actual_keys) != expected_keys:
+        raise RuntimeError(
+            "candidate merge protocol mismatch: "
+            f"rows={len(actual_keys)} unique={len(set(actual_keys))} "
+            f"expected={len(expected_keys)}"
+        )
+    lineage.update({
+        "generated_rows": sum(jsonl_count(piece) for piece in pieces),
+        "destination_rows": len(merged),
+        "destination_sha256": file_hash(destination),
+    })
+    write_json(
+        ARTIFACTS / "reports"
+        / f"{model_name}_{'main' if main_stream else 'candidate'}_cache_lineage.json",
+        lineage,
+    )
     return destination
 
 
@@ -393,7 +668,7 @@ def apply_noise(rows: list[dict[str, Any]], level: float) -> list[dict[str, Any]
                 "noise_type": change["noise_type"],
             }
         output.append({**row, "weak_rules": rules})
-    return output
+    return bind_rule_schemas(output, level)
 
 
 def observe(
@@ -408,7 +683,8 @@ def observe(
     stem = f"{model_name}_noise_{int(level*100):02d}_{stream}"
     input_path = ARTIFACTS / "inputs" / f"{stem}.jsonl"
     output_path = ARTIFACTS / "observations" / f"{stem}.jsonl"
-    write_jsonl(input_path, rows)
+    schema_rows = bind_rule_schemas(rows, level)
+    write_jsonl(input_path, schema_rows)
     _run_racket(
         f"observe.{model_name}.{level}.{stream}",
         [
@@ -425,222 +701,42 @@ def observe(
     return output_path
 
 
-def filter_observations(
-    observations_path: Path,
-    selected: dict[str, list[int]],
-    output_path: Path,
-) -> Path:
-    filtered = []
-    for row in read_jsonl(observations_path):
-        if row.get("record_type") != "observation":
-            filtered.append(row)
-            continue
-        slots = selected[row["family"]]
-        labels = row["labels"]
-        filtered.append({
-            **row,
-            "labels": [labels[slot] for slot in slots],
-            "selected_source_slots": slots,
-            "rule_ids": [row["rule_ids"][slot] for slot in slots],
-        })
-    write_jsonl(output_path, filtered)
-    if jsonl_count(output_path) != jsonl_count(observations_path):
-        raise RuntimeError("filtered observation cardinality mismatch")
-    return output_path
-
-
-def primary_observation_cohort_report(
-    rows: list[dict[str, Any]], observations: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Check the exact prompt x seed cohort used by the unlabeled rule gate."""
-    policy = temperature_policy()
-    primary_temperature = policy["primary_temperature"]
-    primary_seeds = policy["primary_calibration_seeds"]
-    calibration = {
-        row["id"]: row for row in rows if row["split"] == "calibration"
-    }
-    expected: dict[str, set[tuple[str, int, int]]] = defaultdict(set)
-    for prompt_id, row in calibration.items():
-        for seed in primary_seeds:
-            expected[row["family"]].add((prompt_id, seed, 0))
-    actual: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
-    for row in observations:
-        if (
-            row.get("record_type") == "observation"
-            and row.get("split") == "calibration"
-            and _has_temperature(row, [primary_temperature])
-        ):
-            actual[str(row.get("family"))].append((
-                str(row.get("prompt_id")), int(row.get("seed", -1)),
-                int(row.get("sample_index", -1)),
-            ))
-    families = sorted(set(expected) | set(actual))
-    details = []
-    for family in families:
-        expected_keys = expected.get(family, set())
-        actual_keys = actual.get(family, [])
-        actual_set = set(actual_keys)
-        missing = sorted(expected_keys - actual_set)
-        extra = sorted(actual_set - expected_keys)
-        duplicates = len(actual_keys) - len(actual_set)
-        details.append({
-            "family": family,
-            "expected": len(expected_keys),
-            "observed": len(actual_keys),
-            "missing": len(missing),
-            "extra": len(extra),
-            "duplicates": duplicates,
-            "missing_examples": [list(value) for value in missing[:5]],
-            "extra_examples": [list(value) for value in extra[:5]],
-            "passed": not missing and not extra and duplicates == 0,
-        })
-    return {
-        "source_split": "calibration",
-        "temperature": primary_temperature,
-        "seeds": primary_seeds,
-        "families": details,
-        "passed": bool(details) and all(row["passed"] for row in details),
-    }
-
-
-def technical_filter(rows: list[dict[str, Any]], observations_path: Path) -> tuple[dict[str, list[int]], list[dict[str, Any]]]:
-    primary_temperature = temperature_policy()["primary_temperature"]
-    all_observations = read_jsonl(observations_path)
-    observations = [
-        row for row in all_observations
-        if row.get("record_type") == "observation" and row["split"] == "calibration"
-        and _has_temperature(row, [primary_temperature])
-    ]
-    cohort = primary_observation_cohort_report(rows, all_observations)
-    cohort_by_family = {row["family"]: row for row in cohort["families"]}
-    by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in observations:
-        by_family[row["family"]].append(row)
-    rows_by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        rows_by_family[row["family"]].append(row)
-    compile_keys = sorted({
-        (family, rule["slot"], rule["pattern"])
-        for family, instances in rows_by_family.items()
-        for instance in instances
-        for rule in instance["weak_rules"]
-    })
-    compile_status = dict(zip(
-        compile_keys,
-        ere_compiles_many([key[2] for key in compile_keys]),
-        strict=True,
-    ))
-    selected: dict[str, list[int]] = {}
-    report = []
-    for family in sorted(rows_by_family):
-        family_obs = by_family[family]
-        rule_count = len(rows_by_family[family][0]["weak_rules"])
-        matrix = np.asarray([row["labels"] for row in family_obs], dtype=int)
-        if not len(family_obs):
-            matrix = np.empty((0, rule_count), dtype=int)
-        elif matrix.ndim != 2 or matrix.shape[1] != rule_count:
-            raise RuntimeError(f"invalid observation width for {family}")
-        keep = []
-        vectors: dict[int, np.ndarray] = {}
-        family_cohort = cohort_by_family.get(family, {
-            "expected": 0, "observed": len(family_obs), "passed": False,
-        })
-        expected_candidates = int(family_cohort["expected"])
-        minimum_fires = math.ceil(0.04 * expected_candidates)
-        for slot in range(rule_count):
-            invalid = any(
-                not compile_status[(family, slot, instance["weak_rules"][slot]["pattern"])]
-                for instance in rows_by_family[family]
+def _schema_inventory(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    inventory: dict[str, dict[str, Any]] = {}
+    for family in sorted({str(row["family"]) for row in rows}):
+        family_rows = [row for row in rows if str(row["family"]) == family]
+        schema_ids = {str(row["weak_schema_id"]) for row in family_rows}
+        signatures = {str(row["weak_schema_signature"]) for row in family_rows}
+        if len(schema_ids) != 1 or len(signatures) != 1:
+            raise RuntimeError(
+                f"family {family} does not have one stable rule schema: "
+                f"ids={sorted(schema_ids)} signatures={sorted(signatures)}"
             )
-            fires = matrix[:, slot] != 0
-            coverage = (
-                float(fires.sum()) / expected_candidates
-                if expected_candidates else 0.0
-            )
-            reason = None
-            if invalid:
-                reason = "invalid_ere"
-            elif fires.sum() < minimum_fires:
-                reason = "fewer_than_4pct_fires"
-            elif coverage < .01:
-                reason = "coverage_below_1pct"
-            elif coverage > .90:
-                reason = "coverage_above_90pct"
-            else:
-                for prior in keep:
-                    union = np.logical_or(fires, vectors[prior]).sum()
-                    jaccard = np.logical_and(fires, vectors[prior]).sum() / union if union else 1.0
-                    if jaccard >= .95:
-                        reason = f"jaccard_duplicate_of_{prior}"
-                        break
-            if reason is None:
-                keep.append(slot)
-                vectors[slot] = fires
-            report.append({
-                "family": family, "slot": slot, "coverage": coverage,
-                "fires": int(fires.sum()), "minimum_fires": minimum_fires,
-                "calibration_candidates": expected_candidates,
-                "observed_candidates": len(family_obs),
-                "cohort_passed": bool(family_cohort["passed"]),
-                "kept": reason is None, "reason": reason,
-            })
-        selected[family] = keep
-    return selected, report
+        inventory[family] = {
+            "schema_id": next(iter(schema_ids)),
+            "schema_signature": next(iter(signatures)),
+            "rule_ids": [rule["rule_id"] for rule in family_rows[0]["weak_rules"]],
+            "polarities": [rule["polarity"] for rule in family_rows[0]["weak_rules"]],
+        }
+    return inventory
 
 
-def filtered_instances(rows: list[dict[str, Any]], selected: dict[str, list[int]]) -> list[dict[str, Any]]:
+def _score_rows_with_explicit_calibration_status(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     output = []
-    for row in rows:
-        rules = []
-        for new_slot, old_slot in enumerate(selected[row["family"]]):
-            rules.append({**row["weak_rules"][old_slot], "slot": new_slot})
-        output.append({**row, "weak_rules": rules})
-    return output
-
-
-def enforce_technical_gate(
-    rows: list[dict[str, Any]], observations_path: Path, selected: dict[str, list[int]],
-) -> None:
-    primary_temperature = temperature_policy()["primary_temperature"]
-    example = {row["family"]: row for row in rows if row["split"] == "calibration"}
-    all_observations = read_jsonl(observations_path)
-    cohort = primary_observation_cohort_report(rows, all_observations)
-    cohort_by_family = {row["family"]: row for row in cohort["families"]}
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in all_observations:
-        if (row.get("record_type") == "observation" and row["split"] == "calibration"
-                and _has_temperature(row, [primary_temperature])):
-            grouped[row["family"]].append(row)
-    failures = []
-    for family in sorted(set(example) | set(selected) | set(cohort_by_family)):
-        slots = selected.get(family, [])
-        if family not in example:
-            failures.append({"family": family, "reason": "unexpected_family"})
-            continue
-        polarities = [example[family]["weak_rules"][slot]["polarity"] for slot in slots]
-        labels_have_slots = all(
-            all(slot < len(row.get("labels", [])) for slot in slots)
-            for row in grouped[family]
-        )
-        matrix = np.asarray([
-            [row["labels"][slot] for slot in slots] for row in grouped[family]
-        ]) if labels_have_slots else np.empty((0, len(slots)), dtype=int)
-        conflict = bool(len(matrix) and np.logical_and(
-            (matrix > 0).any(axis=1), (matrix < 0).any(axis=1)
-        ).any())
-        cohort_status = cohort_by_family.get(family, {"passed": False})
-        if (
-            not cohort_status["passed"] or not labels_have_slots
-            or len(slots) < 5 or polarities.count("positive") < 2
-            or polarities.count("negative") < 1 or not conflict
-        ):
-            failures.append({
-                "family": family, "slots": slots, "polarities": polarities,
-                "conflict": conflict, "observation_width_valid": labels_have_slots,
-                "cohort": cohort_status,
+    for row in records:
+        if row.get("record_type") == "score":
+            output.append({**row, "calibration_status": "OK"})
+        elif row.get("record_type") == "score_error" and row.get("candidate_id"):
+            output.append({
+                **row, "record_type": "score", "posterior": None,
+                "calibration_status": "ERROR",
+                "calibration_error": row.get("message", "calibration unavailable"),
             })
-    if failures:
-        raise RuntimeError(f"unlabeled technical rule gate failed: {failures}")
+        else:
+            output.append(row)
+    return output
 
 
 def fit_score(
@@ -649,66 +745,61 @@ def fit_score(
     rows: list[dict[str, Any]],
     level: float,
     *,
-    variant: str = "primary",
-    selected_slots: dict[str, list[int]] | None = None,
     observations_path: Path | None = None,
 ) -> tuple[Path, Path]:
     model = _model_config(model_name)
     policy = temperature_policy()
-    if variant not in policy["weak_model_variants"]:
-        raise ValueError(f"unknown weak-model variant: {variant}")
-    variant_config = policy["weak_model_variants"][variant]
-    fit_temperatures = variant_config["fit_temperatures"]
+    fit_temperatures = [policy["primary_temperature"]]
     noise = int(level * 100)
-    stem = _variant_stem(model_name, noise, variant)
-    observed = observations_path or observe(model_name, candidates, rows, level)
-    if variant == "primary":
-        if selected_slots is None:
-            selected, filter_report = technical_filter(rows, observed)
-            write_json(ARTIFACTS / "reports" / f"{model_name}_noise_{noise:02d}_filter.json", {
-                "selected_slots": selected, "rules": filter_report,
-                "selection_temperature": policy["primary_temperature"],
-            })
-        else:
-            selected = selected_slots
-        enforce_technical_gate(rows, observed, selected)
-    else:
-        if not variant_config["aggregation_only"]:
-            raise ValueError("non-primary weak-model variants must be aggregation-only")
-        if selected_slots is None or observations_path is None:
-            raise ValueError(
-                "aggregation-only variants require primary-selected slots and observations"
-            )
-        selected = selected_slots
-    filtered = filtered_instances(rows, selected)
-    input_path = ARTIFACTS / "inputs" / f"{stem}_filtered.jsonl"
+    stem = f"{model_name}_noise_{noise:02d}"
+    schema_rows = bind_rule_schemas(rows, level)
+    schemas = _schema_inventory(schema_rows)
+    observed = observations_path or observe(
+        model_name, candidates, schema_rows, level
+    )
+    input_path = ARTIFACTS / "inputs" / f"{stem}_instances.jsonl"
     output_path = ARTIFACTS / "scores" / f"{stem}.jsonl"
     raw_output_path = ARTIFACTS / "scores" / f"{stem}_raw.jsonl"
-    models = _variant_models_dir(model_name, noise, variant)
-    write_jsonl(input_path, filtered)
-    filtered_observations = filter_observations(
-        observed, selected,
-        ARTIFACTS / "observations" / f"{stem}_candidate_filtered.jsonl",
-    )
+    calibrations = ARTIFACTS / "calibrations" / model_name / f"noise_{noise:02d}"
+    write_jsonl(input_path, schema_rows)
     _run_racket(
-        f"fit_score.{model_name}.{level}.{variant}",
+        f"fit_score.{model_name}.{level}",
         [
             "--mode", "fit-score", "--input", str(input_path),
-            "--candidates", str(filtered_observations),
-            "--output", str(raw_output_path), "--models-dir", str(models),
-            "--fit-temperatures", ",".join(map(str, fit_temperatures)),
-            "--fit-variant", variant,
+            "--candidates", str(observed),
+            "--output", str(raw_output_path), "--calibrations-dir", str(calibrations),
         ], raw_output_path,
     )
     scored = read_jsonl(raw_output_path)
     failures = [row for row in scored if row.get("record_type") == "fit_error"]
-    if failures:
-        raise RuntimeError(f"weak-model fitting failed: {failures}")
+    failure_by_family = {str(row["family"]): row for row in failures}
+    successful_families = {
+        str(row["family"]) for row in scored if row.get("record_type") == "fit"
+    }
+    missing_families = sorted(set(schemas) - successful_families - set(failure_by_family))
+    for family in missing_families:
+        failure_by_family[family] = {
+            "record_type": "fit_error", "family": family,
+            "error": "runner returned neither fit nor fit_error",
+        }
+    for family, failure in sorted(failure_by_family.items()):
+        message = str(
+            failure.get("error", failure.get("message", "calibration fit failed"))
+        )
+        issue(
+            "calibration.fit", RuntimeError(message),
+            model=model_name, noise=level, family=family,
+            schema_id=schemas.get(family, {}).get("schema_id"),
+        )
     expected_scores = sum(
         row.get("status") == "found" and bool(row.get("hard_valid"))
         for row in read_jsonl(candidates)
     )
-    actual_scores = sum(row.get("record_type") == "score" for row in scored)
+    actual_scores = sum(
+        row.get("record_type") in {"score", "score_error"}
+        and bool(row.get("candidate_id"))
+        for row in scored
+    )
     if actual_scores != expected_scores:
         raise RuntimeError(
             f"fit-score produced {actual_scores} scores; expected {expected_scores}"
@@ -718,7 +809,7 @@ def fit_score(
         [
             {
                 "model": model_name, "noise": level, "family": row["family"],
-                "variant": variant, "fit_temperatures": fit_temperatures,
+                "fit_temperatures": fit_temperatures,
                 "fit_training_rows": row["fit_training_rows"],
                 **row["diagnostics"],
             }
@@ -739,107 +830,121 @@ def fit_score(
             "sample_index": row["sample_index"],
             "labels": row["labels"],
             "rule_ids": row["rule_ids"],
+            "schema_id": row.get("schema_id", row.get("weak_schema_id")),
         }
-        for row in read_jsonl(filtered_observations)
+        for row in read_jsonl(observed)
         if row.get("record_type") == "observation"
         and row["split"] == "calibration"
         and _has_temperature(row, fit_temperatures)
     ]
     training_rows_by_family = {
         family: sum(row["family"] == family for row in training_rows)
-        for family in sorted(selected)
+        for family in sorted(schemas)
+    }
+    cohort_status = {
+        family: {
+            "status": "OK" if family in successful_families else "ERROR",
+            "schema_id": schemas[family]["schema_id"],
+            "fit_training_rows": training_rows_by_family[family],
+            **({} if family in successful_families else {
+                "error": failure_by_family[family].get(
+                    "error", failure_by_family[family].get("message", "fit failed")
+                ),
+            }),
+        }
+        for family in sorted(schemas)
     }
     manifest = {
+        "artifact_schema_version": 4,
+        "dataset_revision": _dataset_revision(),
         "model_name": model_name,
         "base_model_family": model["family"],
         "noise_level": level,
-        "variant": variant,
-        "aggregation_only": variant_config["aggregation_only"],
         "fit_temperatures": fit_temperatures,
         "fit_training_rows": len(training_rows),
         "fit_training_rows_by_family": training_rows_by_family,
         "fit_observations_sha256": stable_hash(training_rows),
-        "selected_source_slots": selected,
-        "selected_source_slots_sha256": stable_hash(selected),
+        "rule_schemas": schemas,
+        "cohorts": cohort_status,
         "tokenizer_fingerprints": tokenizer_fingerprints,
-        "filtered_instances_sha256": file_hash(input_path),
-        "scored_observations_sha256": file_hash(filtered_observations),
+        "instances_sha256": file_hash(input_path),
+        "scored_observations_sha256": file_hash(observed),
         "candidate_pool_sha256": file_hash(candidates),
-        "weak_model_fingerprints": {
-            row["family"]: row["weak_model_fingerprint"]
+        "calibration_fingerprints": {
+            row["family"]: row["calibration_fingerprint"]
             for row in scored if row.get("record_type") == "fit"
         },
     }
-    if any(count == 0 for count in training_rows_by_family.values()):
-        raise RuntimeError(f"variant {variant} has a family with no fit observations")
     runner_counts = {
         row["family"]: int(row["fit_training_rows"])
         for row in scored if row.get("record_type") == "fit"
     }
-    if runner_counts != training_rows_by_family:
+    expected_runner_counts = {
+        family: training_rows_by_family[family] for family in successful_families
+    }
+    if runner_counts != expected_runner_counts:
         raise RuntimeError(
             f"runner fit counts do not match manifest: {runner_counts} != "
-            f"{training_rows_by_family}"
+            f"{expected_runner_counts}"
         )
-    write_json(models / "manifest.json", manifest)
+    write_json(calibrations / "manifest.json", manifest)
+    scored = _score_rows_with_explicit_calibration_status(scored)
     score_rows = [row for row in scored if row.get("record_type") == "score"]
-    if variant == "primary":
-        fuse_models: dict[str, Any] = {}
-        for family in sorted({row["family"] for row in score_rows}):
-            train = [
-                row["labels"] for row in score_rows
-                if row["family"] == family and row["split"] == "calibration"
-                and _has_temperature(row, fit_temperatures)
-            ]
-            fuse_model = fit_fuse(train)
-            fuse_models[family] = fuse_model.to_dict()
-            family_rows = [row for row in score_rows if row["family"] == family]
-            if fuse_model.status == "OK":
-                predictions = predict_fuse(fuse_model, [row["labels"] for row in family_rows])
-                for row, probability in zip(family_rows, predictions, strict=True):
-                    row["fuse_posterior"] = float(probability)
-                    row["fuse_status"] = "OK"
-            else:
-                for row in family_rows:
-                    row["fuse_posterior"] = None
-                    row["fuse_status"] = "BLOCKED"
-                    row["fuse_reason"] = fuse_model.reason
-        write_json(models / "fuse_models.json", {
-            "provenance": "fuse_style_zero_label_reimplementation",
-            "official_implementation": False,
-            "fit_temperatures": fit_temperatures,
-            "families": fuse_models,
-        })
+    fuse_models: dict[str, Any] = {}
+    for family in sorted(schemas):
+        train = [
+            row["labels"] for row in score_rows
+            if row["family"] == family and row["split"] == "calibration"
+            and _has_temperature(row, fit_temperatures)
+        ]
+        fuse_model = fit_fuse(train)
+        fuse_models[family] = fuse_model.to_dict()
+        family_rows = [row for row in score_rows if row["family"] == family]
+        if fuse_model.status == "OK":
+            predictions = predict_fuse(fuse_model, [row["labels"] for row in family_rows])
+            for row, probability in zip(family_rows, predictions, strict=True):
+                row["fuse_posterior"] = float(probability)
+                row["fuse_status"] = "OK"
+        else:
+            for row in family_rows:
+                row["fuse_posterior"] = None
+                row["fuse_status"] = "BLOCKED"
+                row["fuse_reason"] = fuse_model.reason
+    write_json(calibrations / "fuse_models.json", {
+        "provenance": "fuse_style_zero_label_reimplementation",
+        "official_implementation": False,
+        "fit_temperatures": fit_temperatures,
+        "families": fuse_models,
+    })
     write_jsonl(output_path, scored)
     return input_path, output_path
 
 
-def validate_model_manifest(
-    models: Path,
+def validate_calibration_manifest(
+    calibrations: Path,
     *,
     model_name: str,
     level: float,
     instances_path: Path,
-    variant: str = "primary",
 ) -> dict[str, Any]:
-    path = models / "manifest.json"
+    path = calibrations / "manifest.json"
     if not path.exists():
-        raise RuntimeError(f"missing weak model manifest: {path}")
+        raise RuntimeError(f"missing calibration manifest: {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
     expected_family = _model_config(model_name)["family"]
     if payload.get("model_name") != model_name:
-        raise RuntimeError("weak model manifest model-name mismatch")
+        raise RuntimeError("calibration manifest model-name mismatch")
     if payload.get("base_model_family") != expected_family:
-        raise RuntimeError("weak model manifest base-family mismatch")
+        raise RuntimeError("calibration manifest base-family mismatch")
     if float(payload.get("noise_level")) != float(level):
-        raise RuntimeError("weak model manifest noise-level mismatch")
-    if payload.get("variant") != variant:
-        raise RuntimeError("weak model manifest variant mismatch")
-    expected_fit_temperatures = temperature_policy()["weak_model_variants"][variant]["fit_temperatures"]
+        raise RuntimeError("calibration manifest noise-level mismatch")
+    expected_fit_temperatures = [temperature_policy()["primary_temperature"]]
     if payload.get("fit_temperatures") != expected_fit_temperatures:
-        raise RuntimeError("weak model manifest fit-temperature mismatch")
-    if payload.get("filtered_instances_sha256") != file_hash(instances_path):
-        raise RuntimeError("weak model manifest filtered-instance mismatch")
+        raise RuntimeError("calibration manifest fit-temperature mismatch")
+    if payload.get("dataset_revision") != _dataset_revision():
+        raise RuntimeError("calibration manifest dataset-revision mismatch")
+    if payload.get("instances_sha256") != file_hash(instances_path):
+        raise RuntimeError("calibration manifest instance mismatch")
     return payload
 
 
@@ -848,7 +953,6 @@ def audit_report(
     level: float,
     observations_path: Path,
     labels_path: Path,
-    selected: dict[str, list[int]] | None = None,
     instances: list[dict[str, Any]] | None = None,
 ) -> Path:
     gold = {row["candidate_id"]: bool(row["gold_pass"]) for row in read_jsonl(labels_path)}
@@ -863,7 +967,7 @@ def audit_report(
     report = []
     pair_report = []
     for family, items in sorted(by_family.items()):
-        slots = selected[family] if selected is not None else list(range(len(items[0]["labels"])))
+        slots = list(range(len(items[0]["labels"])))
         matrix = np.asarray([
             [row["labels"][slot] for slot in slots] for row in items
         ], dtype=int)
@@ -944,7 +1048,7 @@ def audit_report(
 
 def aggregation_report(model_name: str, level: float, scores_path: Path, labels_path: Path) -> Path:
     config = load_config()
-    primary_fit_temperatures = temperature_policy(config)["weak_model_variants"]["primary"]["fit_temperatures"]
+    primary_fit_temperatures = [temperature_policy(config)["primary_temperature"]]
     gold = {row["candidate_id"]: bool(row["gold_pass"]) for row in read_jsonl(labels_path)}
     score_rows = read_jsonl(scores_path)
     all_scores = [
@@ -984,8 +1088,18 @@ def aggregation_report(model_name: str, level: float, scores_path: Path, labels_
                 "prior_only": [.5] * len(items),
                 "majority_vote": [majority_probability(row["labels"]) for row in items],
                 "equal_signed_sum": [equal_probability(row["labels"]) for row in items],
-                "polarity_weak_model": [float(row["posterior"]) for row in items],
             }
+            posterior_items = [row.get("posterior") for row in items]
+            if all(value is not None for value in posterior_items):
+                methods["polarity_weak_model"] = [
+                    float(value) for value in posterior_items
+                ]
+            else:
+                output.append({
+                    "model": model_name, "noise": level, "split": split,
+                    "family": family, "aggregator": "polarity_weak_model",
+                    "status": "BLOCKED", "reason": "calibration fit failed",
+                })
             fuse_items = [row.get("fuse_posterior") for row in items]
             if all(value is not None for value in fuse_items):
                 methods["fuse_style_reimplementation"] = [float(value) for value in fuse_items]
@@ -1024,155 +1138,11 @@ def aggregation_report(model_name: str, level: float, scores_path: Path, labels_
     return path
 
 
-def temperature_ablation_report(
-    model_name: str,
-    level: float,
-    primary_scores_path: Path,
-    mixture_scores_path: Path,
-    labels_path: Path,
-) -> Path:
-    """Compare fit distributions on one identical primary-temperature pool."""
-    config = load_config()
-    primary_temperature = temperature_policy(config)["primary_temperature"]
-    gold = {
-        row["candidate_id"]: bool(row["gold_pass"])
-        for row in read_jsonl(labels_path)
-    }
-
-    def evaluation_rows(path: Path, expected_variant: str) -> dict[str, dict[str, Any]]:
-        result = {}
-        for row in read_jsonl(path):
-            if (row.get("record_type") != "score"
-                    or row["split"] not in {"dev", "test", "test_official"}
-                    or row.get("candidate_id") not in gold):
-                continue
-            if not _has_temperature(row, [primary_temperature]):
-                raise RuntimeError(
-                    f"temperature ablation received a non-primary evaluation row: {row}"
-                )
-            if row.get("variant") != expected_variant:
-                raise RuntimeError(
-                    f"temperature ablation variant mismatch: {row.get('variant')}"
-                )
-            candidate_id = row["candidate_id"]
-            if candidate_id in result:
-                raise RuntimeError(f"duplicate ablation candidate: {candidate_id}")
-            result[candidate_id] = row
-        return result
-
-    variants = {
-        "primary": evaluation_rows(primary_scores_path, "primary"),
-        "mixture_0p7_1p0": evaluation_rows(
-            mixture_scores_path, "mixture_0p7_1p0"
-        ),
-    }
-    candidate_sets = {name: set(rows) for name, rows in variants.items()}
-    if candidate_sets["primary"] != candidate_sets["mixture_0p7_1p0"]:
-        missing = candidate_sets["primary"] - candidate_sets["mixture_0p7_1p0"]
-        extra = candidate_sets["mixture_0p7_1p0"] - candidate_sets["primary"]
-        raise RuntimeError(
-            "temperature ablation candidate pools differ: "
-            f"missing={sorted(missing)[:5]} extra={sorted(extra)[:5]}"
-        )
-
-    output = []
-    primary_rows = variants["primary"]
-    for split in ["dev", "test", "test_official"]:
-        families = sorted({
-            row["family"] for row in primary_rows.values() if row["split"] == split
-        })
-        for family in families:
-            ids = sorted(
-                candidate_id for candidate_id, row in primary_rows.items()
-                if row["split"] == split and row["family"] == family
-            )
-            labels = [gold[candidate_id] for candidate_id in ids]
-            for variant, rows in variants.items():
-                output.append({
-                    "model": model_name,
-                    "noise": level,
-                    "split": split,
-                    "family": family,
-                    "aggregator": "polarity_weak_model",
-                    "variant": variant,
-                    "fit_temperatures": temperature_policy(config)["weak_model_variants"][variant]["fit_temperatures"],
-                    "evaluation_temperature": primary_temperature,
-                    **classification_metrics(
-                        labels,
-                        [float(rows[candidate_id]["posterior"]) for candidate_id in ids],
-                        bins=int(config["ece_bins"]),
-                    ),
-                    "candidates": len(ids),
-                })
-    path = (
-        ARTIFACTS / "reports"
-        / f"{model_name}_noise_{int(level*100):02d}_temperature_ablation.jsonl"
-    )
-    write_jsonl(path, output)
-    return path
-
-
-def fit_temperature_ablation(
-    model_name: str,
-    candidates: Path,
-    rows: list[dict[str, Any]],
-    level: float,
-    primary_instances_path: Path,
-    primary_scores_path: Path,
-    labels_path: Path,
-) -> Path:
-    """Fit the clean main-model mixture variant without exposing it to generation."""
-    if model_name != "main" or not math.isclose(level, 0.0, abs_tol=1e-12):
-        raise ValueError("temperature mixture ablation is defined only for clean main")
-    primary_models = _variant_models_dir(model_name, 0, "primary")
-    manifest = validate_model_manifest(
-        primary_models,
-        model_name=model_name,
-        level=level,
-        instances_path=primary_instances_path,
-        variant="primary",
-    )
-    selected = {
-        family: [int(slot) for slot in slots]
-        for family, slots in manifest["selected_source_slots"].items()
-    }
-    observations = (
-        ARTIFACTS / "observations" / f"{model_name}_noise_00_candidate.jsonl"
-    )
-    if not observations.is_file():
-        raise RuntimeError(f"missing primary observations for ablation: {observations}")
-    mixture_instances, mixture_scores = fit_score(
-        model_name,
-        candidates,
-        rows,
-        level,
-        variant="mixture_0p7_1p0",
-        selected_slots=selected,
-        observations_path=observations,
-    )
-    mixture_manifest = validate_model_manifest(
-        _variant_models_dir(model_name, 0, "mixture_0p7_1p0"),
-        model_name=model_name,
-        level=level,
-        instances_path=mixture_instances,
-        variant="mixture_0p7_1p0",
-    )
-    if (mixture_manifest["selected_source_slots_sha256"]
-            != manifest["selected_source_slots_sha256"]):
-        raise RuntimeError("temperature ablation did not reuse primary-selected slots")
-    if (mixture_manifest["filtered_instances_sha256"]
-            != manifest["filtered_instances_sha256"]):
-        raise RuntimeError("temperature ablation changed the filtered rule instances")
-    return temperature_ablation_report(
-        model_name, level, primary_scores_path, mixture_scores, labels_path
-    )
-
-
 def score_pool(model_name: str, level: float, instances_path: Path, candidates: Path) -> Path:
     noise = int(level * 100)
-    models = ARTIFACTS / "weak_models" / model_name / f"noise_{noise:02d}"
-    validate_model_manifest(
-        models, model_name=model_name, level=level, instances_path=instances_path
+    calibrations = ARTIFACTS / "calibrations" / model_name / f"noise_{noise:02d}"
+    validate_calibration_manifest(
+        calibrations, model_name=model_name, level=level, instances_path=instances_path
     )
     output = ARTIFACTS / "scores" / f"{model_name}_noise_{noise:02d}_main.jsonl"
     raw_output = ARTIFACTS / "scores" / f"{model_name}_noise_{noise:02d}_main_raw.jsonl"
@@ -1184,22 +1154,39 @@ def score_pool(model_name: str, level: float, instances_path: Path, candidates: 
         [
             "--mode", "score", "--input", str(instances_path),
             "--candidates", str(observations), "--output", str(raw_output),
-            "--models-dir", str(models),
+            "--calibrations-dir", str(calibrations),
         ], raw_output,
     )
     scored = read_jsonl(raw_output)
     failures = [row for row in scored if row.get("record_type") == "score_error"]
-    if failures:
-        raise RuntimeError(f"proposal scoring failed: {failures}")
+    recorded_failures: set[tuple[str, str]] = set()
+    for failure in failures:
+        key = (
+            str(failure.get("family")),
+            str(failure.get("message", "calibration unavailable")),
+        )
+        if key in recorded_failures:
+            continue
+        recorded_failures.add(key)
+        issue(
+            "calibration.score",
+            RuntimeError(key[1]),
+            model=model_name, noise=level, family=failure.get("family"),
+            prompt_id=failure.get("prompt_id"),
+        )
     expected_scores = sum(
         row.get("status") == "found" and bool(row.get("hard_valid"))
         for row in read_jsonl(candidates)
     )
-    if sum(row.get("record_type") == "score" for row in scored) != expected_scores:
+    if sum(
+        row.get("record_type") in {"score", "score_error"}
+        and bool(row.get("candidate_id")) for row in scored
+    ) != expected_scores:
         raise RuntimeError("proposal scoring cardinality mismatch")
-    fuse_path = models / "fuse_models.json"
+    scored = _score_rows_with_explicit_calibration_status(scored)
+    fuse_path = calibrations / "fuse_models.json"
     if not fuse_path.exists():
-        raise RuntimeError(f"missing FUSE models: {fuse_path}")
+        raise RuntimeError(f"missing FUSE calibrations: {fuse_path}")
     with fuse_path.open(encoding="utf-8") as handle:
         fuse_payload = json.load(handle)
     for family, payload in fuse_payload["families"].items():
@@ -1250,29 +1237,49 @@ def generate_pwsg(model_name: str, level: float, instances_path: Path, proposal_
         rendered.append({**row, "paired_draw_caps": caps})
     rendered_path = ARTIFACTS / "inputs" / f"{model_name}_noise_{noise:02d}_pwsg.jsonl"
     write_jsonl(rendered_path, rendered)
-    models = ARTIFACTS / "weak_models" / model_name / f"noise_{noise:02d}"
-    validate_model_manifest(
-        models, model_name=model_name, level=level, instances_path=instances_path
+    calibrations = ARTIFACTS / "calibrations" / model_name / f"noise_{noise:02d}"
+    validate_calibration_manifest(
+        calibrations, model_name=model_name, level=level, instances_path=instances_path
     )
     maximum = max(budgets)
+    posterior_policy = config["posterior_policy"]
     piece = ARTIFACTS / "raw" / f"{model_name}_noise_{noise:02d}_pwsg_checkpoints.jsonl"
     _run_racket_sharded(
         f"pwsg.{model_name}.{level}.checkpoints",
         [
             "--mode", "pwsg", "--input", str(rendered_path), "--output", str(piece),
-            "--models-dir", str(models), "--model", model["gguf_path"],
+            "--calibrations-dir", str(calibrations), "--model", model["gguf_path"],
             "--temperature", str(temperature_policy(config)["primary_temperature"]),
             "--seeds", ",".join(map(str, config["generation_seeds"])),
             "--max-attempts", str(config["hard_max_attempts"]),
             "--attempt-checkpoints", ",".join(map(str, budgets)),
+            "--good-multiplier", str(posterior_policy["good_multiplier"]),
+            "--bad-multiplier", str(posterior_policy["bad_multiplier"]),
             "--deadline-ms", str(config["hard_deadline_ms"]),
         ], piece, records_per_input=len(config["generation_seeds"]) * len(budgets),
     )
     enriched = []
+    recorded_failures: set[tuple[str, str]] = set()
     for row in read_jsonl(piece):
         budget = int(row.get("checkpoint_budget", maximum))
+        if row.get("record_type") == "pwsg_error":
+            key = (
+                str(row.get("family")),
+                str(row.get("message", "calibration unavailable")),
+            )
+            if key not in recorded_failures:
+                recorded_failures.add(key)
+                issue(
+                    "calibration.pwsg", RuntimeError(key[1]),
+                    model=model_name, noise=level, family=row.get("family"),
+                )
+            enriched.append({
+                **row, "model_family": model["family"], "noise": level,
+                "budget": budget,
+            })
+            continue
         if row.get("record_type") != "pwsg":
-            raise RuntimeError(f"PWSG failed at budget {budget}: {row}")
+            raise RuntimeError(f"unexpected PWSG record at budget {budget}: {row}")
         generation_id = stable_hash({
             "method": "exact_pwsg", "prompt_id": row.get("prompt_id"),
             "seed": row.get("seed"), "text": row.get("text"),
@@ -1402,8 +1409,19 @@ def generation_report(
                 "hard_only_cars": first_found,
                 "lm_best_of_b": max(candidates, key=lambda row: float(row.get("lm_logprob") or -math.inf)) if candidates else None,
                 "equal_score_best_of_b": max(candidates, key=lambda row: (sum(row["labels"]), float(row.get("lm_logprob") or -math.inf))) if candidates else None,
-                "posterior_best_of_b": max(candidates, key=lambda row: (float(row["posterior"]), float(row.get("lm_logprob") or -math.inf))) if candidates else None,
             }
+            posterior_candidates = [
+                row for row in candidates if row.get("posterior") is not None
+            ]
+            methods["posterior_best_of_b"] = (
+                max(
+                    posterior_candidates,
+                    key=lambda row: (
+                        float(row["posterior"]),
+                        float(row.get("lm_logprob") or -math.inf),
+                    ),
+                ) if posterior_candidates else None
+            )
             fuse_candidates = [row for row in candidates if row.get("fuse_posterior") is not None]
             methods["fuse_style_best_of_b"] = (
                 max(
@@ -1419,6 +1437,11 @@ def generation_report(
             for method, selected in methods.items():
                 if selected is None:
                     hard_only = method == "hard_only_cars"
+                    calibration_errors = [
+                        row.get("calibration_error", "calibration unavailable")
+                        for row in attempted
+                        if row.get("calibration_status") == "ERROR"
+                    ]
                     outcomes.append({
                         "model": model_name, "noise": level, "prompt_id": prompt_id,
                         "family": instance_by_id[prompt_id]["family"],
@@ -1438,6 +1461,10 @@ def generation_report(
                             float(first.get("latency_ms", 0.0))
                             if hard_only and first is not None else total_latency
                         ),
+                        **({
+                            "calibration_status": "ERROR",
+                            "calibration_error": calibration_errors[0],
+                        } if method == "posterior_best_of_b" and calibration_errors else {}),
                     })
                     continue
                 if method.startswith("posterior"):
@@ -1474,6 +1501,18 @@ def generation_report(
 
     pwsg_gold = {row["generation_id"]: bool(row["gold_pass"]) for row in read_jsonl(pwsg_labels)}
     for row in read_jsonl(pwsg_path):
+        if row.get("record_type") == "pwsg_error":
+            outcomes.append({
+                "model": model_name, "noise": level,
+                "prompt_id": row["prompt_id"], "family": row["family"],
+                "split": row["split"], "seed": row["seed"],
+                "budget": int(row["budget"]), "method": "exact_pwsg",
+                "outcome": "NOT_FOUND", "confidence": 0.0,
+                "content_tokens": 0, "model_draws": 0, "proposals": 0,
+                "latency_ms": 0.0, "calibration_status": "ERROR",
+                "calibration_error": row.get("message"),
+            })
+            continue
         if row.get("record_type") != "pwsg":
             continue
         attempts = int(row["attempts"])

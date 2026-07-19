@@ -72,9 +72,10 @@
   (when (and terminal (> terminal-mass (+ (node-mass terminal) 1e-12)))
     (error 'cars "terminal mass exceeds envelope"))
   (define top (and (pair? updates) (update-node (last updates))))
-  (define top-old (and top (node-mass top)))
   (define terminal-old (and terminal (node-mass terminal)))
-  (when terminal (set-node-mass! terminal (clamp terminal-mass)))
+  (when terminal
+    (set-node-mass! terminal (clamp terminal-mass))
+    (propagate! terminal (assert terminal-old real?) (node-mass terminal)))
+  (define top-old (and top (node-mass top)))
   (for ([u (in-list updates)]) (install! (update-node u) (update-domain u) (update-mass u)))
-  (cond [top (propagate! top (assert top-old real?) (node-mass top))]
-        [terminal (propagate! terminal (assert terminal-old real?) (node-mass terminal))]))
+  (when top (propagate! top (assert top-old real?) (node-mass top))))

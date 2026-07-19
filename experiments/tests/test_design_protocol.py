@@ -20,17 +20,16 @@ def _candidate(prompt: dict, temperature: float, seed: int) -> dict:
 
 
 class DesignProtocolTests(unittest.TestCase):
-    def test_candidate_protocol_fixes_all_three_seed_cohorts(self):
+    def test_candidate_protocol_fixes_calibration_and_dev_to_twenty_each(self):
         calibration = {"id": "cal", "family": "family", "split": "calibration"}
         dev = {"id": "dev", "family": "family", "split": "dev"}
         candidates = [
             *[_candidate(calibration, 1.0, seed) for seed in range(20)],
-            *[_candidate(calibration, 0.7, seed) for seed in range(8)],
-            *[_candidate(dev, 1.0, seed) for seed in range(8)],
+            *[_candidate(dev, 1.0, seed) for seed in range(20)],
         ]
         report = run.design_candidate_protocol_report([calibration, dev], candidates)
         self.assertTrue(report["passed"])
-        self.assertEqual(report["expected_candidates"], 36)
+        self.assertEqual(report["expected_candidates"], 40)
 
         missing = run.design_candidate_protocol_report(
             [calibration, dev], candidates[:-1]
@@ -45,66 +44,7 @@ class DesignProtocolTests(unittest.TestCase):
             run.design_candidate_protocol_report([calibration, dev], invalid)["passed"]
         )
 
-    def test_four_percent_filter_uses_frozen_expected_cohort(self):
-        rows = []
-        observations = []
-        index = 0
-        for prompt in range(30):
-            rows.append({
-                "id": f"p-{prompt}", "family": "family", "split": "calibration",
-                "weak_rules": [{"slot": 0, "polarity": "positive", "pattern": "x"}],
-            })
-            for seed in range(20):
-                observations.append({
-                    "record_type": "observation", "prompt_id": f"p-{prompt}",
-                    "family": "family", "split": "calibration", "seed": seed,
-                    "sample_index": 0, "temperature": 1.0,
-                    "labels": [1 if index < 23 else 0], "rule_ids": ["r0"],
-                })
-                index += 1
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "observations.jsonl"
-            write_jsonl(path, observations)
-            with mock.patch.object(
-                pipeline, "ere_compiles_many", return_value=[True]
-            ):
-                selected, report = pipeline.technical_filter(rows, path)
-        self.assertEqual(selected, {"family": []})
-        self.assertEqual(report[0]["minimum_fires"], 24)
-        self.assertEqual(report[0]["calibration_candidates"], 600)
-        self.assertEqual(report[0]["observed_candidates"], 600)
-        self.assertEqual(report[0]["reason"], "fewer_than_4pct_fires")
-
-    def test_unlabeled_gate_rejects_incomplete_observation_cohort(self):
-        rules = [
-            {"slot": slot, "polarity": "positive" if slot < 3 else "negative",
-             "pattern": f"p{slot}"}
-            for slot in range(5)
-        ]
-        rows = [{
-            "id": "p", "family": "family", "split": "calibration",
-            "weak_rules": rules,
-        }]
-        observations = []
-        for seed in range(20):
-            observations.append({
-                "record_type": "observation", "prompt_id": "p",
-                "family": "family", "split": "calibration", "seed": seed,
-                "sample_index": 0, "temperature": 1.0,
-                "labels": [1, 0, 0, -1, 0] if seed == 0 else [0] * 5,
-                "rule_ids": [f"r{slot}" for slot in range(5)],
-            })
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "observations.jsonl"
-            write_jsonl(path, observations)
-            pipeline.enforce_technical_gate(rows, path, {"family": list(range(5))})
-            write_jsonl(path, observations[:-1])
-            with self.assertRaisesRegex(RuntimeError, "unlabeled technical rule gate"):
-                pipeline.enforce_technical_gate(
-                    rows, path, {"family": list(range(5))}
-                )
-
-    def test_official_labels_are_not_called_when_unlabeled_gate_fails(self):
+    def test_design_records_gold_support_but_does_not_use_it_as_a_gate(self):
         calibration = {"id": "cal", "family": "family", "split": "calibration"}
         dev = {"id": "dev", "family": "family", "split": "dev"}
         pool = Path("candidate-pool.jsonl")
@@ -117,7 +57,9 @@ class DesignProtocolTests(unittest.TestCase):
         events = []
         with (
             mock.patch.object(run, "read_jsonl", side_effect=fake_read),
-            mock.patch.object(run, "generate_pool", return_value=pool),
+            mock.patch.object(
+                run, "generate_pool", side_effect=[pool, RuntimeError("stop after design")]
+            ),
             mock.patch.object(
                 run, "design_candidate_protocol_report", return_value={"passed": True}
             ),
@@ -126,22 +68,73 @@ class DesignProtocolTests(unittest.TestCase):
                 run, "observe", side_effect=lambda *_args, **_kwargs: events.append("observe") or Path("obs")
             ),
             mock.patch.object(
-                run, "technical_filter",
-                side_effect=lambda *_args: events.append("filter") or ({"family": []}, []),
-            ),
-            mock.patch.object(
-                run, "enforce_technical_gate",
-                side_effect=lambda *_args: events.append("gate") or (_ for _ in ()).throw(RuntimeError("gate")),
-            ),
-            mock.patch.object(
                 run, "evaluate_candidates",
                 side_effect=lambda *_args: events.append("official"),
-            ) as official,
+            ),
+            mock.patch.object(
+                run, "gold_class_support_report",
+                return_value={"passed": False, "families": []},
+            ),
+            mock.patch.object(
+                run, "fit_score",
+                side_effect=lambda *_args, **_kwargs: events.append("fit")
+                or (Path("instances"), Path("scores")),
+            ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "gate"):
+            with self.assertRaisesRegex(RuntimeError, "stop after design"):
                 run.run_design()
-        self.assertEqual(events, ["observe", "filter", "gate"])
-        official.assert_not_called()
+        self.assertEqual(events, ["observe", "fit", "official"])
+
+    def test_confirmatory_calibration_is_frozen_before_official_labels(self):
+        events = []
+        with (
+            mock.patch.object(
+                run, "_candidate_inputs",
+                return_value=(Path("pool.jsonl"), Path("instances.jsonl")),
+            ),
+            mock.patch.object(run, "all_instances", return_value=[]),
+            mock.patch.object(run, "apply_noise", return_value=[]),
+            mock.patch.object(
+                run, "fit_score",
+                side_effect=lambda *_args: events.append("fit")
+                or (Path("bound.jsonl"), Path("scores.jsonl")),
+            ),
+            mock.patch.object(
+                run, "_candidate_labels",
+                side_effect=lambda *_args: events.append("official")
+                or Path("labels.jsonl"),
+            ),
+            mock.patch.object(run, "aggregation_report"),
+        ):
+            run.run_aggregation("main", 0.123)
+        self.assertEqual(events, ["fit", "official"])
+
+    def test_rule_audit_cannot_materialize_gold_before_calibration(self):
+        events = []
+        with (
+            mock.patch.object(
+                run, "run_aggregation",
+                side_effect=lambda *_args: events.extend(["fit", "official"]),
+            ),
+            mock.patch.object(
+                run, "_candidate_inputs",
+                return_value=(Path("pool.jsonl"), Path("instances.jsonl")),
+            ),
+            mock.patch.object(run, "all_instances", return_value=[]),
+            mock.patch.object(run, "apply_noise", return_value=[]),
+            mock.patch.object(
+                run, "observe",
+                side_effect=lambda *_args: events.append("audit-observe")
+                or Path("obs.jsonl"),
+            ),
+            mock.patch.object(
+                run, "_candidate_labels",
+                return_value=Path("labels.jsonl"),
+            ),
+            mock.patch.object(run, "audit_report"),
+        ):
+            run.run_audit("main", 0.2)
+        self.assertEqual(events, ["fit", "official", "audit-observe"])
 
     def test_every_test_reading_stage_requires_finalized_design(self):
         with (

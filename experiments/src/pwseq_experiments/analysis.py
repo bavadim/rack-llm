@@ -64,38 +64,12 @@ def _macro_aggregation(path: Path) -> list[dict[str, Any]]:
             },
             "families": len(items),
         })
-    blocked = [
-        row for row in read_jsonl(path)
-        if str(row.get("aggregator", "")).startswith("fuse_style") and "auprc" not in row
-    ]
+    blocked = [row for row in read_jsonl(path) if "auprc" not in row]
     for row in blocked:
         output.append({
-            "split": row["split"], "aggregator": "fuse_style_reimplementation",
-            "status": row["status"],
-        })
-    return output
-
-
-def _temperature_ablation_table(path: Path) -> list[dict[str, Any]]:
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for row in read_jsonl(path):
-        groups[(row["split"], row["variant"])].append(row)
-    output = []
-    for (split, variant), rows in sorted(groups.items()):
-        temperatures = {tuple(row["fit_temperatures"]) for row in rows}
-        evaluation = {float(row["evaluation_temperature"]) for row in rows}
-        if len(temperatures) != 1 or len(evaluation) != 1:
-            raise RuntimeError(f"inconsistent temperature ablation policy: {split}/{variant}")
-        output.append({
-            "split": split,
-            "variant": variant,
-            "fit_temperatures": ",".join(map(str, next(iter(temperatures)))),
-            "evaluation_temperature": next(iter(evaluation)),
-            **{
-                metric: float(np.nanmean([row[metric] for row in rows]))
-                for metric in ["auprc", "auroc", "nll", "brier", "ece"]
-            },
-            "families": len(rows),
+            "split": row["split"], "aggregator": row["aggregator"],
+            "family": row.get("family"), "status": row["status"],
+            "reason": row.get("reason"),
         })
     return output
 
@@ -192,11 +166,17 @@ def _bootstrap_aggregation() -> list[dict[str, Any]]:
     if not scores_path.exists() or not labels_path.exists():
         return []
     gold = {row["candidate_id"]: int(row["gold_pass"]) for row in read_jsonl(labels_path)}
-    rows = [
+    all_rows = [
         row for row in read_jsonl(scores_path)
         if row.get("record_type") == "score" and row["split"] == "test"
         and row.get("candidate_id") in gold
     ]
+    blocked_families = sorted({
+        row["family"] for row in all_rows if row.get("posterior") is None
+    })
+    rows = [row for row in all_rows if row.get("posterior") is not None]
+    if not rows:
+        return []
     by_family_prompt: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
         by_family_prompt[row["family"]][row["prompt_id"]].append(row)
@@ -239,6 +219,8 @@ def _bootstrap_aggregation() -> list[dict[str, Any]]:
             "ci_low": float(np.quantile(array, tail)),
             "ci_high": float(np.quantile(array, 1.0 - tail)),
             "bootstrap_p": corrected_bootstrap_p(array),
+            "families": len(by_family_prompt),
+            "blocked_families": blocked_families,
         })
     return output
 
@@ -254,6 +236,14 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
         row for row in read_jsonl(path)
         if row["split"] == "test" and int(row["budget"]) == 8
     ]
+    blocked_families = sorted({
+        str(row["family"]) for row in rows
+        if row.get("calibration_status") == "ERROR"
+        and row["method"] in {"posterior_best_of_b", "exact_pwsg"}
+    })
+    rows = [row for row in rows if row["family"] not in blocked_families]
+    if not rows:
+        return [], []
     thresholds = {
         (row["method"], int(row["budget"])): row
         for row in read_jsonl(threshold_path) if row["source_split"] == "dev"
@@ -407,6 +397,8 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
             "bootstrap_p": corrected_bootstrap_p(array),
             "bootstrap_repetitions": repetitions,
             "bootstrap_support": len(array),
+            "families": len(prompts_by_family),
+            "blocked_families": blocked_families,
         }
         ours_solved = {
             row["prompt_id"]: solved_seed0(row)
@@ -456,6 +448,8 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
                 "confidence_level": float(config["confidence"]),
                 "common_coverage_limit": float(common_limit),
                 "coverage_grid_points": 101,
+                "families": len(prompts_by_family),
+                "blocked_families": blocked_families,
             })
     return output, risk_rows
 
@@ -483,6 +477,7 @@ def _build_figure_data(risk_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     figure_dir.mkdir(parents=True, exist_ok=True)
     expected_seeds = set(map(int, config["generation_seeds"]))
     prompt_records = []
+    blocked_by_noise: dict[float, list[str]] = {}
     for level in [0, 20, 40]:
         raw_path = ARTIFACTS / "results" / f"main_noise_{level:02d}_generation_raw.jsonl"
         threshold_path = ARTIFACTS / "thresholds" / f"main_noise_{level:02d}.jsonl"
@@ -493,6 +488,13 @@ def _build_figure_data(risk_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             for row in read_jsonl(threshold_path) if row["source_split"] == "dev"
         }
         rows = [row for row in read_jsonl(raw_path) if row["split"] == "test"]
+        blocked = sorted({
+            str(row["family"]) for row in rows
+            if row.get("calibration_status") == "ERROR"
+            and row["method"] in {"posterior_best_of_b", "exact_pwsg"}
+        })
+        blocked_by_noise[level / 100.0] = blocked
+        rows = [row for row in rows if row["family"] not in blocked]
         collapsed = prompt_generation_records(
             rows, expected_seeds=expected_seeds, decisions=thresholds,
             accepts=_accepts_threshold,
@@ -504,6 +506,8 @@ def _build_figure_data(risk_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         confidence=float(config["confidence"]),
         seed=int(config["dataset_seed"]) + 2,
     )
+    for row in scalar_rows:
+        row["blocked_families"] = blocked_by_noise[float(row["noise"])]
     quality_rows = [row for row in scalar_rows if row["noise"] == 0.0]
     noise_rows = [row for row in scalar_rows if int(row["budget"]) == 8]
     write_jsonl(figure_dir / "risk_coverage_data.jsonl", risk_rows)
@@ -518,6 +522,7 @@ def _build_figure_data(risk_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     scores = [
         row for row in read_jsonl(scores_path)
         if row.get("record_type") == "score" and row["split"] == "test"
+        and row.get("posterior") is not None
     ]
     reliability_rows = reliability_data(
         scores, gold, bins=int(config["ece_bins"]),
@@ -623,7 +628,7 @@ def _reporting_generation_table(rows: list[dict[str, Any]]) -> list[dict[str, An
         "coverage_ci_high", "found_wrong_rate", "found_wrong_rate_ci_low",
         "found_wrong_rate_ci_high", "not_found_rate", "not_found_rate_ci_low",
         "not_found_rate_ci_high", "tokens_per_ok", "tokens_per_ok_ci_low",
-        "tokens_per_ok_ci_high", "prompts", "families",
+        "tokens_per_ok_ci_high", "prompts", "families", "blocked_families",
     ]
     return [
         {key: row.get(key) for key in fields}
@@ -637,7 +642,7 @@ def _reporting_noise_table(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "solve_rate_ci_high", "risk", "risk_ci_low", "risk_ci_high",
         "found_wrong_rate", "found_wrong_rate_ci_low", "found_wrong_rate_ci_high",
         "not_found_rate", "not_found_rate_ci_low", "not_found_rate_ci_high",
-        "prompts", "families",
+        "prompts", "families", "blocked_families",
     ]
     return [
         {key: row.get(key) for key in fields}
@@ -665,13 +670,6 @@ def analyze() -> None:
     aggregation = ARTIFACTS / "reports" / "main_noise_00_aggregation.jsonl"
     if aggregation.exists():
         _write_csv(tables / "table2_aggregation.csv", _macro_aggregation(aggregation))
-    ablation = ARTIFACTS / "reports" / "main_noise_00_temperature_ablation.jsonl"
-    if not ablation.exists():
-        raise RuntimeError("missing clean-main temperature ablation report")
-    _write_csv(
-        tables / "table2b_temperature_ablation.csv",
-        _temperature_ablation_table(ablation),
-    )
     if scalar_rows:
         _write_csv(tables / "table3_generation.csv", _reporting_generation_table(scalar_rows))
         _write_csv(tables / "table3b_pass_at_5_secondary.csv", _pass_at_five())
@@ -695,19 +693,19 @@ def analyze() -> None:
     else:
         claims.append({"claim": 1, "status": "BLOCKED"})
 
-    filter_path = ARTIFACTS / "reports" / "main_noise_00_filter.json"
-    if filter_path.exists() and audit.exists():
-        filtered = json.loads(filter_path.read_text())
+    if audit.exists():
         rule_rows = _rule_table(audit)
         raw_audit = read_jsonl(audit)
         polarity_counts = defaultdict(Counter)
         for row in raw_audit:
             polarity_counts[row["family"]][row.get("polarity")] += 1
         eligible = all(
-            len(filtered["selected_slots"].get(row["family"], [])) >= 5
+            row["rules"] == 10
             and polarity_counts[row["family"]]["positive"] >= 2
             and polarity_counts[row["family"]]["negative"] >= 1
-            and row["conflict"] > 0 and row["gold_valid"] >= 50 and row["gold_invalid"] >= 50
+            and 0.0 < row["coverage"] < 1.0
+            and row["conflict"] > 0 and row["effective_rank"] > 1.0
+            and row["gold_valid"] >= 50 and row["gold_invalid"] >= 50
             for row in rule_rows
         ) and len(rule_rows) == 12
         claims.append({"claim": 2, "status": "SUPPORTED" if eligible else "NOT_SUPPORTED"})
@@ -715,7 +713,11 @@ def analyze() -> None:
         claims.append({"claim": 2, "status": "BLOCKED"})
 
     if aggregation_stats:
-        supported = all(row["ci_low"] > 0 and row.get("holm_p", 1) < .05 for row in aggregation_stats)
+        supported = all(
+            row["ci_low"] > 0 and row.get("holm_p", 1) < .05
+            and row.get("families") == 12 and not row.get("blocked_families")
+            for row in aggregation_stats
+        )
         claims.append({"claim": 3, "status": "SUPPORTED" if supported else "NOT_SUPPORTED"})
     else:
         claims.append({"claim": 3, "status": "BLOCKED"})
@@ -723,12 +725,18 @@ def analyze() -> None:
     if generation_stats:
         broad = [row for row in generation_stats if row["comparison"].endswith(("hard_only_cars", "equal_score_best_of_b"))]
         direct = next((row for row in generation_stats if row["comparison"].endswith("posterior_best_of_b")), None)
-        broad_ok = bool(broad) and all(row["paurc_ci_high"] < 0 and row.get("holm_p", 1) < .05 for row in broad)
-        direct_ok = bool(direct) and direct["paurc_ci_high"] < 0 and direct.get("holm_p", 1) < .05
-        claims.append({"claim": "4a", "status": "SUPPORTED" if broad_ok else "NOT_SUPPORTED"})
-        claims.append({"claim": "4b", "status": "SUPPORTED" if direct_ok else "NOT_SUPPORTED"})
+        blocked = sorted(set().union(*(row.get("blocked_families", []) for row in generation_stats)))
+        broad_ok = bool(broad) and all(row["paurc_ci_high"] < 0 and row.get("holm_p", 1) < .05 and row.get("families") == 12 for row in broad)
+        direct_ok = bool(direct) and direct["paurc_ci_high"] < 0 and direct.get("holm_p", 1) < .05 and direct.get("families") == 12
+        status_a = "BLOCKED" if blocked else "SUPPORTED" if broad_ok else "NOT_SUPPORTED"
+        status_b = "BLOCKED" if blocked else "SUPPORTED" if direct_ok else "NOT_SUPPORTED"
+        claims.append({"claim": "4a", "status": status_a, "blocked_families": blocked})
+        claims.append({"claim": "4b", "status": status_b, "blocked_families": blocked})
     else:
-        claims.append({"claim": 4, "status": "BLOCKED"})
+        claims.extend([
+            {"claim": "4a", "status": "BLOCKED"},
+            {"claim": "4b", "status": "BLOCKED"},
+        ])
     write_json(ARTIFACTS / "CLAIMS.json", claims)
 
     issues_path = ARTIFACTS / "issues.jsonl"

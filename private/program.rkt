@@ -1,96 +1,111 @@
 #lang racket/base
-
-(require racket/list racket/match racket/string
-         "domain.rkt" "regex.rkt")
-
-(provide lit ere seq choice repeat text with-rules positive negative
-         compile-program program-rule-count program-initial program-step
-         program-accepting? program-dead? program-domain program-observe)
-
-;; Public syntax.  The compiled VM below is deliberately independent of the
-;; surface structs: compilation validates once and does not retain the AST.
-(struct literal (text) #:transparent)
-(struct regular (pattern) #:transparent)
-(struct sequence (items) #:transparent)
-(struct alternatives (items) #:transparent)
-(struct repetition (min max item) #:transparent)
-(struct any-text (max) #:transparent)
-(struct scoped (child rules) #:transparent)
-(struct weak-rule (polarity pattern) #:transparent)
-
-(define (program? v)
-  (or (literal? v) (regular? v) (sequence? v) (alternatives? v)
-      (repetition? v) (any-text? v) (scoped? v)))
+(require racket/list racket/match racket/port racket/string "domain.rkt" "regex.rkt")
+(provide lit ere seq choice repeat text rule-set with-rules positive negative rule-set?
+         rule-set-schema rule-set-observe compile-program program-rule-count program-schema
+         program-initial program-step program-accepting? program-dead? program-domain program-observe
+         datum-fingerprint rule-schema->datum datum->rule-schema (struct-out rule-schema))
+(struct literal (text) #:transparent) (struct regular (pattern) #:transparent)
+(struct sequence (items) #:transparent) (struct alternatives (items) #:transparent)
+(struct repetition (min max item) #:transparent) (struct any-text (max) #:transparent)
+(struct weak-rule (id polarity pattern) #:transparent) (struct rules (id entries) #:transparent)
+(struct ruled (child rules) #:transparent)
+(define (program? v) (or (literal? v) (regular? v) (sequence? v) (alternatives? v)
+                         (repetition? v) (any-text? v)))
 (define (lit s) (unless (string? s) (raise-argument-error 'lit "string?" s)) (literal s))
 (define (ere s) (regular (parse-ere-pattern s)))
 (define (programs who xs)
-  (unless (and (pair? xs) (andmap program? xs))
-    (raise-argument-error who "one or more programs" xs))
+  (unless (and (pair? xs) (andmap program? xs)) (raise-argument-error who "one or more hard programs" xs))
   xs)
 (define (seq . xs) (sequence (programs 'seq xs)))
 (define (choice . xs) (alternatives (programs 'choice xs)))
 (define (repeat min max p)
-  (unless (and (exact-nonnegative-integer? min) (exact-nonnegative-integer? max)
-               (<= min max) (program? p))
-    (raise-arguments-error 'repeat "expected 0 <= min <= max and a program"
-                           "min" min "max" max "program" p))
+  (unless (and (exact-nonnegative-integer? min) (exact-nonnegative-integer? max) (<= min max) (program? p))
+    (raise-arguments-error 'repeat "expected 0 <= min <= max and a hard program" "min" min "max" max "program" p))
   (repetition min max p))
 (define (text max)
-  (unless (exact-nonnegative-integer? max)
-    (raise-argument-error 'text "exact-nonnegative-integer?" max))
+  (unless (exact-nonnegative-integer? max) (raise-argument-error 'text "exact-nonnegative-integer?" max))
   (any-text max))
-(define (rule who polarity p)
-  (unless (or (literal? p) (regular? p))
-    (raise-argument-error who "lit or ere" p))
-  (weak-rule polarity p))
-(define (positive p) (rule 'positive 1 p))
-(define (negative p) (rule 'negative -1 p))
-(define (with-rules p . rs)
-  (unless (program? p) (raise-argument-error 'with-rules "program?" p))
-  (unless (andmap weak-rule? rs)
-    (raise-argument-error 'with-rules "positive/negative rules" rs))
-  (if (null? rs) p (scoped p rs)))
-
-;; Compiled regular-language VM.  A run is a continuation stack plus completed
-;; weak-rule spans.  Epsilon expansion handles sequence, choice, repetition and
-;; scope boundaries uniformly, so there are no combinator-specific state types.
-(struct c-lit (ids) #:transparent)
-(struct c-regex (machine) #:transparent)
-(struct c-text (max) #:transparent)
-(struct c-seq (items) #:transparent)
-(struct c-choice (items) #:transparent)
-(struct c-repeat (min max item) #:transparent)
-(struct c-scope (child slots) #:transparent)
-(struct more (min max item) #:transparent)
-(struct close-scope (slots start) #:transparent)
-(struct a-lit (ids pos) #:transparent)
-(struct a-regex (machine state) #:transparent)
-(struct a-text (count max) #:transparent)
-(struct span (slot start end) #:transparent)
-(struct run (todo spans) #:transparent)
-(struct state (runs position) #:transparent)
-(struct matcher (polarity literal regex) #:transparent)
-(struct compiled-program (root rules) #:transparent)
-
+(define (rule who polarity id matcher)
+  (unless (and (string? id) (positive? (string-length id))) (raise-argument-error who "non-empty rule id string" id))
+  (unless (or (literal? matcher) (regular? matcher)) (raise-argument-error who "lit or ere" matcher))
+  (weak-rule id polarity matcher))
+(define (positive id matcher) (rule 'positive 1 id matcher))
+(define (negative id matcher) (rule 'negative -1 id matcher))
+(define (rule-set id . entries)
+  (unless (and (string? id) (regexp-match? #rx"@[1-9][0-9]*$" id)) (raise-argument-error 'rule-set "schema id ending in @<positive-version>" id))
+  (unless (and (pair? entries) (andmap weak-rule? entries)) (raise-argument-error 'rule-set "one or more positive/negative rules" entries))
+  (define ids (map weak-rule-id entries))
+  (unless (= (length ids) (length (remove-duplicates ids))) (error 'rule-set "duplicate rule id"))
+  (rules id entries))
+(define (with-rules p rs)
+  (unless (program? p) (raise-argument-error 'with-rules "top-level hard program" p))
+  (unless (rules? rs) (raise-argument-error 'with-rules "rule-set" rs)) (ruled p rs))
+(define rule-set? rules?)
+(struct c-lit (ids) #:transparent) (struct c-regex (machine) #:transparent)
+(struct c-text (max) #:transparent) (struct c-seq (items) #:transparent)
+(struct c-choice (items) #:transparent) (struct c-repeat (min max item) #:transparent)
+(struct more (min max item) #:transparent) (struct a-lit (ids pos) #:transparent)
+(struct a-regex (machine state) #:transparent) (struct a-text (count max) #:transparent)
+(struct run (todo) #:transparent) (struct state (runs position) #:transparent)
+(struct matcher (id polarity literal regex) #:transparent)
+(struct rule-schema (id rule-ids polarities fingerprint) #:transparent)
+(struct compiled-program (root rules schema) #:transparent)
+(define (datum-fingerprint datum)
+  (apply string-append (for/list ([b (in-bytes (sha256-bytes (open-input-bytes
+                          (call-with-output-bytes (lambda (out) (write datum out))))))])
+           (define h (number->string b 16))
+           (if (= (string-length h) 1) (string-append "0" h) h))))
+(define (schema-form id ids polarities) (list 'rack-llm-rule-schema 1 id (map list ids polarities)))
+(define (rule-set-schema rs)
+  (unless (rules? rs) (raise-argument-error 'rule-set-schema "rule-set" rs))
+  (define ids (map weak-rule-id (rules-entries rs))) (define polarities (map weak-rule-polarity (rules-entries rs)))
+  (rule-schema (rules-id rs) ids polarities (datum-fingerprint (schema-form (rules-id rs) ids polarities))))
+(define (rule-schema->datum s)
+  (hash 'id (rule-schema-id s) 'rules
+        (for/list ([id (in-list (rule-schema-rule-ids s))] [polarity (in-list (rule-schema-polarities s))])
+                 (hash 'id id 'polarity polarity))
+        'fingerprint (rule-schema-fingerprint s)))
+(define (datum->rule-schema value)
+  (unless (hash? value) (raise-argument-error 'datum->rule-schema "schema object" value))
+  (define (field key) (hash-ref value key (lambda () (error 'datum->rule-schema "missing ~a" key))))
+  (define id (field 'id)) (define entries (field 'rules))
+  (unless (and (string? id) (regexp-match? #rx"@[1-9][0-9]*$" id) (list? entries) (pair? entries) (andmap hash? entries))
+    (error 'datum->rule-schema "invalid schema"))
+  (define ids (map (lambda (entry) (hash-ref entry 'id #f)) entries))
+  (define polarities (map (lambda (entry) (hash-ref entry 'polarity #f)) entries))
+  (unless (and (andmap (lambda (x) (and (string? x) (positive? (string-length x)))) ids) (= (length ids) (length (remove-duplicates ids)))
+               (andmap (lambda (x) (or (equal? x -1) (equal? x 1))) polarities))
+    (error 'datum->rule-schema "invalid rule descriptors"))
+  (define fp (datum-fingerprint (schema-form id ids polarities)))
+  (unless (equal? fp (field 'fingerprint)) (error 'datum->rule-schema "schema fingerprint mismatch"))
+  (rule-schema id ids polarities fp))
+(define matcher-cache (make-weak-hasheq))
+(define (rule-matchers rs)
+  (hash-ref! matcher-cache rs
+             (lambda ()
+               (for/vector ([r (in-list (rules-entries rs))])
+                 (define p (weak-rule-pattern r))
+                 (if (literal? p)
+                     (matcher (weak-rule-id r) (weak-rule-polarity r) (literal-text p) #f)
+                     (matcher (weak-rule-id r) (weak-rule-polarity r) #f (make-text-regex (regular-pattern p))))))))
+(define (match-labels matchers sample)
+  (vector->immutable-vector
+   (for/vector ([m (in-vector matchers)])
+     (if (if (matcher-literal m) (string-contains? sample (matcher-literal m))
+             (regex-text-match? (matcher-regex m) sample))
+         (matcher-polarity m) 0))))
+(define (rule-set-observe rs sample)
+  (unless (rules? rs) (raise-argument-error 'rule-set-observe "rule-set" rs))
+  (unless (string? sample) (raise-argument-error 'rule-set-observe "string?" sample))
+  (match-labels (rule-matchers rs) sample))
 (define (compile-program ast tokenize vocabulary)
-  (define rules '())
-  (define (add-rule! r)
-    (define p (weak-rule-pattern r))
-    (define slot (length rules))
-    (define m (if (literal? p)
-                  (matcher (weak-rule-polarity r) (literal-text p) #f)
-                  (matcher (weak-rule-polarity r) #f
-                           (make-text-regex (regular-pattern p)))))
-    (set! rules (append rules (list m)))
-    slot)
-  ;; Returns compiled node, nullable?, and contains-text?.
+  (define rs (and (ruled? ast) (ruled-rules ast))) (define body (if rs (ruled-child ast) ast))
+  (unless (program? body) (raise-argument-error 'compile-spec "hard program or with-rules result" ast))
   (define (walk p path)
     (match p
-      [(literal s)
-       (define ids (list->vector (tokenize s)))
+      [(literal s) (define ids (list->vector (tokenize s)))
        (values (c-lit ids) (zero? (vector-length ids)) #f)]
-      [(regular pattern)
-       (define machine (make-hard-regex pattern vocabulary))
+      [(regular pattern) (define machine (make-hard-regex pattern vocabulary))
        (values (c-regex machine) (regex-state-accepting? (regex-start machine)) #f)]
       [(any-text max) (values (c-text max) #t #t)]
       [(alternatives xs)
@@ -108,66 +123,42 @@
        (when has-text? (error 'compile-spec "~a: text cannot be repeated" path))
        (when nullable? (error 'compile-spec "~a: repeated program must consume a token" path))
        (values (c-repeat min max child) (zero? min) #f)]
-      [(scoped child rs)
-       ;; Outer rules precede rules nested in the child, matching structural DSL order.
-       (define slots (map add-rule! rs))
-       (define-values (body nullable? has-text?) (walk child (string-append path "/rules")))
-       (values (c-scope body slots) nullable? has-text?)]
-      [_ (raise-argument-error 'compile-spec "program?" p)]))
-  (define-values (root _nullable _text?) (walk ast "root"))
-  (compiled-program root (list->vector rules)))
-
+      [_ (raise-argument-error 'compile-spec "hard program" p)]))
+  (define-values (root _nullable _text?) (walk body "root"))
+  (define matchers (if rs (rule-matchers rs) #()))
+  (define schema (and rs (rule-set-schema rs)))
+  (compiled-program root matchers schema))
 (define (program-rule-count p) (vector-length (compiled-program-rules p)))
-
-;; Expand epsilon tasks until every returned run is accepting or starts with a
-;; consuming active matcher.  Accepting regex/text leaves fork: one branch ends
-;; the leaf and another may consume more input.
+(define (program-schema p) (compiled-program-schema p))
 (define (expand-one r position)
   (match (run-todo r)
     ['() (list r)]
-    [(cons (c-seq xs) rest) (expand-one (run (append xs rest) (run-spans r)) position)]
-    [(cons (c-choice xs) rest)
-     (append-map (lambda (x) (expand-one (run (cons x rest) (run-spans r)) position)) xs)]
-    [(cons (c-repeat min max item) rest)
-     (expand-one (run (cons (more min max item) rest) (run-spans r)) position)]
+    [(cons (c-seq xs) rest) (expand-one (run (append xs rest)) position)]
+    [(cons (c-choice xs) rest) (append-map (lambda (x) (expand-one (run (cons x rest)) position)) xs)]
+    [(cons (c-repeat min max item) rest) (expand-one (run (cons (more min max item) rest)) position)]
     [(cons (more min max item) rest)
-     (append (if (zero? min) (expand-one (run rest (run-spans r)) position) '())
+     (append (if (zero? min) (expand-one (run rest) position) '())
              (if (positive? max)
-                 (expand-one (run (list* item (more (if (zero? min) 0 (sub1 min)) (sub1 max) item) rest)
-                                      (run-spans r)) position)
+                 (expand-one (run (list* item (more (if (zero? min) 0 (sub1 min))
+                                                     (sub1 max) item) rest)) position)
                  '()))]
-    [(cons (c-scope child slots) rest)
-     (expand-one (run (list* child (close-scope slots position) rest) (run-spans r)) position)]
-    [(cons (close-scope slots start) rest)
-     (define spans (append (for/list ([slot (in-list slots)]) (span slot start position))
-                           (run-spans r)))
-     (expand-one (run rest spans) position)]
     [(cons (c-lit ids) rest)
-     (if (zero? (vector-length ids))
-         (expand-one (run rest (run-spans r)) position)
-         (list (run (cons (a-lit ids 0) rest) (run-spans r))))]
-    [(cons (c-regex machine) rest)
-     (expand-one (run (cons (a-regex machine (regex-start machine)) rest) (run-spans r)) position)]
-    [(cons (c-text max) rest)
-     (expand-one (run (cons (a-text 0 max) rest) (run-spans r)) position)]
-    [(cons (and active (a-regex _ s)) rest)
-     (cons r (if (regex-state-accepting? s)
-                 (expand-one (run rest (run-spans r)) position) '()))]
+     (if (zero? (vector-length ids)) (expand-one (run rest) position)
+         (list (run (cons (a-lit ids 0) rest))))]
+    [(cons (c-regex machine) rest) (expand-one (run (cons (a-regex machine (regex-start machine)) rest)) position)]
+    [(cons (c-text max) rest) (expand-one (run (cons (a-text 0 max) rest)) position)]
+    [(cons (a-regex _ s) rest)
+     (cons r (if (regex-state-accepting? s) (expand-one (run rest) position) '()))]
     [(cons (a-text count max) rest)
-     (append (if (< count max) (list r) '())
-             (expand-one (run rest (run-spans r)) position))]
+     (append (if (< count max) (list r) '()) (expand-one (run rest) position))]
     [(cons (a-lit _ _) _) (list r)]))
-
 (define (normalize runs position)
   (define seen (make-hash))
   (reverse
-   (for*/fold ([unique '()]) ([source (in-list runs)]
-                              [r (in-list (expand-one source position))])
-     (if (hash-ref seen r #f)
-         unique
+   (for*/fold ([unique '()]) ([source (in-list runs)] [r (in-list (expand-one source position))])
+     (if (hash-ref seen r #f) unique
          (begin (hash-set! seen r #t) (cons r unique))))))
-(define (program-initial p)
-  (state (normalize (list (run (list (compiled-program-root p)) '())) 0) 0))
+(define (program-initial p) (state (normalize (list (run (list (compiled-program-root p)))) 0) 0))
 (define (program-step st id)
   (define next-position (add1 (state-position st)))
   (define next
@@ -177,41 +168,24 @@
          [(cons (a-lit ids pos) rest)
           (if (= id (vector-ref ids pos))
               (list (run (if (= (add1 pos) (vector-length ids)) rest
-                             (cons (a-lit ids (add1 pos)) rest))
-                         (run-spans r))) '())]
+                             (cons (a-lit ids (add1 pos)) rest)))) '())]
          [(cons (a-regex machine s) rest)
           (define n (regex-state-step s id))
-          (if n (list (run (cons (a-regex machine n) rest) (run-spans r))) '())]
+          (if n (list (run (cons (a-regex machine n) rest))) '())]
          [(cons (a-text count max) rest)
-          (if (< count max) (list (run (cons (a-text (add1 count) max) rest) (run-spans r))) '())]
+          (if (< count max) (list (run (cons (a-text (add1 count) max) rest))) '())]
          [_ '()]))
      (state-runs st)))
   (state (normalize next next-position) next-position))
-
 (define (program-accepting? st) (ormap (lambda (r) (null? (run-todo r))) (state-runs st)))
 (define (program-dead? st) (null? (state-runs st)))
 (define (program-domain st)
   (for/fold ([domain domain-none]) ([r (in-list (state-runs st))])
     (match (run-todo r)
       [(cons (a-lit ids pos) _) (domain-union domain (domain-only (list (vector-ref ids pos))))]
-      [(cons (a-regex _machine s) _) (domain-union domain (domain-only/vector (regex-allowed s)))]
+      [(cons (a-regex _ s) _) (domain-union domain (domain-only/vector (regex-allowed s)))]
       [(cons (a-text _ _) _) domain-all]
       [_ domain])))
-
 (define (program-observe p st ids detokenize)
   (unless (program-accepting? st) (error 'observe-token-ids "hard-invalid candidate"))
-  (define labels (make-vector (program-rule-count p) 0))
-  (define samples (make-hash))
-  (for* ([r (in-list (state-runs st))] #:when (null? (run-todo r))
-         [sp (in-list (run-spans r))])
-    (define m (vector-ref (compiled-program-rules p) (span-slot sp)))
-    (define key (cons (span-start sp) (span-end sp)))
-    (define sample
-      (hash-ref! samples key
-                 (lambda ()
-                   (detokenize
-                    (take (drop ids (car key)) (- (cdr key) (car key)))))))
-    (when (if (matcher-literal m) (string-contains? sample (matcher-literal m))
-              (regex-text-match? (matcher-regex m) sample))
-      (vector-set! labels (span-slot sp) (matcher-polarity m))))
-  (vector->immutable-vector labels))
+  (match-labels (compiled-program-rules p) (detokenize ids)))

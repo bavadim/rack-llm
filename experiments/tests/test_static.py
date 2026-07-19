@@ -193,6 +193,7 @@ class PreparedDataTests(unittest.TestCase):
         for path in (EXPERIMENTS / "src" / "pwseq_experiments").glob("*.py"):
             if path.name in {
                 "evaluator.py", "pipeline.py", "hard.py", "preflight.py", "freeze.py",
+                "postmortem.py",
             }:
                 continue
             text = path.read_text(encoding="utf-8")
@@ -376,7 +377,6 @@ class RuntimePlumbingTests(unittest.TestCase):
             (run / "CLAIMS.json").write_text("[]\n")
             (run / "tables").mkdir()
             (run / "tables" / "statistical_tests.jsonl").write_text("{}\n")
-            (run / "tables" / "table2b_temperature_ablation.csv").write_text("variant\n")
             (run / "tables" / "table3_generation.csv").write_text("method\n")
             (run / "tables" / "table5_mixed_hard_weak.csv").write_text("method\n")
             (run / "thresholds").mkdir()
@@ -435,39 +435,67 @@ class RuntimePlumbingTests(unittest.TestCase):
             instances = root / "instances.jsonl"
             observations = root / "observations.jsonl"
             output = root / "scores.jsonl"
-            models = root / "models"
+            calibrations = root / "calibrations"
             write_jsonl(instances, [{"family": "test-family"}])
+            env = dict(os.environ)
+            env["PLTCOLLECTS"] = f"{EXPERIMENTS.parent.parent}:"
+            schema = subprocess.run(
+                [
+                    "racket", "-e",
+                    """(begin
+                      (require json rack-llm/private/program rack-llm/private/weak)
+                      (define schema
+                        (program-schema
+                         (compile-program
+                          (with-rules
+                           (text 8)
+                           (rule-set \"experiment/model-free@1\"
+                                     (positive \"rule-0\" (lit \"a\"))
+                                     (positive \"rule-1\" (lit \"b\"))
+                                     (negative \"rule-2\" (lit \"c\"))
+                                     (negative \"rule-3\" (lit \"d\"))))
+                          (lambda (_) '()) #f)))
+                      (write-json
+                       (observation->datum
+                        (make-observation schema #(1 1 -1 -1)))))""",
+                ],
+                cwd=EXPERIMENTS.parent, env=env, text=True,
+                capture_output=True, check=True,
+            )
+            observation_template = json.loads(schema.stdout)
             rows = []
             for index in range(120):
-                sign = 1 if index % 2 else -1
+                good = index % 2 == 1
                 rows.append({
                     "record_type": "observation",
                     "family": "test-family", "split": "calibration",
                     "prompt_id": f"p{index}", "seed": index,
                     "temperature": 1.0, "sample_index": 0,
                     "labels": [
-                        0 if index % 7 == 0 else sign,
-                        -sign if index % 11 == 0 else sign,
-                        0 if index % 5 == 0 else sign,
-                        -sign if index % 13 == 0 else sign,
+                        1 if (good and index % 7) or (not good and index % 11 == 0) else 0,
+                        1 if (good and index % 5) or (not good and index % 13 == 0) else 0,
+                        -1 if (not good and index % 7) or (good and index % 11 == 0) else 0,
+                        -1 if (not good and index % 5) or (good and index % 13 == 0) else 0,
                     ],
                     "rule_ids": [f"rule-{slot}" for slot in range(4)],
                 })
+                rows[-1]["schema_id"] = "experiment/model-free@1"
+                rows[-1]["observation"] = {
+                    **observation_template, "labels": rows[-1]["labels"],
+                }
             write_jsonl(observations, rows)
-            env = dict(os.environ)
-            env["PLTCOLLECTS"] = f"{EXPERIMENTS.parent.parent}:"
             command = [
                 "racket", str(EXPERIMENTS / "racket" / "rack_runner.rkt"),
                 "--mode", "fit-score", "--input", str(instances),
                 "--candidates", str(observations), "--output", str(output),
-                "--models-dir", str(models),
+                "--calibrations-dir", str(calibrations),
                 "--runtime-fingerprint", "model-free-test",
             ]
             self.assertNotIn("--model", command)
             subprocess.run(command, cwd=EXPERIMENTS.parent, env=env, check=True)
             records = read_jsonl(output)
             self.assertEqual(records[0]["record_type"], "fit")
-            self.assertTrue((models / "test-family.json").exists())
+            self.assertTrue((calibrations / "test-family.json").exists())
 
     def test_native_regex_validator_abi(self):
         self.assertTrue(hard_accepts({"kind": "ere", "pattern": "^a$"}, "a"))
@@ -504,6 +532,28 @@ class RuntimePlumbingTests(unittest.TestCase):
                     evaluator.official_check_many([(row, "ok")], workers=1), [True]
                 )
                 self.assertEqual(check.call_count, 2)
+
+    def test_official_evaluator_fingerprint_includes_nltk_resources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ifbench"
+            root.mkdir()
+            for name in (
+                "evaluation_lib.py", "instructions.py",
+                "instructions_registry.py", "instructions_util.py",
+            ):
+                (root / name).write_text(name, encoding="utf-8")
+            resource = root / ".nltk_data/tokenizers/punkt/value"
+            resource.parent.mkdir(parents=True)
+            resource.write_text("first", encoding="utf-8")
+            with (
+                mock.patch.object(evaluator, "CACHE", Path(directory)),
+                mock.patch.object(evaluator, "_EVALUATOR_FINGERPRINT", None),
+            ):
+                first = evaluator.evaluator_fingerprint()
+                evaluator._EVALUATOR_FINGERPRINT = None
+                resource.write_text("second", encoding="utf-8")
+                second = evaluator.evaluator_fingerprint()
+            self.assertNotEqual(first, second)
 
     def test_official_evaluator_wrapper_matches_pinned_strict_api(self):
         module = evaluator.load_evaluator()

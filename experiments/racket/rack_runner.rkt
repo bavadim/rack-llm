@@ -13,11 +13,9 @@
 (define input-path (make-parameter #f))
 (define candidates-path (make-parameter #f))
 (define output-path (make-parameter #f))
-(define models-dir (make-parameter #f))
+(define calibrations-dir (make-parameter #f))
 (define model-path (make-parameter #f))
 (define temperature (make-parameter 1.0))
-(define fit-temperatures (make-parameter '(1.0)))
-(define fit-variant (make-parameter "primary"))
 (define seeds (make-parameter '(0)))
 (define samples-per-seed (make-parameter 1))
 (define max-attempts (make-parameter 128))
@@ -31,6 +29,8 @@
 (define batch-threads (make-parameter 16))
 (define factor-threads (make-parameter 16))
 (define runtime-fingerprint (make-parameter #f))
+(define good-multiplier (make-parameter 1.0))
+(define bad-multiplier (make-parameter 0.0))
 
 (command-line
  #:program "rack_runner.rkt"
@@ -39,14 +39,10 @@
  [("--input") value "Instances JSONL" (input-path value)]
  [("--candidates") value "Candidates JSONL" (candidates-path value)]
  [("--output") value "Output JSONL" (output-path value)]
- [("--models-dir") value "Weak model directory" (models-dir value)]
+ [("--calibrations-dir") value "Saved calibration directory"
+                           (calibrations-dir value)]
  [("--model") value "GGUF path" (model-path value)]
  [("--temperature") value "Temperature" (temperature (string->number value))]
- [("--fit-temperatures") value "Comma separated calibration temperatures"
-                           (fit-temperatures
-                            (map string->number (string-split value ",")))]
- [("--fit-variant") value "Weak-model variant recorded in fit rows"
-                    (fit-variant value)]
  [("--seeds") value "Comma separated seeds"
               (seeds (map string->number (string-split value ",")))]
  [("--samples-per-seed") value "Samples per seed"
@@ -75,7 +71,11 @@
  [("--factor-threads") value "native factor-scan lane threads"
                        (factor-threads (string->number value))]
  [("--runtime-fingerprint") value "Frozen runtime resource configuration"
-                            (runtime-fingerprint value)])
+                            (runtime-fingerprint value)]
+ [("--good-multiplier") value "PWSG good-class multiplier"
+                          (good-multiplier (string->number value))]
+ [("--bad-multiplier") value "PWSG bad-class multiplier"
+                         (bad-multiplier (string->number value))])
 
 (unless (and (input-path) (output-path))
   (error 'rack-runner "--input and --output are required"))
@@ -91,10 +91,6 @@
   (error 'rack-runner "batch sizes and thread counts must be positive integers"))
 (when (> (ubatch-size) (batch-size))
   (error 'rack-runner "--ubatch-size cannot exceed --batch-size"))
-(unless (and (pair? (fit-temperatures))
-             (andmap (lambda (value) (and (real? value) (positive? value)))
-                     (fit-temperatures)))
-  (error 'rack-runner "--fit-temperatures must contain positive numbers"))
 
 (define (read-jsonl path)
   (call-with-input-file path
@@ -120,15 +116,16 @@
     (for/list ([raw (in-list (get row 'weak_rules '()))])
       (define pattern (ere (get raw 'pattern)))
       (if (string=? (get raw 'polarity) "positive")
-          (positive pattern)
-          (negative pattern))))
+          (positive (get raw 'rule_id) pattern)
+          (negative (get raw 'rule_id) pattern))))
   (if (null? rules)
       (hard-program row)
-      (apply with-rules (hard-program row) rules)))
+      (with-rules (hard-program row)
+                  (apply rule-set (get row 'weak_schema_id) rules))))
 
 (define (result-json row seed sample-index result)
   (hash
-   'artifact_schema_version 2
+   'artifact_schema_version 4
    'prompt_id (get row 'id)
    'family (get row 'family)
    'split (get row 'split)
@@ -146,6 +143,9 @@
    'latency_ms (generation-result-latency-ms result)
    'tokenizer_fingerprint (generation-result-tokenizer-fingerprint result)
    'posterior (or (generation-result-posterior result) #f)
+   'terminal_mass (generation-result-terminal-mass result)
+   'calibration_fingerprint
+   (or (generation-result-calibration-fingerprint result) #f)
    'attempts (generation-result-attempts result)
    'rejected_attempts (if (eq? (generation-result-status result) 'found)
                           (sub1 (generation-result-attempts result))
@@ -249,9 +249,9 @@
    work (+ (naive-work-latency work) (generation-result-latency-ms result)))
   (when (eq? (generation-result-status result) 'found)
     (with-handlers ([exn:fail? (lambda (_exn) (void))])
-      (observe-token-ids (naive-work-hard-spec work)
-                         (generation-result-token-ids result))
-      (set-naive-work-found! work result))))
+      (when (accepts? (naive-work-hard-spec work)
+                      (generation-result-text result))
+        (set-naive-work-found! work result)))))
 
 (define (write-naive-result out work)
   (define row (naive-work-row work))
@@ -275,7 +275,7 @@
         'status "not-found-attempt-budget" 'reason "naive rejection exhausted"
         'text "" 'token_ids '() 'token_count 0 'lm_logprob #f
         'hard_valid #f 'latency_ms (naive-work-latency work) 'posterior #f
-        'tokenizer_fingerprint "" 'artifact_schema_version 2
+        'tokenizer_fingerprint "" 'artifact_schema_version 4
         'runtime_fingerprint (runtime-fingerprint)
         'attempts (naive-work-attempts work)
         'rejected_attempts (naive-work-attempts work)
@@ -301,8 +301,8 @@
     (for ([work (in-list works)])
       (write-naive-result out work))))
 
-(define (model-file family)
-  (build-path (models-dir)
+(define (calibration-file family)
+  (build-path (calibrations-dir)
               (string-append
                (regexp-replace* #px"[^A-Za-z0-9._-]" family "_")
                ".json")))
@@ -310,27 +310,7 @@
 (define (candidate-observation compiled candidate)
   (observe-token-ids compiled (get candidate 'token_ids)))
 
-(define (family-rule-ids family persisted)
-  (define identities
-    (remove-duplicates
-     (for/list ([row (in-list persisted)]
-                #:when (string=? family (get row 'family)))
-       (get row 'rule_ids))))
-  (unless (= (length identities) 1)
-    (error 'rack-runner "family ~a has ~a ordered rule identities"
-           family (length identities)))
-  (car identities))
 (define (row-rule-ids row) (map (lambda (rule) (get rule 'rule_id)) (get row 'weak_rules '())))
-(define (rules-file family) (path-replace-extension (model-file family) ".rules.json"))
-(define (write-rule-manifest family ids model)
-  (call-with-output-file (rules-file family)
-    (lambda (out) (write-json (hash 'family family 'rule_ids ids
-                                    'weak_model_fingerprint (weak-model-fingerprint model)) out))
-    #:exists 'truncate/replace))
-(define (check-rule-manifest family ids)
-  (define payload (call-with-input-file (rules-file family) read-json))
-  (unless (and (equal? family (get payload 'family)) (equal? ids (get payload 'rule_ids)))
-    (error 'rack-runner "ordered rule manifest mismatch for ~a" family)))
 
 (define (run-observe out)
   (unless (candidates-path)
@@ -375,14 +355,55 @@
                        'seed (get candidate 'seed)
                        'temperature (get candidate 'temperature)
                        'sample_index (get candidate 'sample_index)
-                       'labels (vector->list observation)
+                       'schema_id (get row 'weak_schema_id)
+                       'observation (observation->datum observation)
+                       'labels (vector->list (observation-labels observation))
                        'rule_ids (row-rule-ids row)))))))
       (lambda () (void)))))
 
+(define (persisted-observation raw)
+  (datum->observation (get raw 'observation)))
+
+(define (score-datum raw calibration)
+  (define observation (persisted-observation raw))
+  (hash
+   'record_type "score"
+   'prompt_id (get raw 'prompt_id)
+   'family (get raw 'family)
+   'split (get raw 'split)
+   'seed (get raw 'seed)
+   'temperature (get raw 'temperature 1.0)
+   'sample_index (get raw 'sample_index)
+   'candidate_id (get raw 'candidate_id #f)
+   'schema_id (get raw 'schema_id)
+   'observation (get raw 'observation)
+   'labels (vector->list (observation-labels observation))
+   'rule_ids (get raw 'rule_ids)
+   'posterior (calibration-posterior calibration observation)
+   'calibration_fingerprint (calibration-fingerprint calibration)))
+
+(define (score-error-datum raw message)
+  (hash
+   'record_type "score_error"
+   'prompt_id (get raw 'prompt_id)
+   'family (get raw 'family)
+   'split (get raw 'split)
+   'seed (get raw 'seed)
+   'temperature (get raw 'temperature 1.0)
+   'sample_index (get raw 'sample_index)
+   'candidate_id (get raw 'candidate_id #f)
+   'schema_id (get raw 'schema_id #f)
+   'observation (get raw 'observation #f)
+   'labels (get raw 'labels '())
+   'rule_ids (get raw 'rule_ids '())
+   'posterior #f
+   'message message))
+
 (define (run-fit-score out)
-  (unless (and (candidates-path) (models-dir))
-    (error 'rack-runner "fit-score requires persisted --candidates observations and --models-dir"))
-  (make-directory* (models-dir))
+  (unless (and (candidates-path) (calibrations-dir))
+    (error 'rack-runner
+           "fit-score requires persisted --candidates observations and --calibrations-dir"))
+  (make-directory* (calibrations-dir))
   (define persisted
     (filter (lambda (row) (string=? "observation" (get row 'record_type "")))
             (read-jsonl (candidates-path))))
@@ -392,81 +413,87 @@
     (hash-update! persisted-by-family (get row 'family) (lambda (values) (cons row values)) '()))
   (for ([family (in-list families)])
     (define family-persisted (reverse (hash-ref persisted-by-family family '())))
-    (define rule-ids (family-rule-ids family family-persisted))
-    (define labels
+    (define calibration-observations
       (for/list ([raw (in-list family-persisted)]
-                 #:when (and (string=? "calibration" (get raw 'split))
-                             (member (get raw 'temperature 1.0)
-                                     (fit-temperatures) =)))
-        (get raw 'labels)))
-    (with-handlers ([exn:fail?
-                     (lambda (exn)
-                       (write-row out
-                                  (hash 'record_type "fit_error"
-                                        'family family
-                                        'message (exn-message exn))))])
-      (define weak-model (fit-weak-model labels #:seed 0))
-      (save-weak-model weak-model (model-file family))
-      (write-rule-manifest family rule-ids weak-model)
+                 #:when (string=? "calibration" (get raw 'split)))
+        (persisted-observation raw)))
+    (define calibration
+      (with-handlers ([exn:fail?
+                       (lambda (exn)
+                         (write-row out
+                                    (hash 'record_type "fit_error"
+                                          'family family
+                                          'schema_id
+                                          (and (pair? family-persisted)
+                                               (get (car family-persisted) 'schema_id #f))
+                                          'fit_training_rows
+                                          (length calibration-observations)
+                                          'message (exn-message exn)))
+                         #f)])
+        (fit-calibration calibration-observations #:seed 0)))
+    (unless calibration
+      (for ([raw (in-list family-persisted)])
+        (write-row out (score-error-datum raw "calibration fit failed"))))
+    (when calibration
+      (save-calibration calibration (calibration-file family))
       (write-row out
                  (hash 'record_type "fit"
                        'family family
-                       'variant (fit-variant)
-                       'fit_temperatures (fit-temperatures)
-                       'fit_training_rows (length labels)
-                       'weak_model_fingerprint (weak-model-fingerprint weak-model)
-                       'diagnostics (weak-model-diagnostics weak-model)))
+                       'schema_id
+                       (and (pair? family-persisted)
+                            (get (car family-persisted) 'schema_id #f))
+                       'fit_training_rows (length calibration-observations)
+                       'calibration_fingerprint
+                       (calibration-fingerprint calibration)
+                       'diagnostics (calibration-diagnostics calibration)))
       (for ([raw (in-list family-persisted)])
-        (define observation (get raw 'labels))
-        (write-row
-         out
-         (hash
-          'record_type "score"
-          'variant (fit-variant)
-          'prompt_id (get raw 'prompt_id)
-          'family family
-          'split (get raw 'split)
-          'seed (get raw 'seed)
-          'temperature (get raw 'temperature 1.0)
-          'sample_index (get raw 'sample_index)
-          'candidate_id (get raw 'candidate_id #f)
-          'labels observation
-          'rule_ids (get raw 'rule_ids)
-          'posterior (weak-posterior weak-model observation)
-          'weak_model_fingerprint (weak-model-fingerprint weak-model)))))))
+        (with-handlers ([exn:fail?
+                         (lambda (exn)
+                           (write-row out (score-error-datum raw (exn-message exn))))])
+          (write-row out (score-datum raw calibration)))))))
 
 (struct pwsg-work (row seed checkpoint request) #:transparent)
+(struct pwsg-source (row compiled) #:transparent)
 
 (define (run-pwsg out)
-  (unless (models-dir)
-    (error 'rack-runner "pwsg requires --models-dir"))
-  (define weak-models
-    (for/hash ([family (in-list
-                        (remove-duplicates
-                         (map (lambda (row) (get row 'family)) rows)))]
-               #:when (file-exists? (model-file family)))
-      (values family (load-weak-model (model-file family)))))
-  (define valid-rows
-    (for/list ([row (in-list rows)]
-               #:when
-               (let ([available? (file-exists? (model-file (get row 'family)))])
-                 (unless available?
-                   (write-row out
-                              (hash 'record_type "generation_error"
-                                    'prompt_id (get row 'id)
-                                    'family (get row 'family)
-                                    'message "weak model unavailable")))
-                 available?))
-      row))
+  (unless (calibrations-dir)
+    (error 'rack-runner "pwsg requires --calibrations-dir"))
   (define checkpoint-budgets
     (if (null? (attempt-checkpoints))
         (list (max-attempts))
         (attempt-checkpoints)))
-  (define (make-pwsg-group row)
-    (define family (get row 'family))
-    (define weak-model (hash-ref weak-models family))
-    (check-rule-manifest family (row-rule-ids row))
-    (define compiled (compile-spec backend (row-program row)))
+  (define calibrations (make-hash))
+  (define (write-pwsg-errors row message)
+    (for* ([seed (in-list (seeds))]
+           [budget (in-list checkpoint-budgets)])
+      (write-row out
+                 (hash 'record_type "pwsg_error"
+                       'prompt_id (get row 'id)
+                       'family (get row 'family)
+                       'split (get row 'split)
+                       'seed seed 'sample_index 0
+                       'checkpoint_budget budget
+                       'status "calibration-error"
+                       'message message))))
+  (define prepared
+    (filter
+     values
+     (for/list ([row (in-list rows)])
+       (with-handlers ([exn:fail?
+                        (lambda (exn)
+                          (write-pwsg-errors row (exn-message exn))
+                          #f)])
+         (define family (get row 'family))
+         (define calibration
+           (hash-ref! calibrations family
+                      (lambda () (load-calibration (calibration-file family)))))
+         (pwsg-source
+          row
+          (attach-calibration
+           (compile-spec backend (row-program row)) calibration
+           #:good (good-multiplier) #:bad (bad-multiplier)))))))
+  (define (make-pwsg-group source)
+    (define row (pwsg-source-row source))
     (for*/list ([seed (in-list (seeds))]
                 [budget (in-list checkpoint-budgets)])
       (define draw-caps (get row 'paired_draw_caps))
@@ -474,15 +501,14 @@
       (pwsg-work
        row seed budget
        (generation-request
-        compiled (get row 'model_prompt (get row 'prompt))
+        (pwsg-source-compiled source) (get row 'model_prompt (get row 'prompt))
         #:max-attempts (max-attempts)
         #:max-model-draws draw-cap
-        #:weak-model weak-model
         #:temperature (temperature) #:max-tokens (get row 'max_tokens)
         #:seed seed #:deadline-ms (deadline-ms)))))
   (define jobs-per-prompt (* (length (seeds)) (length checkpoint-budgets)))
   (for ([row-cohort
-         (in-list (pack-prompt-row-cohorts valid-rows jobs-per-prompt))])
+         (in-list (pack-prompt-row-cohorts prepared jobs-per-prompt))])
     (define cohort (append-map make-pwsg-group row-cohort))
     (define results (generate-batch (map pwsg-work-request cohort)))
     (for ([work (in-list cohort)] [result (in-list results)])
@@ -491,39 +517,36 @@
                   (result-json (pwsg-work-row work)
                                (pwsg-work-seed work) 0 result)
                   'record_type "pwsg"
-                  'checkpoint_budget (pwsg-work-checkpoint work))))))
+                  'checkpoint_budget (pwsg-work-checkpoint work)
+                  'good_multiplier (good-multiplier)
+                  'bad_multiplier (bad-multiplier))))))
 
 (define (run-score out)
-  (unless (and (candidates-path) (models-dir))
-    (error 'rack-runner "score requires persisted --candidates observations and --models-dir"))
+  (unless (and (candidates-path) (calibrations-dir))
+    (error 'rack-runner
+           "score requires persisted --candidates observations and --calibrations-dir"))
   (define persisted
     (filter (lambda (row) (string=? "observation" (get row 'record_type "")))
             (read-jsonl (candidates-path))))
   (for ([family (in-list (remove-duplicates (map (lambda (row) (get row 'family)) rows)))])
-    (define rule-ids (family-rule-ids family persisted))
-    (define model-file-path (model-file family))
-    (if (not (file-exists? model-file-path))
-        (write-row out
-                   (hash 'record_type "score_error" 'prompt_id #f
-                         'family family 'message "weak model unavailable"))
-        (let ([weak-model (load-weak-model model-file-path)])
-          (check-rule-manifest family rule-ids)
-          (for ([raw (in-list persisted)]
-                #:when (string=? family (get raw 'family)))
-            (define observation (get raw 'labels))
-            (write-row
-             out
-             (hash 'record_type "score"
-                   'candidate_id (get raw 'candidate_id #f)
-                   'prompt_id (get raw 'prompt_id)
-                   'family family
-                   'split (get raw 'split)
-                   'seed (get raw 'seed)
-                   'sample_index (get raw 'sample_index)
-                   'labels observation
-                   'rule_ids (get raw 'rule_ids)
-                   'posterior (weak-posterior weak-model observation)
-                   'weak_model_fingerprint (weak-model-fingerprint weak-model))))))))
+    (define family-persisted
+      (filter (lambda (raw) (string=? family (get raw 'family))) persisted))
+    (define calibration-path (calibration-file family))
+    (if (not (file-exists? calibration-path))
+        (for ([raw (in-list family-persisted)])
+          (write-row out (score-error-datum raw "calibration unavailable")))
+        (with-handlers ([exn:fail?
+                         (lambda (exn)
+                           (for ([raw (in-list family-persisted)])
+                             (write-row out
+                                        (score-error-datum raw (exn-message exn)))))])
+          (define calibration (load-calibration calibration-path))
+          (for ([raw (in-list family-persisted)])
+            (with-handlers ([exn:fail?
+                             (lambda (exn)
+                               (write-row out
+                                          (score-error-datum raw (exn-message exn))))])
+              (write-row out (score-datum raw calibration))))))))
 
 (make-directory* (or (path-only (output-path)) "."))
 (call-with-output-file (output-path)

@@ -79,7 +79,7 @@ def freeze() -> dict:
     if ifbench_revision != config["ifbench"]["commit"]:
         raise RuntimeError("configured IFBench revision does not match checkout")
     manifest = {
-        "artifact_schema_version": 3,
+        "artifact_schema_version": 4,
         "protocol_version": config["protocol_revision"],
         "frozen_at_utc": datetime.now(timezone.utc).isoformat(),
         "git_revision": __import__("subprocess").check_output(

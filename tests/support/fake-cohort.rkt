@@ -47,11 +47,8 @@
        (define children (factor-request-children request))
        (define child-table (make-hash children))
        (define constrain? (factor-request-constrain? request))
-       (define rng
-         (make-rng (inexact->exact
-                    (floor (* 1000000000.0 (factor-request-draw request))))))
        (sample-factor-logits
-        (logits (vector-ref (sessions cohort) lane)) rng
+        (logits (vector-ref (sessions cohort) lane)) (factor-request-draw request)
         (factor-request-temperature request)
         (lambda (id)
           (cond [(and constrain? (not (domain-member? domain id))) -inf.0]

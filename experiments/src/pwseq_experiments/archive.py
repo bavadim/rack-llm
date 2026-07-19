@@ -20,7 +20,6 @@ def archive() -> Path:
     required = [
         ARTIFACTS / "stage_status.json", ARTIFACTS / "CLAIMS.json",
         ARTIFACTS / "tables" / "statistical_tests.jsonl",
-        ARTIFACTS / "tables" / "table2b_temperature_ablation.csv",
         ARTIFACTS / "tables" / "table3_generation.csv",
         ARTIFACTS / "tables" / "table5_mixed_hard_weak.csv",
         ARTIFACTS / "thresholds" / "main_noise_00.jsonl",

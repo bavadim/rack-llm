@@ -117,13 +117,18 @@ class PromptReportingTests(unittest.TestCase):
                     for prompt in range(50):
                         for seed in range(5):
                             wrong = (prompt + seed + len(method)) % 11 == 0
-                            raw.append({
+                            row = {
                                 "split": "test", "budget": 8, "method": method,
                                 "prompt_id": f"{family}-{prompt}", "family": family,
                                 "seed": seed,
                                 "outcome": "FOUND_WRONG" if wrong else "FOUND_OK",
                                 "confidence": .8, "model_draws": 3,
-                            })
+                            }
+                            if family == "a" and seed == 0 and method in {
+                                "posterior_best_of_b", "exact_pwsg",
+                            }:
+                                row["calibration_status"] = "ERROR"
+                            raw.append(row)
             write_jsonl(
                 artifacts / "results" / "main_noise_00_generation_raw.jsonl", raw,
             )
@@ -149,6 +154,8 @@ class PromptReportingTests(unittest.TestCase):
             self.assertEqual(len(risk) % 4, 0)
             self.assertTrue(all(row["bootstrap_support"] == 5 for row in risk))
             self.assertEqual({row["coverage_grid_points"] for row in risk}, {101})
+            self.assertEqual({tuple(row["blocked_families"]) for row in statistics}, {("a",)})
+            self.assertEqual({row["families"] for row in statistics}, {1})
 
     def test_png_renderer_needs_only_machine_readable_figure_data(self):
         with tempfile.TemporaryDirectory() as directory:

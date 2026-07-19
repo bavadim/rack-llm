@@ -9,7 +9,7 @@
   (test-case "factor sampling reports exact base and frontier mass"
     (define logits (vector->logits-view (vector (log 0.4) (log 0.3) (log 0.2) (log 0.1))))
     (define selected
-      (sample-factor-logits logits (make-rng 7) 1.0
+      (sample-factor-logits logits 0.37 1.0
                             (lambda (id) (if (= id 0) (log 0.5) 0.0))
                             (lambda (id) (< id 2))))
     (check-not-false selected)

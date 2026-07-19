@@ -1,24 +1,52 @@
 {
   "dataset_seed": 20260716,
-  "protocol_revision": "paper-v5",
+  "protocol_revision": "paper-v6",
   "power_target_effect": 0.05,
   "power_target": 0.8,
   "power_alpha": 0.05,
-  "rule_audit_temperatures": [0.7, 1.0],
   "primary_temperature": 1.0,
-  "weak_model_variants": {
-    "primary": {
-      "fit_temperatures": [1.0],
-      "aggregation_only": false
-    },
-    "mixture_0p7_1p0": {
-      "fit_temperatures": [0.7, 1.0],
-      "aggregation_only": true
-    }
+  "posterior_policy": {
+    "good_multiplier": 1.0,
+    "bad_multiplier": 0.0
   },
   "primary_calibration_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
-  "audit_calibration_seeds": [0, 1, 2, 3, 4, 5, 6, 7],
-  "candidate_evaluation_seeds": [0, 1, 2, 3, 4, 5, 6, 7],
+  "candidate_evaluation_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+  "candidate_cache_import": {
+    "model_family": "qwen3.5",
+    "eligible_model_names": ["main", "main_design"],
+    "source_run_id": "3783162ba5b7f01a",
+    "source_relative_path": "raw/main_design_candidate_pool.jsonl",
+    "sha256": "ce9766f84c14a6ef693bada48574fb533c1ee9b9160b55f676e82f81074b6b2d",
+    "source_frozen_manifest_sha256": "6230c8780275e5539812d820ec0e1fd8f171176d5cdcf10a652db9976421ab04",
+    "source_manifest_schema_version": 3,
+    "source_protocol_revision": "paper-v5",
+    "source_git_revision": "3d4aa7128f3b3ad2104579445bde16d0be275c93",
+    "source_llama_cpp_revision": "683f0c72e5b3c07fab90bfd9ec2ce8661d624228",
+    "source_gguf_path": "/mnt/storage/models/qwen/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf",
+    "source_gguf_sha256": "25082a7dd3776cc3c741c6347d3bd04523f05796607b3fbc32fa3a25dfa1418c",
+    "source_instances_relative_path": "inputs/main_design_candidate_instances.jsonl",
+    "source_instances_sha256": "881940ae05605cf7caa9bf5634c97beaaac378026780a5414f29de03cde1ee6f",
+    "source_candidate_schema_version": 2,
+    "tokenizer_fingerprint": "llama-vocab-fnv1a64:b557240b24507856",
+    "source_runtime": {
+      "generation_workers": 1,
+      "evaluator_workers": 8,
+      "context_size": 1024,
+      "model_threads": 4,
+      "batch_threads": 16,
+      "factor_threads": 16,
+      "batch_size": 8192,
+      "ubatch_size": 512,
+      "regex_threads": 8,
+      "cohort_width": 32,
+      "gpu_devices": [0]
+    },
+    "allowed_splits": ["calibration", "dev"],
+    "dataset_files": {
+      "calibration.jsonl": "8e951a599e8694e872e6acdfbf74dae6b716e597936ec0a97443e8c44beba0c2",
+      "dev.jsonl": "352814b8e270eff20c2bc585d74f28f7650f604d37ac040460a649c1f268dbdc"
+    }
+  },
   "generation_seeds": [0, 1, 2, 3, 4],
   "runtime": {
     "generation_workers": 1,
