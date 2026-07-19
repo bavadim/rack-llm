@@ -22,7 +22,7 @@ from pwseq_experiments.metrics import (
     corrected_bootstrap_p, effective_rank, normalized_partial_aurc,
     operating_metrics, oracle_safe_solve, selective_curve,
 )
-from pwseq_experiments.data_validation import validate_dataset
+from pwseq_experiments.data_validation import FIXED_COUNTS, _expected_counts, validate_dataset
 from pwseq_experiments.pipeline import _operational_threshold
 from pwseq_experiments.analysis import _accepts_threshold
 from pwseq_experiments import common, pipeline, run as run_module
@@ -61,10 +61,11 @@ class PreparedDataTests(unittest.TestCase):
         validate_dataset()
 
     def test_counts_and_balance(self):
-        expected = {
-            "calibration": 360, "dev": 120, "hard_sanity": 60,
-            "test": 600, "test_official": 67, "mixed": 720,
-        }
+        manifest = json.loads((DATA / "manifest.json").read_text())
+        expected = _expected_counts(manifest)
+        self.assertEqual(
+            {split: expected[split] for split in FIXED_COUNTS}, FIXED_COUNTS,
+        )
         for split, count in expected.items():
             rows = read_jsonl(DATA / f"{split}.jsonl")
             self.assertEqual(len(rows), count)
@@ -102,6 +103,9 @@ class PreparedDataTests(unittest.TestCase):
         self.assertFalse(provenance["gold_labels_used_for_authoring"])
         self.assertFalse(provenance["experimental_models_used_for_authoring"])
         self.assertEqual(provenance["experimental_model_role"], "candidate generation only")
+        self.assertEqual(
+            provenance["frozen_test_prompts"], manifest["counts"]["test"],
+        )
         self.assertIn("two new family task splits", provenance["artifacts_authored"])
         packet_hashes = provenance["authoring_packets_sha256"]
         self.assertEqual(manifest["authoring_packets_sha256"], packet_hashes)
@@ -126,7 +130,10 @@ class PreparedDataTests(unittest.TestCase):
     def test_test_prompts_and_parameters_are_disjoint(self):
         train = read_jsonl(DATA / "calibration.jsonl") + read_jsonl(DATA / "dev.jsonl")
         test = read_jsonl(DATA / "test.jsonl")
-        self.assertEqual(len({row["base_prompt"] for row in test}), 600)
+        manifest = json.loads((DATA / "manifest.json").read_text())
+        self.assertEqual(
+            len({row["base_prompt"] for row in test}), manifest["counts"]["test"],
+        )
         self.assertFalse({row["prompt"] for row in train} & {row["prompt"] for row in test})
         train_values = defaultdict(set)
         test_values = defaultdict(set)
@@ -137,6 +144,26 @@ class PreparedDataTests(unittest.TestCase):
                         target[(row["family"], key)].add(json.dumps(value, sort_keys=True))
         for key in train_values.keys() & test_values.keys():
             self.assertFalse(train_values[key] & test_values[key], key)
+
+    def test_manifest_test_count_is_dynamic_but_positive_and_balanced(self):
+        manifest = json.loads((DATA / "manifest.json").read_text())
+        expanded = copy.deepcopy(manifest)
+        expanded["counts"]["test"] += len(SOFT_FAMILIES)
+        self.assertEqual(
+            _expected_counts(expanded)["test"], expanded["counts"]["test"],
+        )
+        for invalid in (0, manifest["counts"]["test"] + 1, True):
+            malformed = copy.deepcopy(manifest)
+            malformed["counts"]["test"] = invalid
+            with self.assertRaisesRegex(RuntimeError, "positive and divisible"):
+                _expected_counts(malformed)
+
+    def test_non_test_split_counts_remain_fixed(self):
+        manifest = json.loads((DATA / "manifest.json").read_text())
+        malformed = copy.deepcopy(manifest)
+        malformed["counts"]["dev"] += 1
+        with self.assertRaisesRegex(RuntimeError, "fixed dataset cardinality"):
+            _expected_counts(malformed)
 
     def test_runtime_has_no_dataset_authoring_path(self):
         source = "\n".join(

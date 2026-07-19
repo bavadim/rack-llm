@@ -310,8 +310,21 @@ def require_confirmatory_design() -> dict[str, Any]:
         raise RuntimeError(
             "test-reading stage requires a finalized dev-only design decision"
         )
+    test_rows = read_jsonl(DATA / "test.jsonl")
+    manifest_path = DATA / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    families = sorted(map(str, manifest.get("families", [])))
+    counts = Counter(str(row["family"]) for row in test_rows)
+    family_sizes = set(counts.values())
     if (
-        design.get("frozen_test_prompts") != 600
+        not families
+        or set(counts) != set(families)
+        or len(family_sizes) != 1
+        or design.get("frozen_test_prompts") != len(test_rows)
+        or design.get("frozen_test_prompts_per_family") != next(iter(family_sizes), None)
+        or design.get("frozen_test_families") != families
+        or design.get("dataset_revision") != manifest.get("experiment_revision")
+        or design.get("dataset_manifest_sha256") != file_hash(manifest_path)
         or design.get("test_dataset_sha256") != file_hash(DATA / "test.jsonl")
     ):
         raise RuntimeError("confirmatory design does not match the frozen test dataset")

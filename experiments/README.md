@@ -48,6 +48,13 @@ make -C experiments power RUN_ID=$DESIGN_RUN
 make -C experiments record-design RUN_ID=$DESIGN_RUN
 ```
 
+`power` is a fail-closed dev-only gate. It runs only after
+`DESIGN_COMPLETE`, requires all 12 clean `main_design` EM cohorts to be `OK`,
+and rejects any generation row with `calibration_status=ERROR`. The test size
+and per-family allocation come from the frozen dataset manifest; only that
+split structure is used, never test labels. The resulting artifact reports
+both achieved power and `required_prompts_per_family`.
+
 Legacy failed `paper-v5` design runs can be evaluated only as an explicit
 retrospective diagnostic, stored under a separate content-addressed `diag-*`
 artifact root:
@@ -64,8 +71,13 @@ gate: every frozen rule is passed to calibration, and an unidentifiable family
 is recorded as a failed calibration cohort without a fallback posterior.
 
 `record-design` stores the dev-derived operating design and supersedes the
-design run. It cannot change the dataset. Commit the resulting config, then
-create the separate confirmatory run:
+design run only when `achieved_power >= power_target`; otherwise it fails
+closed and does not finalize the confirmatory design. On low power, extend the
+frozen test split (and its overlays/manifest) to at least the reported
+`required_prompts_per_family`, increment the dataset and experiment revision,
+and start a new dev-only design run. Test labels remain unread throughout this
+decision. After a passing design gate, commit the resulting config and create
+the separate confirmatory run:
 
 ```bash
 RUN_ID=$(make -s -C experiments freeze)

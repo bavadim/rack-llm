@@ -9,14 +9,32 @@ from .common import DATA, file_hash, read_jsonl
 from .hard_validation import hard_accepts_many
 
 CLEAN_SPLITS = ("calibration", "dev", "test", "test_official")
-EXPECTED_COUNTS = {
+FIXED_COUNTS = {
     "calibration": 360,
     "dev": 120,
     "hard_sanity": 60,
-    "test": 600,
     "test_official": 67,
     "mixed": 720,
 }
+
+
+def _expected_counts(manifest: dict[str, Any]) -> dict[str, int]:
+    counts = manifest.get("counts")
+    expected_keys = {*FIXED_COUNTS, "test"}
+    if not isinstance(counts, dict) or set(counts) != expected_keys:
+        raise RuntimeError("manifest split-count inventory mismatch")
+    if any(counts.get(split) != count for split, count in FIXED_COUNTS.items()):
+        raise RuntimeError("fixed dataset cardinality changed")
+    test_count = counts.get("test")
+    family_count = len(SOFT_FAMILIES)
+    if (
+        not isinstance(test_count, int) or isinstance(test_count, bool)
+        or test_count <= 0 or test_count % family_count
+    ):
+        raise RuntimeError(
+            f"test count must be positive and divisible by {family_count}"
+        )
+    return {**FIXED_COUNTS, "test": test_count}
 
 
 def _validate_rules(rows: list[dict[str, Any]]) -> None:
@@ -129,11 +147,16 @@ def validate_dataset() -> dict[str, Any]:
     manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("experiment_revision") != "5.0.0":
         raise RuntimeError("unexpected dataset revision")
-    rows_by_split = {name: read_jsonl(DATA / f"{name}.jsonl") for name in EXPECTED_COUNTS}
+    expected_counts = _expected_counts(manifest)
+    rows_by_split = {
+        name: read_jsonl(DATA / f"{name}.jsonl") for name in expected_counts
+    }
     actual = {name: len(rows) for name, rows in rows_by_split.items()}
-    if actual != EXPECTED_COUNTS or manifest.get("counts") != EXPECTED_COUNTS:
+    if actual != expected_counts:
         raise RuntimeError(f"dataset cardinality mismatch: {actual}")
-    expected_files = {f"{name}.jsonl" for name in EXPECTED_COUNTS} | {"noise_20.jsonl", "noise_40.jsonl"}
+    expected_files = {
+        f"{name}.jsonl" for name in expected_counts
+    } | {"noise_20.jsonl", "noise_40.jsonl"}
     if set(manifest.get("files", {})) != expected_files:
         raise RuntimeError("manifest JSONL file set mismatch")
     if {path.name for path in DATA.glob("*.jsonl")} != expected_files:
@@ -149,7 +172,10 @@ def validate_dataset() -> dict[str, Any]:
     for split in CLEAN_SPLITS:
         if any(row["split"] != split for row in rows_by_split[split]):
             raise RuntimeError(f"incorrect split field: {split}")
-    for split, per_family in (("calibration", 30), ("dev", 10), ("test", 50)):
+    prompts_per_family = expected_counts["test"] // len(SOFT_FAMILIES)
+    for split, per_family in (
+        ("calibration", 30), ("dev", 10), ("test", prompts_per_family),
+    ):
         counts = Counter(row["family"] for row in rows_by_split[split])
         if counts != Counter({family: per_family for family in SOFT_FAMILIES}):
             raise RuntimeError(f"family balance mismatch: {split}")
@@ -209,7 +235,10 @@ def validate_dataset() -> dict[str, Any]:
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     if file_hash(provenance_path) != manifest.get("authoring_provenance_sha256"):
         raise RuntimeError("authoring provenance drift")
-    if not provenance.get("one_time_generation") or provenance.get("frozen_test_prompts") != 600:
+    if (
+        not provenance.get("one_time_generation")
+        or provenance.get("frozen_test_prompts") != expected_counts["test"]
+    ):
         raise RuntimeError("one-time dataset provenance is missing")
     if provenance.get("experimental_models_used_for_authoring") is not False:
         raise RuntimeError("experimental model authoring separation is missing")
