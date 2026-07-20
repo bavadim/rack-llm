@@ -76,11 +76,16 @@ def _power_fixture(
                     "seed": seed, "confidence": 1.0,
                     "outcome": (
                         "FOUND_OK"
-                        if method == "exact_pwsg" and (constant_effect or index == 0)
+                        if method == "posterior_best_of_b"
+                        and (constant_effect or index == 0)
                         else "FOUND_WRONG"
                     ),
                 }
-                if degraded and prompt["family"] == "b" and method == "exact_pwsg":
+                if (
+                    degraded
+                    and prompt["family"] == "b"
+                    and method == "posterior_best_of_b"
+                ):
                     row["calibration_status"] = "ERROR"
                 raw.append(row)
     write_jsonl(
@@ -169,12 +174,14 @@ class StatisticsTests(unittest.TestCase):
             {
                 "method": "m", "budget": 8, "prompt_id": "small-0",
                 "family": "small", "seed": 0, "outcome": "FOUND_OK",
-                "confidence": .9, "model_draws": 2,
+                "confidence": .9, "model_draws": 2, "latency_ms": 10,
+                "proposals": 1, "content_tokens": 2,
             },
             {
                 "method": "m", "budget": 8, "prompt_id": "small-0",
                 "family": "small", "seed": 1, "outcome": "FOUND_WRONG",
-                "confidence": .4, "model_draws": 4,
+                "confidence": .4, "model_draws": 4, "latency_ms": 30,
+                "proposals": 3, "content_tokens": 4,
             },
         ]
         records = prompt_generation_records(
@@ -184,6 +191,8 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(records[0]["ok_weight"], .5)
         self.assertEqual(records[0]["wrong_weight"], 0)
         self.assertEqual(records[0]["return_weight"], .5)
+        self.assertEqual(records[0]["latency_ms"], 20)
+        self.assertEqual(records[0]["proposals"], 2)
         records[0]["noise"] = 0.0
         records.extend({
             **records[0], "prompt_id": f"large-{index}", "family": "large",
@@ -232,6 +241,15 @@ class StatisticsTests(unittest.TestCase):
             adequate = _power_analysis(artifacts, data, config)
             self.assertEqual(adequate["power_status"], "ADEQUATE")
             self.assertEqual(adequate["calibration_status"], "OK")
+            self.assertEqual(
+                adequate["comparison"],
+                "posterior_best_of_b-minus-equal_score_best_of_b",
+            )
+            self.assertEqual(
+                adequate["metric"],
+                "macro_normalized_common_coverage_paurc",
+            )
+            self.assertEqual(adequate["favorable_direction"], "less_than_zero")
         with tempfile.TemporaryDirectory() as directory:
             artifacts, data, config_path, config = _power_fixture(Path(directory))
             underpowered = _power_analysis(artifacts, data, config)

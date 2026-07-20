@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import sys
 import tempfile
 import unittest
@@ -8,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from pwseq_experiments import common, evaluator, pipeline, run
+from pwseq_experiments import common, evaluator, hard, pipeline, run
 from pwseq_experiments.common import (
     atomic_jsonl_command,
     file_hash,
@@ -239,6 +240,9 @@ class PipelineTests(unittest.TestCase):
                 } for item in read_jsonl(shard) for seed in (0, 1)]
                 self.assertEqual(len(rows), expected_rows)
                 write_jsonl(target, rows)
+                write_json(target.with_suffix(target.suffix + ".meta.json"), {
+                    "wall_seconds": 1.25,
+                })
                 return target
 
             with (
@@ -257,6 +261,15 @@ class PipelineTests(unittest.TestCase):
                 [(row["prompt_id"], row["seed"]) for row in read_jsonl(output)],
                 [(f"p{prompt}", seed) for prompt in range(4) for seed in (0, 1)],
             )
+            metadata = json.loads(
+                output.with_suffix(output.suffix + ".meta.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(metadata["workers"], 2)
+            self.assertEqual(metadata["worker_seconds"], 2.5)
+            self.assertGreaterEqual(metadata["wall_seconds"], 0.0)
+            self.assertGreaterEqual(metadata["rows_per_second"], 0.0)
 
     def test_atomic_outputs_are_reused_or_removed_on_failure(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -269,6 +282,13 @@ class PipelineTests(unittest.TestCase):
             ]
             with mock.patch.object(common, "ARTIFACTS", root / "artifacts"):
                 atomic_jsonl_command("atomic.test", command, output, expected_rows=1)
+                metadata = json.loads(
+                    output.with_suffix(output.suffix + ".meta.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertGreaterEqual(metadata["wall_seconds"], 0.0)
+                self.assertGreaterEqual(metadata["rows_per_second"], 0.0)
                 first_mtime = output.stat().st_mtime_ns
                 atomic_jsonl_command("atomic.test", command, output, expected_rows=1)
                 self.assertEqual(output.stat().st_mtime_ns, first_mtime)
@@ -280,6 +300,83 @@ class PipelineTests(unittest.TestCase):
                         bad, expected_rows=1,
                     )
                 self.assertFalse(bad.exists())
+
+    def test_hard_summary_separates_backend_failures_from_refusals(self):
+        rows = [
+            {
+                "outcome": "FOUND_OK", "hard_valid": True,
+                "latency_ms": 10.0, "token_count": 3,
+            },
+            {
+                "outcome": "FOUND_WRONG", "hard_valid": False,
+                "latency_ms": 20.0, "token_count": 4,
+            },
+            {
+                "outcome": "NOT_FOUND", "hard_valid": False,
+                "latency_ms": 30.0, "token_count": 0,
+            },
+            {
+                "outcome": "BACKEND_ERROR", "hard_valid": False,
+                "latency_ms": None, "token_count": 0,
+            },
+        ]
+        summary = hard._summarize_method(
+            "guidance", rows, expected_runs=4, wall_seconds=2.0,
+        )
+        self.assertEqual(summary["found_ok"], 1)
+        self.assertEqual(summary["found_wrong"], 1)
+        self.assertEqual(summary["not_found"], 1)
+        self.assertEqual(summary["backend_errors"], 1)
+        self.assertEqual(summary["inference_status"], "BLOCKED")
+        self.assertEqual(summary["benchmark_status"], "PARTIALLY_BLOCKED")
+        self.assertIsNone(summary["solve_rate"])
+        self.assertEqual(
+            summary["descriptive_solve_rate_including_backend_errors"], .25,
+        )
+        self.assertEqual(summary["unconditional_hard_valid_rate"], .25)
+        self.assertEqual(summary["conditional_hard_valid_rate"], .5)
+        self.assertEqual(summary["invalid_return_rate"], .5)
+        self.assertEqual(summary["median_latency_ms"], 20.0)
+        self.assertEqual(summary["runs_per_second"], 1.5)
+        self.assertEqual(summary["grid_rows_per_second"], 2.0)
+
+        failed = hard._summarize_method(
+            "outlines",
+            [{"outcome": "BACKEND_ERROR", "hard_valid": False,
+              "latency_ms": None}],
+            expected_runs=1, wall_seconds=.5,
+        )
+        self.assertEqual(failed["benchmark_status"], "BASELINE_FAILED")
+        self.assertEqual(failed["inference_status"], "BLOCKED")
+        self.assertIsNone(failed["solve_rate"])
+
+    def test_hard_baseline_initialization_failure_emits_blocked_grid(self):
+        source = [{"id": "p", "family": "f", "split": "hard_sanity"}]
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(hard, "ARTIFACTS", Path(directory)),
+            mock.patch.object(
+                hard, "load_config", return_value={"generation_seeds": [0, 1]},
+            ),
+            mock.patch.object(
+                hard, "_load_hf_backend",
+                side_effect=RuntimeError("backend unavailable"),
+            ),
+            mock.patch.object(hard, "issue") as record_issue,
+        ):
+            output = hard._hf_baseline("guidance", source, "main")
+            rows = read_jsonl(output)
+            metadata = json.loads(
+                output.with_suffix(output.suffix + ".meta.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["status"] for row in rows}, {"backend-error"})
+        self.assertEqual(metadata["benchmark_status"], "BASELINE_FAILED")
+        self.assertEqual(metadata["inference_status"], "BLOCKED")
+        self.assertEqual(metadata["backend_errors"], 2)
+        record_issue.assert_called_once()
 
 
 if __name__ == "__main__":

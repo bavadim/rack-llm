@@ -8,6 +8,7 @@ from typing import Any
 from .common import ARTIFACTS, DATA, assert_frozen, file_hash, issue, load_config, read_jsonl, run_state, set_run_state, write_json
 from .hard import analyze_synthetic, run_hard, run_synthetic
 from .preflight import preflight
+from .power import FAVORABLE_DIRECTION, POWER_COMPARISON, POWER_METRIC
 from .pipeline import (
     aggregation_report, all_instances, apply_noise, audit_report,
     evaluate_candidates, evaluate_generations, fit_score, generate_pool,
@@ -322,6 +323,9 @@ def require_confirmatory_design() -> dict[str, Any]:
         or set(counts) != set(families)
         or len(family_sizes) != 1
         or design.get("power_status") not in {"ADEQUATE", "UNDERPOWERED"}
+        or design.get("power_metric") != POWER_METRIC
+        or design.get("power_comparison") != POWER_COMPARISON
+        or design.get("favorable_direction") != FAVORABLE_DIRECTION
         or design.get("calibration_status") not in {"OK", "DEGRADED"}
         or not isinstance(problem_families, list)
         or problem_families != sorted(set(map(str, problem_families)))
@@ -402,9 +406,13 @@ def run_stage(stage: str, _check_preflight: bool = True) -> None:
             analyze_synthetic(run_synthetic())
             run_hard(cars_core=True, engineering_baselines=False)
         execute("hard-core", hard_core)
+        # Fail or record incompatible engineering backends before committing
+        # several days of GPU time to the soft/weak grid.
+        execute("hard-engineering", lambda: run_hard(
+            cars_core=False, engineering_baselines=True,
+        ))
         for name in ["audit", "aggregation", "generation", "noise", "replication", "mixed"]:
             execute(name, lambda name=name: run_stage(name, False))
-        execute("hard-engineering", lambda: run_hard(cars_core=False, engineering_baselines=True))
         write_json(ARTIFACTS / "stage_status.json", {
             "failed": failures,
             "completed": [name for name in [

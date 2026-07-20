@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -189,6 +190,7 @@ def _run_racket_sharded(
     records_per_input: int,
 ) -> Path:
     """Run independent prompt shards and restore canonical serial ordering."""
+    started = time.perf_counter()
     config = load_config()
     requested = int(config.get("runtime", {}).get("generation_workers", 1))
     input_path = Path(args[args.index("--input") + 1])
@@ -246,11 +248,20 @@ def _run_racket_sharded(
     if len(identities) != len(set(identities)):
         raise RuntimeError(f"{stage} shard merge contains duplicate records")
     write_jsonl(output, merged)
+    worker_meta = [
+        json.loads(path.with_suffix(path.suffix + ".meta.json").read_text(encoding="utf-8"))
+        for path in shard_outputs
+    ]
+    worker_seconds = sum(float(meta["wall_seconds"]) for meta in worker_meta)
+    wall_seconds = time.perf_counter() - started
     write_json(output.with_suffix(output.suffix + ".meta.json"), {
         "stage": stage, "workers": workers, "rows": len(merged),
         "expected_rows": expected, "input_sha256": file_hash(input_path),
         "output_sha256": file_hash(output),
         "shards": [file_hash(path) for path in shard_outputs],
+        "wall_seconds": wall_seconds,
+        "worker_seconds": worker_seconds,
+        "rows_per_second": len(merged) / wall_seconds if wall_seconds > 0.0 else 0.0,
     })
     return output
 
@@ -1357,6 +1368,7 @@ def generation_report(
     instance_rows: list[dict[str, Any]] | None = None,
     evaluation_splits: tuple[str, ...] = ("test", "test_official"),
 ) -> Path:
+    started = time.perf_counter()
     config = load_config()
     score_by_id = {
         row["candidate_id"]: row for row in read_jsonl(proposal_scores)
@@ -1661,4 +1673,17 @@ def generation_report(
     summary_path = ARTIFACTS / "results" / f"{model_name}_noise_{int(level*100):02d}_generation_summary.jsonl"
     write_jsonl(raw_path, outcomes)
     write_jsonl(summary_path, summaries)
+    wall_seconds = time.perf_counter() - started
+    write_json(
+        ARTIFACTS / "runtime"
+        / f"{model_name}_noise_{int(level*100):02d}_selection.json",
+        {
+            "stage": f"selection.{model_name}.{level}",
+            "category": "selection_and_reporting",
+            "rows": len(outcomes),
+            "wall_seconds": wall_seconds,
+            "rows_per_second": len(outcomes) / wall_seconds if wall_seconds else 0.0,
+            "workers": 1,
+        },
+    )
     return summary_path

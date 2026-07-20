@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,6 +98,8 @@ def atomic_jsonl_command(
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             actual = jsonl_count(output)
+            wall_seconds = meta.get("wall_seconds")
+            rows_per_second = meta.get("rows_per_second")
             if (
                 meta.get("stage") == stage
                 and meta.get("rows") == actual
@@ -104,18 +107,29 @@ def atomic_jsonl_command(
                 and meta.get("command") == resolved_command
                 and meta.get("output_sha256") == file_hash(output)
                 and (expected_rows is None or actual == expected_rows)
+                and isinstance(wall_seconds, (int, float))
+                and not isinstance(wall_seconds, bool)
+                and wall_seconds >= 0.0
+                and isinstance(rows_per_second, (int, float))
+                and not isinstance(rows_per_second, bool)
+                and rows_per_second >= 0.0
             ):
                 return output
         except (OSError, ValueError, TypeError):
             pass
+    started = time.perf_counter()
     with log_path.open("w", encoding="utf-8") as log_handle:
         completed = subprocess.run(
             resolved_command, cwd=cwd, env=env, text=True, stdout=log_handle,
             stderr=subprocess.STDOUT,
         )
+    wall_seconds = time.perf_counter() - started
     if completed.returncode != 0:
         error = RuntimeError(f"{stage} failed with exit code {completed.returncode}")
-        issue(stage, error, command=resolved_command, log=str(log_path))
+        issue(
+            stage, error, command=resolved_command, log=str(log_path),
+            wall_seconds=wall_seconds,
+        )
         raise error
     if not partial.exists():
         error = RuntimeError(f"{stage} did not create output")
@@ -136,6 +150,8 @@ def atomic_jsonl_command(
         "expected_rows": expected_rows,
         "command": resolved_command,
         "output_sha256": file_hash(output),
+        "wall_seconds": wall_seconds,
+        "rows_per_second": actual / wall_seconds if wall_seconds > 0.0 else 0.0,
     })
     return output
 

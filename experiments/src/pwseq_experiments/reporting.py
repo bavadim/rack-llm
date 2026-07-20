@@ -64,6 +64,15 @@ def prompt_generation_records(
             "wrong_weight": float(np.mean([value == "FOUND_WRONG" for value in outcomes])),
             "return_weight": float(np.mean([value != "NOT_FOUND" for value in outcomes])),
             "model_draws": float(np.mean([float(row.get("model_draws", 0)) for row in values])),
+            "content_tokens": float(np.mean([
+                float(row.get("content_tokens", 0)) for row in values
+            ])),
+            "proposals": float(np.mean([
+                float(row.get("proposals", 0)) for row in values
+            ])),
+            "latency_ms": float(np.mean([
+                float(row.get("latency_ms", 0.0)) for row in values
+            ])),
         })
     return output
 
@@ -80,15 +89,20 @@ def _point_macro(records: list[dict[str, Any]]) -> dict[str, float | int | None]
         wrong = np.asarray([row["wrong_weight"] for row in items], dtype=float)
         returned = np.asarray([row["return_weight"] for row in items], dtype=float)
         draws = np.asarray([row["model_draws"] for row in items], dtype=float)
+        latency = np.asarray([row.get("latency_ms", 0.0) for row in items], dtype=float)
+        proposals = np.asarray([row.get("proposals", 0.0) for row in items], dtype=float)
         values["solve_rate"].append(float(ok.mean()))
         values["coverage"].append(float(returned.mean()))
         values["found_wrong_rate"].append(float(wrong.mean()))
         values["not_found_rate"].append(float(1.0 - returned.mean()))
         values["mean_model_tokens"].append(float(draws.mean()))
+        values["mean_latency_ms"].append(float(latency.mean()))
+        values["mean_proposals"].append(float(proposals.mean()))
         if returned.sum() > 0:
             values["risk"].append(float(wrong.sum() / returned.sum()))
         if ok.sum() > 0:
             values["tokens_per_ok"].append(float(draws.sum() / ok.sum()))
+            values["latency_ms_per_ok"].append(float(latency.sum() / ok.sum()))
     result: dict[str, float | int | None] = {
         key: float(np.mean(items)) if items else None
         for key, items in values.items()
@@ -137,6 +151,7 @@ def generation_scalar_data(
     metric_names = (
         "solve_rate", "coverage", "found_wrong_rate", "not_found_rate",
         "mean_model_tokens", "risk", "tokens_per_ok",
+        "mean_latency_ms", "mean_proposals", "latency_ms_per_ok",
     )
     for (noise, method, budget), items in sorted(groups.items()):
         point = _point_macro(items)
@@ -154,11 +169,19 @@ def generation_scalar_data(
             wrong = np.asarray([row["wrong_weight"] for row in family_rows], dtype=float)[indices]
             returned = np.asarray([row["return_weight"] for row in family_rows], dtype=float)[indices]
             draws = np.asarray([row["model_draws"] for row in family_rows], dtype=float)[indices]
+            latency = np.asarray([
+                row.get("latency_ms", 0.0) for row in family_rows
+            ], dtype=float)[indices]
+            proposals = np.asarray([
+                row.get("proposals", 0.0) for row in family_rows
+            ], dtype=float)[indices]
             samples["solve_rate"].append(ok.mean(axis=1))
             samples["coverage"].append(returned.mean(axis=1))
             samples["found_wrong_rate"].append(wrong.mean(axis=1))
             samples["not_found_rate"].append(1.0 - returned.mean(axis=1))
             samples["mean_model_tokens"].append(draws.mean(axis=1))
+            samples["mean_latency_ms"].append(latency.mean(axis=1))
+            samples["mean_proposals"].append(proposals.mean(axis=1))
             returned_sum = returned.sum(axis=1)
             samples["risk"].append(np.divide(
                 wrong.sum(axis=1), returned_sum,
@@ -167,6 +190,10 @@ def generation_scalar_data(
             ok_sum = ok.sum(axis=1)
             samples["tokens_per_ok"].append(np.divide(
                 draws.sum(axis=1), ok_sum,
+                out=np.full(repetitions, np.nan), where=ok_sum > 0,
+            ))
+            samples["latency_ms_per_ok"].append(np.divide(
+                latency.sum(axis=1), ok_sum,
                 out=np.full(repetitions, np.nan), where=ok_sum > 0,
             ))
         row: dict[str, Any] = {

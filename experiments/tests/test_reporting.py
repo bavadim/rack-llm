@@ -11,6 +11,51 @@ from pwseq_experiments.reporting import generation_scalar_data
 
 
 class ReportingTests(unittest.TestCase):
+    def test_hard_quality_bootstrap_is_paired_and_backend_failures_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = Path(directory)
+            (artifacts / "hard").mkdir()
+            rows = []
+            for method in ("cars", "guidance", "outlines"):
+                for family in ("a", "b"):
+                    for prompt in range(3):
+                        for seed in (0, 1):
+                            rows.append({
+                                "method": method, "family": family,
+                                "prompt_id": f"{family}-{prompt}", "seed": seed,
+                                "status": "found", "outcome": "FOUND_OK",
+                            })
+            write_jsonl(
+                artifacts / "hard" / "hard_sanity_evaluated.jsonl", rows,
+            )
+            config = {
+                "generation_seeds": [0, 1], "bootstrap_repetitions": 20,
+                "confidence": .95, "dataset_seed": 3,
+            }
+            with (
+                mock.patch.object(analysis, "ARTIFACTS", artifacts),
+                mock.patch.object(analysis, "load_config", return_value=config),
+            ):
+                complete = analysis._bootstrap_hard_quality()
+                failed = list(rows)
+                failed[-1] = {
+                    **failed[-1], "status": "backend-error",
+                    "outcome": "BACKEND_ERROR",
+                }
+                write_jsonl(
+                    artifacts / "hard" / "hard_sanity_evaluated.jsonl", failed,
+                )
+                blocked = analysis._bootstrap_hard_quality()
+        self.assertEqual({row["difference_mean"] for row in complete}, {0.0})
+        self.assertTrue(all(row["ci_low"] == 0.0 for row in complete))
+        by_comparison = {row["comparison"]: row for row in blocked}
+        self.assertEqual(
+            by_comparison["cars-minus-outlines"]["inference_status"], "BLOCKED",
+        )
+        self.assertEqual(
+            by_comparison["cars-minus-guidance"]["inference_status"], "ADEQUATE",
+        )
+
     def test_archive_rejects_inconsistent_bootstrap_support_status(self):
         base = {
             "bootstrap_repetitions": 100,
@@ -116,7 +161,7 @@ class ReportingTests(unittest.TestCase):
             (artifacts / "results").mkdir()
             (artifacts / "thresholds").mkdir()
             methods = [
-                "hard_only_cars", "equal_score_best_of_b",
+                "hard_only_cars", "lm_best_of_b", "equal_score_best_of_b",
                 "posterior_best_of_b", "exact_pwsg",
             ]
             raw = []
@@ -164,7 +209,18 @@ class ReportingTests(unittest.TestCase):
                     degraded,
                 )
                 blocked_statistics, _ = analysis._bootstrap_generation_bundle()
-        self.assertEqual(len(statistics), 3)
+        self.assertEqual(len(statistics), 5)
+        self.assertTrue(any(
+            row["comparison"] == "equal_score_best_of_b-minus-lm_best_of_b"
+            and row["role"] == "fixed_soft_primary"
+            for row in statistics
+        ))
+        self.assertTrue(any(
+            row["comparison"] == (
+                "posterior_best_of_b-minus-equal_score_best_of_b"
+            ) and row["role"] == "weak_generation_primary"
+            for row in statistics
+        ))
         self.assertTrue(any(
             row["comparison"].endswith("posterior_best_of_b") for row in statistics
         ))
@@ -175,36 +231,47 @@ class ReportingTests(unittest.TestCase):
         raw_records = analysis.prompt_generation_records(raw, expected_seeds={0, 1})
         grouped = {(row["method"], row["prompt_id"]): row for row in raw_records}
         prompts = {item["prompt_id"] for item in raw_records}
-        paurc = {method: [] for method in methods}
-        for family in ("a", "b"):
-            family_prompts = sorted(prompt for prompt in prompts if prompt.startswith(f"{family}-"))
-            common = analysis.common_coverage_metrics({
-                method: analysis.selective_curve([
-                    grouped[(method, prompt)] for prompt in family_prompts
-                ]) for method in methods
-            })
-            for method in methods:
-                paurc[method].append(common[method]["normalized_partial_aurc"])
         for row in statistics:
-            baseline = row["comparison"].removeprefix("exact_pwsg-minus-")
+            ours, baseline = row["comparison"].split("-minus-", 1)
             expected_solve = sum(
-                grouped[("exact_pwsg", prompt)]["ok_weight"]
+                grouped[(ours, prompt)]["ok_weight"]
                 - grouped[(baseline, prompt)]["ok_weight"]
                 for prompt in prompts
             ) / len(prompts)
             self.assertAlmostEqual(
-                row["operational_solve_rate_difference_mean"], expected_solve,
+                row["solve_rate_difference_mean"], expected_solve,
             )
-            expected_paurc = sum(
-                ours - theirs
-                for ours, theirs in zip(paurc["exact_pwsg"], paurc[baseline], strict=True)
-            ) / len(paurc[baseline])
+            family_paurc = []
+            for family in ("a", "b"):
+                family_prompts = sorted(
+                    prompt for prompt in prompts if prompt.startswith(f"{family}-")
+                )
+                common = analysis.common_coverage_metrics({
+                    method: analysis.selective_curve([
+                        grouped[(method, prompt)] for prompt in family_prompts
+                    ]) for method in (ours, baseline)
+                })
+                family_paurc.append(
+                    common[ours]["normalized_partial_aurc"]
+                    - common[baseline]["normalized_partial_aurc"]
+                )
+            expected_paurc = sum(family_paurc) / len(family_paurc)
             self.assertAlmostEqual(row["paurc_difference_mean"], expected_paurc)
-        self.assertTrue(all(
-            row["inference_status"] == "BLOCKED"
-            and row["solve_rate_inference_status"] == "BLOCKED"
-            for row in blocked_statistics
-        ))
+        blocked_by_comparison = {
+            row["comparison"]: row for row in blocked_statistics
+        }
+        self.assertEqual(
+            blocked_by_comparison[
+                "exact_pwsg-minus-posterior_best_of_b"
+            ]["inference_status"],
+            "BLOCKED",
+        )
+        self.assertEqual(
+            blocked_by_comparison[
+                "equal_score_best_of_b-minus-lm_best_of_b"
+            ]["inference_status"],
+            "ADEQUATE",
+        )
 
     def test_png_renderer_consumes_only_machine_readable_figure_data(self):
         plot = mock.Mock()

@@ -1,12 +1,36 @@
 # PWSeq-IFBench experiments
 
-This directory contains the single frozen experiment program for the four
-PWSeq-IFBench claims:
+This directory contains the single frozen experiment program for three
+paper goals:
 
-1. exactness of the hard CARS sampler;
-2. empirical weakness and conflict of the regular rules;
-3. zero-label calibration versus equal voting;
-4. posterior-weighted selective generation.
+1. hard constraints: establish exactness of CARS, then test whether its
+   SolveRate is non-inferior to Guidance and Outlines while returning no
+   hard-invalid answer;
+2. fixed soft rules: test whether ideal equal-score Best-of-8 reranking solves
+   more real benchmark tasks than LM Best-of-8;
+3. weak rules: test whether zero-label EM improves candidate ranking and
+   generation over the same rules with equal weights.
+
+Hard exactness is a prerequisite for the first goal, not a substitute for the
+open-source comparison.  At five seeds per prompt, the hard quality criterion
+is `invalid_return_rate = 0` and a paired prompt-level 95% bootstrap lower
+bound of at least -5 percentage points for CARS SolveRate minus each of
+Guidance and Outlines.  Latency and throughput are reported descriptively
+because CARS and the two baselines use different model backends and precision.
+
+The fixed-soft criterion is evaluated at `B=8`: the paired prompt-level 95%
+confidence interval for SolveRate(Equal-score Best-of-B) minus SolveRate(LM
+Best-of-B) must lie above zero.  Matcher, observation, and selection time are
+reported, but do not define scientific success.
+
+The weak-label goal has two primary criteria at `B=8`: calibrated posterior
+AUPRC must exceed equal signed score AUPRC, and Posterior Best-of-B must have
+lower normalized partial AURC than Equal-score Best-of-B; both differences
+must have paired 95% confidence intervals entirely on the favorable side of
+zero.  Exact PWSG versus Posterior Best-of-B remains a secondary comparison:
+it measures whether direct posterior-weighted sampling adds value beyond
+post-hoc use of the same learned posterior, but it is not required to show
+that weak labeling works.
 
 Technical integrity is fail-closed: frozen hashes, schemas, cardinalities,
 lineage, dev-before-test ordering, and process failures stop the affected run.
@@ -56,6 +80,10 @@ size and per-family allocation come from the frozen dataset manifest; only
 that split structure is used, never test labels. Its artifact records
 `ADEQUATE` or `UNDERPOWERED`, `OK` or `DEGRADED` calibration, affected
 families, achieved power, and `required_prompts_per_family` when estimable.
+Power and MDE use the same family-macro pairwise normalized partial AURC
+endpoint as the primary weak-generation comparison (Posterior Best-of-B minus
+Equal-score Best-of-B); they are not computed from a different operational
+SolveRate endpoint.
 
 `record-design` stores the dev-derived operating design and supersedes the
 design run even when its scientific status is `UNDERPOWERED` or `DEGRADED`.

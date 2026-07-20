@@ -11,11 +11,15 @@ from .common import (
     ARTIFACTS, CONFIG_PATH, DATA, assert_frozen, file_hash, load_config,
     read_jsonl, run_state, set_run_state, stable_hash, write_json,
 )
+from .metrics import common_coverage_metrics, selective_curve
+from .reporting import prompt_generation_records
 
 
-PRIMARY_METHODS = ("exact_pwsg", "posterior_best_of_b")
+PRIMARY_METHODS = ("posterior_best_of_b", "equal_score_best_of_b")
 POWER_BUDGET = 8
-POWER_COMPARISON = "exact_pwsg-minus-posterior_best_of_b"
+POWER_COMPARISON = "posterior_best_of_b-minus-equal_score_best_of_b"
+POWER_METRIC = "macro_normalized_common_coverage_paurc"
+FAVORABLE_DIRECTION = "less_than_zero"
 
 
 def _frozen_test_design() -> tuple[list[dict], list[str], int]:
@@ -66,17 +70,8 @@ def power_analysis() -> dict:
     test_rows, families, prompts_per_family = _frozen_test_design()
     calibration = _calibration_manifest_status(families)
     raw = ARTIFACTS / "results" / "main_design_noise_00_generation_raw.jsonl"
-    thresholds = ARTIFACTS / "thresholds" / "main_design_noise_00.jsonl"
-    if not raw.exists() or not thresholds.exists():
-        raise RuntimeError("power analysis requires completed dev generation and thresholds")
-    tau = {
-        (row["method"], int(row["budget"])): row
-        for row in read_jsonl(thresholds)
-    }
-    for method in PRIMARY_METHODS:
-        decision = tau.get((method, POWER_BUDGET))
-        if decision is None or decision.get("source_split") != "dev":
-            raise RuntimeError(f"missing dev-only threshold for {method}/{POWER_BUDGET}")
+    if not raw.exists():
+        raise RuntimeError("power analysis requires completed dev generation")
     raw_rows = read_jsonl(raw)
     calibration_errors = [
         row for row in raw_rows
@@ -95,19 +90,19 @@ def power_analysis() -> dict:
         "calibration_problem_family_count": len(problem_families),
         "calibration_error_row_count": len(calibration_errors),
     })
-    by_method_prompt: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
-    for row in raw_rows:
-        if (
-            row["split"] == "dev"
-            and int(row["budget"]) == POWER_BUDGET
-            and row["method"] in PRIMARY_METHODS
-        ):
-            by_method_prompt[row["method"]][row["prompt_id"]].append(row)
+    expected = set(map(int, config["generation_seeds"]))
+    records = prompt_generation_records([
+        row for row in raw_rows
+        if row["split"] == "dev" and int(row["budget"]) == POWER_BUDGET
+        and row["method"] in PRIMARY_METHODS
+    ], expected_seeds=expected)
+    by_method_prompt: dict[str, dict[str, dict]] = defaultdict(dict)
+    for row in records:
+        by_method_prompt[str(row["method"])][str(row["prompt_id"])] = row
     dev_rows = read_jsonl(DATA / "dev.jsonl")
     expected_prompts = {row["id"]: row["family"] for row in dev_rows}
     if len(expected_prompts) != len(dev_rows):
         raise RuntimeError("dev dataset contains duplicate prompt ids")
-    expected = set(map(int, config["generation_seeds"]))
     for method in PRIMARY_METHODS:
         actual_prompts = set(by_method_prompt[method])
         if actual_prompts != set(expected_prompts):
@@ -116,45 +111,67 @@ def power_analysis() -> dict:
                 f"missing={len(set(expected_prompts) - actual_prompts)}, "
                 f"extra={len(actual_prompts - set(expected_prompts))}"
             )
-    differences: dict[str, list[float]] = defaultdict(list)
+    prompts_by_family: dict[str, list[str]] = defaultdict(list)
     for prompt, family in sorted(expected_prompts.items()):
-        ours = by_method_prompt["exact_pwsg"][prompt]
-        baseline = by_method_prompt["posterior_best_of_b"][prompt]
-        def solve(values: list[dict], method: str) -> float:
-            seeds = [int(row["seed"]) for row in values]
-            if set(seeds) != expected or len(seeds) != len(expected):
-                raise RuntimeError(f"invalid dev seed cohort: {method}/{prompt}")
-            if any(row["family"] != family for row in values):
+        for method in PRIMARY_METHODS:
+            if by_method_prompt[method][prompt]["family"] != family:
                 raise RuntimeError(f"dev family mismatch: {method}/{prompt}")
-            decision = tau[(method, POWER_BUDGET)]
-            mode = decision["accept_if"]
-            return float(np.mean([
-                row["outcome"] == "FOUND_OK"
-                and (
-                    mode == "always"
-                    or (mode == "confidence_gte" and float(row["confidence"]) >= float(decision["threshold"]))
-                )
-                for row in values
-            ]))
-        differences[family].append(solve(ours, "exact_pwsg") - solve(baseline, "posterior_best_of_b"))
+        prompts_by_family[str(family)].append(str(prompt))
+
+    def family_difference(family: str, prompts: list[str]) -> float | None:
+        curves = {
+            method: selective_curve([
+                by_method_prompt[method][prompt] for prompt in prompts
+            ])
+            for method in PRIMARY_METHODS
+        }
+        metrics = common_coverage_metrics(curves)
+        ours = metrics["posterior_best_of_b"]["normalized_partial_aurc"]
+        baseline = metrics["equal_score_best_of_b"]["normalized_partial_aurc"]
+        if ours is None or baseline is None:
+            return None
+        return float(ours) - float(baseline)
     target = float(config["power_target_effect"])
     if target <= 0.0:
         raise RuntimeError("power_target_effect must be positive")
     alpha = float(config["power_alpha"])
     desired = float(config["power_target"])
-    if set(differences) != set(families):
+    if set(prompts_by_family) != set(families):
         raise RuntimeError("dev families do not match the frozen dataset manifest")
     usable = {
-        family: values for family, values in differences.items()
+        family: prompts for family, prompts in prompts_by_family.items()
         if family not in problem_families
     }
-    estimable = bool(usable) and all(len(values) > 1 for values in usable.values())
+    point_values = [
+        family_difference(family, prompts) for family, prompts in usable.items()
+    ]
+    dev_effect = (
+        float(np.mean([value for value in point_values if value is not None]))
+        if point_values and all(value is not None for value in point_values) else None
+    )
+    repetitions = int(config.get("bootstrap_repetitions", 10_000))
+    rng = np.random.default_rng(int(config.get("dataset_seed", 0)) + 5)
+    bootstrap = []
+    if usable:
+        for _ in range(repetitions):
+            values = []
+            for family, prompts in usable.items():
+                indices = rng.integers(0, len(prompts), size=prompts_per_family)
+                value = family_difference(
+                    family, [prompts[index] for index in indices],
+                )
+                if value is None:
+                    break
+                values.append(value)
+            if len(values) == len(usable):
+                bootstrap.append(float(np.mean(values)))
+    bootstrap_support = len(bootstrap)
+    estimable = (
+        dev_effect is not None and bootstrap_support >= math.ceil(.95 * repetitions)
+        and bootstrap_support > 1
+    )
     if estimable:
-        variance = sum(
-            float(np.var(values, ddof=1)) / prompts_per_family
-            for values in usable.values()
-        ) / len(usable) ** 2
-        standard_error: float | None = math.sqrt(variance)
+        standard_error: float | None = float(np.std(bootstrap, ddof=1))
         power: float | None = (
             float(norm.cdf(target / standard_error - norm.ppf(1 - alpha / 2)))
             if standard_error else 1.0
@@ -177,6 +194,7 @@ def power_analysis() -> dict:
     result = {
         "source_split": "dev", "gold_test_labels_read": False,
         "comparison": POWER_COMPARISON,
+        "metric": POWER_METRIC, "favorable_direction": FAVORABLE_DIRECTION,
         "budget": POWER_BUDGET, "target_effect": target, "alpha": alpha,
         "desired_power": desired, "test_size_is_fixed": True,
         "test_prompts": len(test_rows), "test_families": families,
@@ -193,6 +211,9 @@ def power_analysis() -> dict:
         "power_status": power_status,
         "power_estimable": estimable,
         "power_family_count": len(usable),
+        "dev_effect": dev_effect,
+        "bootstrap_repetitions": repetitions,
+        "bootstrap_support": bootstrap_support,
         "required_prompts_per_family": required_prompts_per_family,
         "standard_error": standard_error, "achieved_power": power,
         "minimum_detectable_effect": float(mde) if mde is not None else None,
@@ -217,6 +238,8 @@ def record_design() -> dict:
     protocol = {
         "source_split": "dev",
         "comparison": POWER_COMPARISON,
+        "metric": POWER_METRIC,
+        "favorable_direction": FAVORABLE_DIRECTION,
         "budget": POWER_BUDGET,
         "target_effect": float(config["power_target_effect"]),
         "alpha": float(config["power_alpha"]),
@@ -279,6 +302,9 @@ def record_design() -> dict:
         "test_dataset_sha256": file_hash(DATA / "test.jsonl"),
         "calibration_manifest_sha256": file_hash(calibration_manifest),
         "power_status": result["power_status"],
+        "power_metric": result["metric"],
+        "power_comparison": result["comparison"],
+        "favorable_direction": result["favorable_direction"],
         "achieved_power": achieved_value,
         "desired_power": desired,
         "minimum_detectable_effect": result.get("minimum_detectable_effect"),
