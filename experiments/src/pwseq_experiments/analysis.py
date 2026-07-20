@@ -19,6 +19,28 @@ from .metrics import (
 from .reporting import generation_scalar_data, prompt_generation_records, reliability_data
 
 
+def _inference_status(support: int, repetitions: int) -> str:
+    if support <= 0:
+        return "BLOCKED"
+    if support < math.ceil(.95 * repetitions):
+        return "LOW_SUPPORT"
+    return "ADEQUATE"
+
+
+def _finite_interval(
+    values: list[float] | np.ndarray, tail: float,
+) -> tuple[float | None, float | None, int]:
+    array = np.asarray(values, dtype=float)
+    finite = array[np.isfinite(array)]
+    if not len(finite):
+        return None, None, 0
+    return (
+        float(np.quantile(finite, tail)),
+        float(np.quantile(finite, 1.0 - tail)),
+        int(len(finite)),
+    )
+
+
 def _accepts_threshold(row: dict[str, Any], decision: dict[str, Any]) -> bool:
     mode = decision["accept_if"]
     if mode == "always":
@@ -171,12 +193,21 @@ def _bootstrap_aggregation() -> list[dict[str, Any]]:
         if row.get("record_type") == "score" and row["split"] == "test"
         and row.get("candidate_id") in gold
     ]
+    if not all_rows:
+        raise RuntimeError("aggregation result contains no labeled test scores")
     blocked_families = sorted({
         row["family"] for row in all_rows if row.get("posterior") is None
     })
     rows = [row for row in all_rows if row.get("posterior") is not None]
     if not rows:
-        return []
+        return [{
+            "comparison": f"polarity_weak_model-minus-{baseline}",
+            "metric": "macro_auprc", "difference_mean": None,
+            "ci_low": None, "ci_high": None,
+            "bootstrap_repetitions": int(config["bootstrap_repetitions"]),
+            "bootstrap_support": 0, "inference_status": "BLOCKED",
+            "families": 0, "blocked_families": blocked_families,
+        } for baseline in ("equal_signed_sum", "majority_vote")]
     by_family_prompt: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
         by_family_prompt[row["family"]][row["prompt_id"]].append(row)
@@ -200,6 +231,9 @@ def _bootstrap_aggregation() -> list[dict[str, Any]]:
         return float(np.nanmean(values))
 
     diffs = {"equal_signed_sum": [], "majority_vote": []}
+    full = {family: list(prompts.values()) for family, prompts in by_family_prompt.items()}
+    full_weak = macro(full, "polarity_weak_model")
+    points = {baseline: full_weak - macro(full, baseline) for baseline in diffs}
     for _ in range(config["bootstrap_repetitions"]):
         selected = {}
         for family, prompts in by_family_prompt.items():
@@ -211,17 +245,30 @@ def _bootstrap_aggregation() -> list[dict[str, Any]]:
             diffs[baseline].append(weak - macro(selected, baseline))
     output = []
     for baseline, values in diffs.items():
-        array = np.asarray(values)
-        output.append({
+        finite = np.asarray(values, dtype=float)
+        finite = finite[np.isfinite(finite)]
+        low, high, support = _finite_interval(values, tail)
+        row = {
             "comparison": f"polarity_weak_model-minus-{baseline}",
             "metric": "macro_auprc",
-            "difference_mean": float(array.mean()),
-            "ci_low": float(np.quantile(array, tail)),
-            "ci_high": float(np.quantile(array, 1.0 - tail)),
-            "bootstrap_p": corrected_bootstrap_p(array),
+            "difference_mean": (
+                float(points[baseline]) if math.isfinite(points[baseline]) else None
+            ),
+            "ci_low": low,
+            "ci_high": high,
+            "bootstrap_repetitions": int(config["bootstrap_repetitions"]),
+            "bootstrap_support": support,
+            "inference_status": (
+                "BLOCKED" if blocked_families else _inference_status(
+                    support, int(config["bootstrap_repetitions"])
+                )
+            ),
             "families": len(by_family_prompt),
             "blocked_families": blocked_families,
-        })
+        }
+        if len(finite):
+            row["bootstrap_p"] = corrected_bootstrap_p(finite)
+        output.append(row)
     return output
 
 
@@ -232,18 +279,23 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
     threshold_path = ARTIFACTS / "thresholds" / "main_noise_00.jsonl"
     if not path.exists() or not threshold_path.exists():
         return [], []
-    rows = [
+    all_rows = [
         row for row in read_jsonl(path)
         if row["split"] == "test" and int(row["budget"]) == 8
     ]
+    if not all_rows:
+        raise RuntimeError("primary generation result contains no test rows at budget 8")
     blocked_families = sorted({
-        str(row["family"]) for row in rows
+        str(row["family"]) for row in all_rows
         if row.get("calibration_status") == "ERROR"
         and row["method"] in {"posterior_best_of_b", "exact_pwsg"}
     })
-    rows = [row for row in rows if row["family"] not in blocked_families]
-    if not rows:
-        return [], []
+    baselines = ["hard_only_cars", "equal_score_best_of_b", "posterior_best_of_b"]
+    central = [*baselines, "exact_pwsg"]
+    missing_raw = sorted(set(central) - {str(row["method"]) for row in all_rows})
+    if missing_raw:
+        raise RuntimeError(f"missing primary generation methods: {missing_raw}")
+    rows = all_rows
     thresholds = {
         (row["method"], int(row["budget"])): row
         for row in read_jsonl(threshold_path) if row["source_split"] == "dev"
@@ -261,8 +313,6 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
     for row in operational_records:
         operational_by_method[row["method"]][row["prompt_id"]] = row
 
-    baselines = ["hard_only_cars", "equal_score_best_of_b", "posterior_best_of_b"]
-    central = [*baselines, "exact_pwsg"]
     missing = sorted(set(central) - set(raw_by_method))
     if missing:
         raise RuntimeError(f"missing primary generation methods: {missing}")
@@ -309,9 +359,10 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
         max(point["coverage"] for point in curve)
         for curves in full_curves.values() for curve in curves.values()
     )
-    if common_limit <= 0:
-        raise RuntimeError("zero common coverage for primary risk-coverage figure")
-    coverage_grid = np.linspace(0.0, common_limit, 101)
+    coverage_grid = (
+        np.linspace(0.0, common_limit, 101)
+        if common_limit > 0 else np.asarray([0.0])
+    )
     point_risk = {
         method: np.mean(np.stack([
             risks_at_coverages(full_curves[family][method], coverage_grid)
@@ -328,7 +379,6 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
         method: np.full((repetitions, len(coverage_grid)), np.nan)
         for method in central
     }
-    support = np.zeros(len(coverage_grid), dtype=int)
     for repetition in range(repetitions):
         sampled: dict[str, list[str]] = {}
         for family, prompts in prompts_by_family.items():
@@ -352,10 +402,11 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
                 ])))
         if paurc_supported:
             ours_aurc = float(np.mean(paurc["exact_pwsg"]))
-            ours_solve = float(np.mean(solve["exact_pwsg"]))
             for method in baselines:
                 diffs[method].append(ours_aurc - float(np.mean(paurc[method])))
-                safe_diffs[method].append(ours_solve - float(np.mean(solve[method])))
+        ours_solve = float(np.mean(solve["exact_pwsg"]))
+        for method in baselines:
+            safe_diffs[method].append(ours_solve - float(np.mean(solve[method])))
         method_risks: dict[str, np.ndarray] = {}
         supported = np.ones(len(coverage_grid), dtype=bool)
         for method in central:
@@ -365,12 +416,28 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
             ])
             supported &= np.isfinite(family_values).all(axis=0)
             method_risks[method] = np.mean(family_values, axis=0)
-        support[supported] += 1
         for method, values in method_risks.items():
             risk_samples[method][repetition, supported] = values[supported]
 
     output = []
     seed0 = min(expected_seeds)
+    full_common = {
+        family: common_coverage_metrics(curves)
+        for family, curves in full_curves.items()
+    }
+    point_paurc = {
+        method: [full_common[family][method]["normalized_partial_aurc"]
+                 for family in sorted(full_common)]
+        for method in central
+    }
+    point_solve = {
+        method: float(np.mean([
+            np.mean([operational_by_method[method][prompt]["ok_weight"]
+                     for prompt in prompts_by_family[family]])
+            for family in sorted(prompts_by_family)
+        ]))
+        for method in central
+    }
 
     def solved_seed0(row: dict[str, Any]) -> bool:
         decision = thresholds[(row["method"], 8)]
@@ -378,28 +445,49 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
         return returned and row["outcome"] == "FOUND_OK"
 
     for method in baselines:
-        array = np.asarray(diffs[method])
-        safe = np.asarray(safe_diffs[method])
-        if len(array) < math.ceil(.95 * repetitions):
-            raise RuntimeError(
-                f"insufficient bootstrap support for exact_pwsg-minus-{method}: "
-                f"{len(array)}/{repetitions}"
+        array = np.asarray(diffs[method], dtype=float)
+        array = array[np.isfinite(array)]
+        safe = np.asarray(safe_diffs[method], dtype=float)
+        safe = safe[np.isfinite(safe)]
+        paurc_low, paurc_high, paurc_support = _finite_interval(array, tail)
+        solve_low, solve_high, solve_support = _finite_interval(safe, tail)
+        point_values = [
+            float(ours) - float(theirs)
+            for ours, theirs in zip(
+                point_paurc["exact_pwsg"], point_paurc[method], strict=True,
             )
+            if ours is not None and theirs is not None
+        ]
+        point_supported = len(point_values) == len(point_paurc[method])
         result = {
             "comparison": f"exact_pwsg-minus-{method}",
             "metric": "normalized_common_coverage_paurc",
-            "paurc_difference_mean": float(array.mean()),
-            "paurc_ci_low": float(np.quantile(array, tail)),
-            "paurc_ci_high": float(np.quantile(array, 1.0 - tail)),
-            "operational_solve_rate_difference_mean": float(safe.mean()),
-            "solve_rate_ci_low": float(np.quantile(safe, tail)),
-            "solve_rate_ci_high": float(np.quantile(safe, 1.0 - tail)),
-            "bootstrap_p": corrected_bootstrap_p(array),
+            "paurc_difference_mean": (
+                float(np.mean(point_values)) if point_supported else None
+            ),
+            "paurc_ci_low": paurc_low,
+            "paurc_ci_high": paurc_high,
+            "operational_solve_rate_difference_mean": (
+                point_solve["exact_pwsg"] - point_solve[method]
+            ),
+            "solve_rate_ci_low": solve_low,
+            "solve_rate_ci_high": solve_high,
             "bootstrap_repetitions": repetitions,
-            "bootstrap_support": len(array),
+            "bootstrap_support": paurc_support,
+            "solve_rate_support": solve_support,
+            "inference_status": (
+                "BLOCKED" if blocked_families
+                else _inference_status(paurc_support, repetitions)
+            ),
+            "solve_rate_inference_status": (
+                "BLOCKED" if blocked_families
+                else _inference_status(solve_support, repetitions)
+            ),
             "families": len(prompts_by_family),
             "blocked_families": blocked_families,
         }
+        if len(array):
+            result["bootstrap_p"] = corrected_bootstrap_p(array)
         ours_solved = {
             row["prompt_id"]: solved_seed0(row)
             for row in rows if row["method"] == "exact_pwsg" and int(row["seed"]) == seed0
@@ -423,31 +511,28 @@ def _bootstrap_generation_bundle() -> tuple[list[dict[str, Any]], list[dict[str,
             })
         output.append(result)
 
-    minimum_support = math.ceil(.95 * repetitions)
     risk_rows = []
     for grid_index, coverage in enumerate(coverage_grid):
-        if support[grid_index] < minimum_support:
-            continue
         for method in central:
             values = risk_samples[method][:, grid_index]
             values = values[np.isfinite(values)]
-            if not len(values):
-                raise RuntimeError(
-                    f"risk-coverage grid has no finite bootstrap values: "
-                    f"{method}/{coverage}"
-                )
+            low, high, finite_support = _finite_interval(values, tail)
             risk_rows.append({
                 "method": method, "budget": 8, "noise": 0.0,
                 "coverage": float(coverage),
                 "risk": float(point_risk[method][grid_index]),
-                "risk_ci_low": float(np.quantile(values, tail)),
-                "risk_ci_high": float(np.quantile(values, 1.0 - tail)),
+                "risk_ci_low": low,
+                "risk_ci_high": high,
                 "bootstrap_repetitions": repetitions,
-                "bootstrap_support": int(len(values)),
-                "bootstrap_support_fraction": float(len(values) / repetitions),
+                "bootstrap_support": finite_support,
+                "bootstrap_support_fraction": float(finite_support / repetitions),
+                "inference_status": (
+                    "BLOCKED" if blocked_families
+                    else _inference_status(finite_support, repetitions)
+                ),
                 "confidence_level": float(config["confidence"]),
                 "common_coverage_limit": float(common_limit),
-                "coverage_grid_points": 101,
+                "coverage_grid_points": len(coverage_grid),
                 "families": len(prompts_by_family),
                 "blocked_families": blocked_families,
             })
@@ -487,27 +572,38 @@ def _build_figure_data(risk_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             (row["method"], int(row["budget"])): row
             for row in read_jsonl(threshold_path) if row["source_split"] == "dev"
         }
-        rows = [row for row in read_jsonl(raw_path) if row["split"] == "test"]
+        source_rows = [row for row in read_jsonl(raw_path) if row["split"] == "test"]
+        if not source_rows:
+            raise RuntimeError(f"generation reporting input is empty for noise {level}")
         blocked = sorted({
-            str(row["family"]) for row in rows
+            str(row["family"]) for row in source_rows
             if row.get("calibration_status") == "ERROR"
             and row["method"] in {"posterior_best_of_b", "exact_pwsg"}
         })
         blocked_by_noise[level / 100.0] = blocked
-        rows = [row for row in rows if row["family"] not in blocked]
         collapsed = prompt_generation_records(
-            rows, expected_seeds=expected_seeds, decisions=thresholds,
+            source_rows, expected_seeds=expected_seeds, decisions=thresholds,
             accepts=_accepts_threshold,
         )
         prompt_records.extend({**row, "noise": level / 100.0} for row in collapsed)
-    scalar_rows = generation_scalar_data(
-        prompt_records,
-        repetitions=int(config["bootstrap_repetitions"]),
-        confidence=float(config["confidence"]),
-        seed=int(config["dataset_seed"]) + 2,
+    repetitions = int(config["bootstrap_repetitions"])
+    scalar_rows = (
+        generation_scalar_data(
+            prompt_records, repetitions=repetitions,
+            confidence=float(config["confidence"]),
+            seed=int(config["dataset_seed"]) + 2,
+        )
+        if prompt_records else []
     )
     for row in scalar_rows:
         row["blocked_families"] = blocked_by_noise[float(row["noise"])]
+        supports = [
+            int(value) for key, value in row.items() if key.endswith("_support")
+        ]
+        row["inference_status"] = (
+            "BLOCKED" if row["blocked_families"]
+            else _inference_status(min(supports, default=0), repetitions)
+        )
     quality_rows = [row for row in scalar_rows if row["noise"] == 0.0]
     noise_rows = [row for row in scalar_rows if int(row["budget"]) == 8]
     write_jsonl(figure_dir / "risk_coverage_data.jsonl", risk_rows)
@@ -519,26 +615,63 @@ def _build_figure_data(risk_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not scores_path.exists() or not labels_path.exists():
         raise RuntimeError("missing reliability reporting inputs")
     gold = {row["candidate_id"]: int(row["gold_pass"]) for row in read_jsonl(labels_path)}
-    scores = [
+    all_scores = [
         row for row in read_jsonl(scores_path)
         if row.get("record_type") == "score" and row["split"] == "test"
-        and row.get("posterior") is not None
     ]
-    reliability_rows = reliability_data(
-        scores, gold, bins=int(config["ece_bins"]),
-        repetitions=int(config["bootstrap_repetitions"]),
-        confidence=float(config["confidence"]),
-        seed=int(config["dataset_seed"]) + 3,
-    )
+    if not all_scores:
+        raise RuntimeError("reliability reporting input contains no test scores")
+    reliability_blocked = sorted({
+        str(row["family"]) for row in all_scores if row.get("posterior") is None
+    })
+    scores = [row for row in all_scores if row.get("posterior") is not None]
+    if scores:
+        reliability_rows = reliability_data(
+            scores, gold, bins=int(config["ece_bins"]),
+            repetitions=repetitions,
+            confidence=float(config["confidence"]),
+            seed=int(config["dataset_seed"]) + 3,
+        )
+        for row in reliability_rows:
+            row["blocked_families"] = reliability_blocked
+            row["inference_status"] = (
+                "BLOCKED" if reliability_blocked
+                else _inference_status(int(row["bootstrap_support"]), repetitions)
+            )
+    else:
+        reliability_rows = [{
+            "bin": None, "lower_bound": None, "upper_bound": None, "count": 0,
+            "mean_probability": None, "mean_probability_ci_low": None,
+            "mean_probability_ci_high": None, "empirical_rate": None,
+            "empirical_rate_ci_low": None, "empirical_rate_ci_high": None,
+            "bootstrap_repetitions": repetitions, "bootstrap_support": 0,
+            "confidence_level": float(config["confidence"]),
+            "blocked_families": reliability_blocked,
+            "inference_status": "BLOCKED",
+        }]
     write_jsonl(figure_dir / "reliability_data.jsonl", reliability_rows)
     return scalar_rows
 
 
 def _errorbar(plt: Any, rows: list[dict[str, Any]], x: str, y: str, **kwargs: Any) -> None:
-    values = sorted(rows, key=lambda row: float(row[x]))
+    values = sorted(
+        (
+            row for row in rows
+            if row.get(x) is not None and row.get(y) is not None
+        ),
+        key=lambda row: float(row[x]),
+    )
+    if not values:
+        return
     center = np.asarray([row[y] for row in values], dtype=float)
-    low = np.asarray([row[f"{y}_ci_low"] for row in values], dtype=float)
-    high = np.asarray([row[f"{y}_ci_high"] for row in values], dtype=float)
+    low = np.asarray([
+        row.get(f"{y}_ci_low") if row.get(f"{y}_ci_low") is not None else row[y]
+        for row in values
+    ], dtype=float)
+    high = np.asarray([
+        row.get(f"{y}_ci_high") if row.get(f"{y}_ci_high") is not None else row[y]
+        for row in values
+    ], dtype=float)
     plt.errorbar(
         [row[x] for row in values], center,
         yerr=np.vstack((np.maximum(0, center - low), np.maximum(0, high - center))),
@@ -555,17 +688,28 @@ def _render_figures() -> None:
     plt.figure()
     for method in sorted({row["method"] for row in risk_rows}):
         rows = sorted(
-            (row for row in risk_rows if row["method"] == method),
+            (
+                row for row in risk_rows if row["method"] == method
+                and row.get("risk") is not None
+            ),
             key=lambda row: row["coverage"],
         )
+        if not rows:
+            continue
         x = np.asarray([row["coverage"] for row in rows])
         y = np.asarray([row["risk"] for row in rows])
         line = plt.plot(x, y, label=method)[0]
-        plt.fill_between(
-            x, [row["risk_ci_low"] for row in rows],
-            [row["risk_ci_high"] for row in rows],
-            color=line.get_color(), alpha=.16,
-        )
+        interval_rows = [
+            row for row in rows
+            if row.get("risk_ci_low") is not None and row.get("risk_ci_high") is not None
+        ]
+        if interval_rows:
+            plt.fill_between(
+                [row["coverage"] for row in interval_rows],
+                [row["risk_ci_low"] for row in interval_rows],
+                [row["risk_ci_high"] for row in interval_rows],
+                color=line.get_color(), alpha=.16,
+            )
     plt.xlabel("Coverage"); plt.ylabel("Risk"); plt.legend(); plt.tight_layout()
     plt.savefig(figure_dir / "risk_coverage.png", dpi=180); plt.close()
 
@@ -608,11 +752,21 @@ def _render_figures() -> None:
     reliability_rows = read_jsonl(figure_dir / "reliability_data.jsonl")
     plt.figure()
     for row in reliability_rows:
+        if (
+            row.get("mean_probability") is None
+            or row.get("empirical_rate") is None
+        ):
+            continue
         center = float(row["empirical_rate"])
+        low = row.get("empirical_rate_ci_low")
+        high = row.get("empirical_rate_ci_high")
         plt.errorbar(
             float(row["mean_probability"]), center,
-            yerr=[[max(0.0, center - float(row["empirical_rate_ci_low"]))],
-                  [max(0.0, float(row["empirical_rate_ci_high"]) - center)]],
+            yerr=[[
+                max(0.0, center - float(low)) if low is not None else 0.0
+            ], [
+                max(0.0, float(high) - center) if high is not None else 0.0
+            ]],
             fmt="o", markersize=max(3, math.sqrt(row["count"]) / 2),
             color="C0", capsize=2,
         )
@@ -629,6 +783,7 @@ def _reporting_generation_table(rows: list[dict[str, Any]]) -> list[dict[str, An
         "found_wrong_rate_ci_high", "not_found_rate", "not_found_rate_ci_low",
         "not_found_rate_ci_high", "tokens_per_ok", "tokens_per_ok_ci_low",
         "tokens_per_ok_ci_high", "prompts", "families", "blocked_families",
+        "inference_status",
     ]
     return [
         {key: row.get(key) for key in fields}
@@ -642,7 +797,7 @@ def _reporting_noise_table(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "solve_rate_ci_high", "risk", "risk_ci_low", "risk_ci_high",
         "found_wrong_rate", "found_wrong_rate_ci_low", "found_wrong_rate_ci_high",
         "not_found_rate", "not_found_rate_ci_low", "not_found_rate_ci_high",
-        "prompts", "families", "blocked_families",
+        "prompts", "families", "blocked_families", "inference_status",
     ]
     return [
         {key: row.get(key) for key in fields}
@@ -713,25 +868,49 @@ def analyze() -> None:
         claims.append({"claim": 2, "status": "BLOCKED"})
 
     if aggregation_stats:
+        blocked = any(
+            row.get("inference_status") != "ADEQUATE"
+            or row.get("blocked_families")
+            for row in aggregation_stats
+        )
         supported = all(
-            row["ci_low"] > 0 and row.get("holm_p", 1) < .05
+            row.get("ci_low") is not None and row["ci_low"] > 0
+            and row.get("holm_p", 1) < .05
             and row.get("families") == 12 and not row.get("blocked_families")
             for row in aggregation_stats
         )
-        claims.append({"claim": 3, "status": "SUPPORTED" if supported else "NOT_SUPPORTED"})
+        claims.append({
+            "claim": 3,
+            "status": "BLOCKED" if blocked else "SUPPORTED" if supported else "NOT_SUPPORTED",
+        })
     else:
         claims.append({"claim": 3, "status": "BLOCKED"})
 
     if generation_stats:
         broad = [row for row in generation_stats if row["comparison"].endswith(("hard_only_cars", "equal_score_best_of_b"))]
         direct = next((row for row in generation_stats if row["comparison"].endswith("posterior_best_of_b")), None)
-        blocked = sorted(set().union(*(row.get("blocked_families", []) for row in generation_stats)))
-        broad_ok = bool(broad) and all(row["paurc_ci_high"] < 0 and row.get("holm_p", 1) < .05 and row.get("families") == 12 for row in broad)
-        direct_ok = bool(direct) and direct["paurc_ci_high"] < 0 and direct.get("holm_p", 1) < .05 and direct.get("families") == 12
-        status_a = "BLOCKED" if blocked else "SUPPORTED" if broad_ok else "NOT_SUPPORTED"
-        status_b = "BLOCKED" if blocked else "SUPPORTED" if direct_ok else "NOT_SUPPORTED"
-        claims.append({"claim": "4a", "status": status_a, "blocked_families": blocked})
-        claims.append({"claim": "4b", "status": status_b, "blocked_families": blocked})
+        blocked_families = sorted(set().union(*(
+            row.get("blocked_families", []) for row in generation_stats
+        )))
+        broad_blocked = bool(blocked_families) or any(
+            row.get("inference_status") != "ADEQUATE" for row in broad
+        )
+        direct_blocked = bool(blocked_families) or direct is None or (
+            direct.get("inference_status") != "ADEQUATE"
+        )
+        broad_ok = bool(broad) and all(
+            row.get("paurc_ci_high") is not None
+            and row["paurc_ci_high"] < 0 and row.get("holm_p", 1) < .05
+            and row.get("families") == 12 for row in broad
+        )
+        direct_ok = bool(direct) and direct.get("paurc_ci_high") is not None and (
+            direct["paurc_ci_high"] < 0 and direct.get("holm_p", 1) < .05
+            and direct.get("families") == 12
+        )
+        status_a = "BLOCKED" if broad_blocked else "SUPPORTED" if broad_ok else "NOT_SUPPORTED"
+        status_b = "BLOCKED" if direct_blocked else "SUPPORTED" if direct_ok else "NOT_SUPPORTED"
+        claims.append({"claim": "4a", "status": status_a, "blocked_families": blocked_families})
+        claims.append({"claim": "4b", "status": status_b, "blocked_families": blocked_families})
     else:
         claims.extend([
             {"claim": "4a", "status": "BLOCKED"},
@@ -743,6 +922,12 @@ def analyze() -> None:
     issue_counts = Counter(row["stage"] for row in read_jsonl(issues_path)) if issues_path.exists() else Counter()
     lines = ["# Experimental status", "", "## Claims", ""]
     lines.extend(f"- Claim {row['claim']}: **{row['status']}**" for row in claims)
+    design = load_config().get("confirmatory_design", {})
+    lines.extend([
+        "", "## Design diagnostics", "",
+        f"- Power: **{design.get('power_status', 'UNKNOWN')}**",
+        f"- Calibration: **{design.get('calibration_status', 'UNKNOWN')}**",
+    ])
     lines.extend(["", "## Recorded issues", ""])
     lines.extend(f"- `{stage}`: {count}" for stage, count in sorted(issue_counts.items()))
     status_path = ARTIFACTS / "STATUS.md"

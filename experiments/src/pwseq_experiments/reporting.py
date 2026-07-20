@@ -248,19 +248,25 @@ def reliability_data(
         y_values = empirical_rate[:, slot]
         p_values = p_values[np.isfinite(p_values)]
         y_values = y_values[np.isfinite(y_values)]
-        if not len(p_values) or not len(y_values):
-            raise RuntimeError(f"zero bootstrap support for reliability bin {slot}")
         output.append({
             "bin": slot,
             "lower_bound": float(edges[slot]),
             "upper_bound": float(edges[slot + 1]),
             "count": int(full[slot, 0]),
             "mean_probability": float(full[slot, 1] / full[slot, 0]),
-            "mean_probability_ci_low": float(np.quantile(p_values, tail)),
-            "mean_probability_ci_high": float(np.quantile(p_values, 1.0 - tail)),
+            "mean_probability_ci_low": (
+                float(np.quantile(p_values, tail)) if len(p_values) else None
+            ),
+            "mean_probability_ci_high": (
+                float(np.quantile(p_values, 1.0 - tail)) if len(p_values) else None
+            ),
             "empirical_rate": float(full[slot, 2] / full[slot, 0]),
-            "empirical_rate_ci_low": float(np.quantile(y_values, tail)),
-            "empirical_rate_ci_high": float(np.quantile(y_values, 1.0 - tail)),
+            "empirical_rate_ci_low": (
+                float(np.quantile(y_values, tail)) if len(y_values) else None
+            ),
+            "empirical_rate_ci_high": (
+                float(np.quantile(y_values, 1.0 - tail)) if len(y_values) else None
+            ),
             "bootstrap_repetitions": repetitions,
             "bootstrap_support": int(len(y_values)),
             "confidence_level": confidence,

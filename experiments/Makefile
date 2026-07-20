@@ -9,7 +9,7 @@ STATIC_STAMP := $(STATIC_VENV)/.requirements.stamp
 RUN_ID ?=
 export PYTHONPATH := $(CURDIR)/src
 
-.PHONY: bootstrap bootstrap-static validate-data preflight test static-check freeze run-hard run-audit run-aggregation run-generation run-noise run-replication run-mixed run-design diagnose-failed power record-design run-all analyze archive
+.PHONY: bootstrap bootstrap-static validate-data preflight test static-check freeze run-hard run-audit run-aggregation run-generation run-noise run-replication run-mixed run-design power record-design run-all analyze archive
 
 $(STATIC_STAMP): requirements-static.txt
 	test -x "$(STATIC_PYTHON)" || $(SYSTEM_PYTHON) -m venv "$(STATIC_VENV)"
@@ -21,8 +21,11 @@ bootstrap-static: $(STATIC_STAMP)
 
 static-check: bootstrap-static
 	$(MAKE) -C $(ROOT) native-regex
+	cd $(ROOT) && PLTCOLLECTS="$(abspath $(ROOT)/..):" raco make \
+		experiments/racket/rack_runner.rkt \
+		experiments/racket/synthetic_exactness.rkt \
+		experiments/racket/validate_hard.rkt
 	PYTHONPATH=$(CURDIR)/src $(STATIC_PYTHON) -m pwseq_experiments validate-data
-	cd $(ROOT) && PLTCOLLECTS="$(abspath $(ROOT)/..):" raco test tests/loc-test.rkt tests/contract-test.rkt tests/e2e-sampler-test.rkt
 	PYTHONPATH=$(CURDIR)/src $(STATIC_PYTHON) -m unittest discover -s tests -v
 
 $(VENV_STAMP): requirements.txt
@@ -40,11 +43,10 @@ preflight: $(VENV_STAMP)
 	$(PYTHON) -m pwseq_experiments preflight
 
 test: $(VENV_STAMP)
+	$(MAKE) -C $(ROOT) native-regex
 	cd $(ROOT) && PLTCOLLECTS="$(abspath $(ROOT)/..):" raco make \
-		main.rkt backend.rkt experiments/racket/rack_runner.rkt \
+		experiments/racket/rack_runner.rkt \
 		experiments/racket/synthetic_exactness.rkt experiments/racket/validate_hard.rkt
-	cd $(ROOT) && PLTCOLLECTS="$(abspath $(ROOT)/..):" raco test \
-		tests/loc-test.rkt tests/contract-test.rkt tests/e2e-sampler-test.rkt
 	$(PYTHON) -m unittest discover -s tests -v
 
 freeze: $(VENV_STAMP)
@@ -81,10 +83,6 @@ run-mixed: $(VENV_STAMP)
 run-design: $(VENV_STAMP)
 	@test -n "$(RUN_ID)" || { echo 'RUN_ID is required' >&2; exit 2; }
 	$(PYTHON) -m pwseq_experiments run --run-id "$(RUN_ID)" design
-
-diagnose-failed: $(VENV_STAMP)
-	@test -n "$(SOURCE_RUN_ID)" || { echo 'SOURCE_RUN_ID is required' >&2; exit 2; }
-	$(PYTHON) -m pwseq_experiments diagnose-failed --source-run-id "$(SOURCE_RUN_ID)"
 
 power: $(VENV_STAMP)
 	@test -n "$(RUN_ID)" || { echo 'RUN_ID is required' >&2; exit 2; }

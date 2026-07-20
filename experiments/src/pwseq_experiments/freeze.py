@@ -26,10 +26,8 @@ def freeze() -> dict:
     files.append(DATA / "README.md")
     files.extend(sorted((EXPERIMENTS / "src").rglob("*.py")))
     files.extend(sorted((EXPERIMENTS / "racket").glob("*.rkt")))
-    files.extend(sorted((EXPERIMENTS / "tests").glob("test_*.py")))
     files.extend(sorted(REPO.glob("*.rkt")))
     files.extend(sorted((REPO / "private").glob("*.rkt")))
-    files.extend(sorted((REPO / "tests").rglob("*.rkt")))
     files.extend(sorted(
         path for path in (REPO / "native").rglob("*")
         if path.is_file() and (path.suffix in {".c", ".h"} or path.name == "Makefile")

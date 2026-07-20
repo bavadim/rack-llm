@@ -1,10 +1,62 @@
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 from pathlib import Path
 
 from .common import ARTIFACTS, assert_frozen, file_hash, frozen_manifest, read_jsonl, run_state, set_run_state, write_json
+
+
+def _validate_inference_row(filename: str, row: dict) -> None:
+    repetitions = row.get("bootstrap_repetitions")
+    if (
+        not isinstance(repetitions, int) or isinstance(repetitions, bool)
+        or repetitions <= 0
+    ):
+        raise RuntimeError(
+            f"archive figure data has invalid bootstrap repetitions: {filename}"
+        )
+    support_fields = [key for key in row if key.endswith("_support")]
+    if not support_fields:
+        raise RuntimeError(f"archive figure data lacks bootstrap support: {filename}")
+    supports = []
+    for key in support_fields:
+        value = row[key]
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise RuntimeError(
+                f"archive figure data has non-integer bootstrap support: {filename}/{key}"
+            )
+        if value < 0 or value > repetitions:
+            raise RuntimeError(
+                f"archive figure data has out-of-range bootstrap support: {filename}/{key}"
+            )
+        supports.append(value)
+
+    minimum = min(supports)
+    blocked = bool(row.get("blocked_families"))
+    if minimum == 0 or blocked:
+        expected = "BLOCKED"
+    elif minimum < math.ceil(.95 * repetitions):
+        expected = "LOW_SUPPORT"
+    else:
+        expected = "ADEQUATE"
+    if row.get("inference_status") != expected:
+        raise RuntimeError(
+            f"archive figure data has inconsistent inference status: {filename}"
+        )
+
+    if filename == "risk_coverage_data.jsonl":
+        fraction = row.get("bootstrap_support_fraction")
+        expected_fraction = row["bootstrap_support"] / repetitions
+        if (
+            not isinstance(fraction, (int, float)) or isinstance(fraction, bool)
+            or not math.isfinite(float(fraction))
+            or not math.isclose(float(fraction), expected_fraction, rel_tol=0.0, abs_tol=1e-12)
+        ):
+            raise RuntimeError(
+                "archive risk-coverage bootstrap support fraction is inconsistent"
+            )
 
 
 def archive() -> Path:
@@ -40,22 +92,25 @@ def archive() -> Path:
         "risk_coverage_data.jsonl": {
             "coverage", "risk", "risk_ci_low", "risk_ci_high",
             "bootstrap_repetitions", "bootstrap_support",
-            "bootstrap_support_fraction",
+            "bootstrap_support_fraction", "inference_status", "blocked_families",
         },
         "quality_vs_budget_data.jsonl": {
             "mean_model_tokens", "solve_rate", "solve_rate_ci_low",
-            "solve_rate_ci_high", "solve_rate_support",
+            "solve_rate_ci_high", "solve_rate_support", "bootstrap_repetitions",
+            "inference_status", "blocked_families",
         },
         "noise_robustness_data.jsonl": {
             "noise", "solve_rate", "solve_rate_ci_low", "solve_rate_ci_high",
             "solve_rate_support", "found_wrong_rate", "found_wrong_rate_ci_low",
             "found_wrong_rate_ci_high", "found_wrong_rate_support",
             "not_found_rate", "not_found_rate_ci_low", "not_found_rate_ci_high",
-            "not_found_rate_support",
+            "not_found_rate_support", "bootstrap_repetitions", "inference_status",
+            "blocked_families",
         },
         "reliability_data.jsonl": {
             "mean_probability", "empirical_rate", "empirical_rate_ci_low",
             "empirical_rate_ci_high", "bootstrap_repetitions", "bootstrap_support",
+            "inference_status", "blocked_families",
         },
     }
     for filename, fields in figure_schemas.items():
@@ -67,22 +122,16 @@ def archive() -> Path:
             raise RuntimeError(
                 f"archive figure data lacks CI/support fields: {filename} rows {invalid[:5]}"
             )
-        if any(
-            row[key] is None
-            for row in rows
-            for key in fields
-            if key.endswith("_ci_low") or key.endswith("_ci_high")
-        ):
-            raise RuntimeError(f"archive figure data has missing confidence bounds: {filename}")
-        if any(
-            not [key for key in row if key.endswith("_support")]
-            or any(int(row[key]) <= 0 for key in row if key.endswith("_support"))
-            for row in rows
-        ):
-            raise RuntimeError(f"archive figure data has zero bootstrap support: {filename}")
-    risk_rows = read_jsonl(ARTIFACTS / "figures" / "risk_coverage_data.jsonl")
-    if any(float(row["bootstrap_support_fraction"]) < .95 for row in risk_rows):
-        raise RuntimeError("archive risk-coverage data violates 95% support gate")
+        for row in rows:
+            _validate_inference_row(filename, row)
+            missing_ci = any(
+                row[key] is None for key in fields
+                if key.endswith("_ci_low") or key.endswith("_ci_high")
+            )
+            if missing_ci and row["inference_status"] not in {"LOW_SUPPORT", "BLOCKED"}:
+                raise RuntimeError(
+                    f"archive figure data has unmarked missing confidence bounds: {filename}"
+                )
     release_files = sorted(
         path for path in ARTIFACTS.rglob("*")
         if path.is_file() and path.name != "release_manifest.json"

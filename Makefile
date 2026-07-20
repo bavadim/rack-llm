@@ -9,7 +9,7 @@ LLAMA_CPP_CFLAGS ?= -I$(LLAMA_CPP_DIR)/ggml/include
 
 LOCAL_COLLECTIONS := PLTCOLLECTS="$(abspath ..):"
 
-.PHONY: help install lint compile ci cold-ci unit-ci test regex-benchmark native native-llama native-regex \
+.PHONY: help install lint compile ci cold-ci unit-ci check test regex-benchmark native native-llama native-regex \
 	native-conformance fixed-cohort-model-matrix experiments-ci clean distclean check-no-orphan-bytecode
 
 help:
@@ -23,6 +23,7 @@ help:
 	  '  make fixed-cohort-model-matrix  Run bitwise replay tests on configured GGUF models.' \
 	  '  make lint          Build native regex support and compile the library.' \
 	  '  make unit-ci       Run the model-free library checks locally.' \
+	  '  make check         Run library and experiment-client checks.' \
 	  '  make regex-benchmark Benchmark terminal weak-rule matching.' \
 	  '  make test          Run all tests (requires LLAMA_CPP_DIR and RACK_LLM_GGUF_MODEL).' \
 	  '  make experiments-ci Run the paper experiment static checks locally.' \
@@ -32,8 +33,7 @@ install: native-regex
 	$(RACO) pkg install --auto
 
 compile:
-	$(RACO) make main.rkt backend.rkt model-llama-cpp.rkt tests/support/fake-cohort.rkt tests/loc-test.rkt tests/contract-test.rkt tests/e2e-real-test.rkt tests/e2e-sampler-test.rkt tests/private/regex-test.rkt tests/private/sampling-test.rkt tests/private/cars-test.rkt tests/private/guidance-test.rkt tests/private/weak-test.rkt tests/private/runtime-test.rkt tests/private/logits-test.rkt tests/private/llama-cpp-test.rkt
-	$(LOCAL_COLLECTIONS) $(RACO) make experiments/racket/rack_runner.rkt experiments/racket/synthetic_exactness.rkt experiments/racket/validate_hard.rkt
+	$(RACO) make main.rkt backend.rkt model-llama-cpp.rkt tests/support/fake-cohort.rkt tests/loc-test.rkt tests/contract-test.rkt tests/public-calibration-test.rkt tests/e2e-real-test.rkt tests/e2e-sampler-test.rkt tests/private/regex-test.rkt tests/private/sampling-test.rkt tests/private/cars-test.rkt tests/private/guidance-test.rkt tests/private/weak-test.rkt tests/private/runtime-test.rkt tests/private/logits-test.rkt tests/private/llama-cpp-test.rkt
 
 check-no-orphan-bytecode:
 	@failed=0; \
@@ -79,7 +79,9 @@ ci: native lint test
 cold-ci: clean unit-ci
 
 unit-ci: native-regex compile check-no-orphan-bytecode
-	$(RACO) test tests/private tests/loc-test.rkt tests/contract-test.rkt tests/e2e-sampler-test.rkt
+	$(RACO) test tests/private tests/loc-test.rkt tests/contract-test.rkt tests/public-calibration-test.rkt tests/e2e-sampler-test.rkt
+
+check: unit-ci experiments-ci
 
 regex-benchmark: native-regex
 	$(RACKET) tests/benchmarks/weak-regex.rkt

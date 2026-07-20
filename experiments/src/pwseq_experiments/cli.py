@@ -26,8 +26,6 @@ def main(argv: list[str] | None = None) -> int:
     power_parser.add_argument("--run-id", required=True)
     record_parser = sub.add_parser("record-design")
     record_parser.add_argument("--run-id", required=True)
-    diagnose_parser = sub.add_parser("diagnose-failed")
-    diagnose_parser.add_argument("--source-run-id", required=True)
     args = parser.parse_args(argv)
     if hasattr(args, "run_id"):
         os.environ["PWSEQ_RUN_ID"] = args.run_id
@@ -63,12 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "record-design":
             from .power import record_design
             record_design()
-        elif args.command == "diagnose-failed":
-            from .postmortem import run_postmortem
-            print(run_postmortem(args.source_run_id))
         return 0
     except Exception as exc:
-        if args.command != "diagnose-failed":
-            from .common import issue
-            issue(args.command, exc)
+        from .common import issue
+        issue(args.command, exc)
         raise

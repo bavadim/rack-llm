@@ -316,10 +316,18 @@ def require_confirmatory_design() -> dict[str, Any]:
     families = sorted(map(str, manifest.get("families", [])))
     counts = Counter(str(row["family"]) for row in test_rows)
     family_sizes = set(counts.values())
+    problem_families = design.get("calibration_problem_families")
     if (
         not families
         or set(counts) != set(families)
         or len(family_sizes) != 1
+        or design.get("power_status") not in {"ADEQUATE", "UNDERPOWERED"}
+        or design.get("calibration_status") not in {"OK", "DEGRADED"}
+        or not isinstance(problem_families, list)
+        or problem_families != sorted(set(map(str, problem_families)))
+        or not set(problem_families) <= set(families)
+        or design.get("calibration_problem_family_count") != len(problem_families)
+        or (design.get("calibration_status") == "OK") != (not problem_families)
         or design.get("frozen_test_prompts") != len(test_rows)
         or design.get("frozen_test_prompts_per_family") != next(iter(family_sizes), None)
         or design.get("frozen_test_families") != families
@@ -347,9 +355,7 @@ def run_stage(stage: str, _check_preflight: bool = True) -> None:
     if stage == "hard":
         synthetic = run_synthetic()
         if synthetic.exists():
-            summary = analyze_synthetic(synthetic)
-            if not json.loads(summary.read_text(encoding="utf-8"))["success"]:
-                raise RuntimeError("corrected synthetic exactness gate failed")
+            analyze_synthetic(synthetic)
         run_hard()
     elif stage == "audit":
         run_audit("main", 0.0)
@@ -393,9 +399,7 @@ def run_stage(stage: str, _check_preflight: bool = True) -> None:
                 failures.append(name)
                 issue(f"run-all.{name}", exc)
         def hard_core():
-            summary = analyze_synthetic(run_synthetic())
-            if not json.loads(summary.read_text(encoding="utf-8"))["success"]:
-                raise RuntimeError("corrected synthetic exactness gate failed")
+            analyze_synthetic(run_synthetic())
             run_hard(cars_core=True, engineering_baselines=False)
         execute("hard-core", hard_core)
         for name in ["audit", "aggregation", "generation", "noise", "replication", "mixed"]:

@@ -268,11 +268,8 @@ def run_hard(*, cars_core: bool = True, engineering_baselines: bool = True) -> N
         })
     write_jsonl(ARTIFACTS / "hard" / "hard_sanity_summary.jsonl", summary)
     cars_rows = [row for row in evaluated if row["method"] == "cars"]
-    if cars_core and (
-        len(cars_rows) != len(hard_rows) * len(config["generation_seeds"])
-        or any(
-            row["outcome"] != "NOT_FOUND" and not row["hard_valid"]
-            for row in cars_rows
+    expected_cars_rows = len(hard_rows) * len(config["generation_seeds"])
+    if cars_core and len(cars_rows) != expected_cars_rows:
+        raise RuntimeError(
+            f"incomplete CARS hard-sanity grid: {len(cars_rows)}/{expected_cars_rows}"
         )
-    ):
-        raise RuntimeError("CARS hard-sanity core gate failed")

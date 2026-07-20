@@ -31,7 +31,8 @@ def _frozen_test_design() -> tuple[list[dict], list[str], int]:
     return test_rows, families, next(iter(family_sizes))
 
 
-def _require_complete_calibration(families: list[str]) -> None:
+def _calibration_manifest_status(families: list[str]) -> dict[str, object]:
+    """Validate calibration provenance and report scientific fit failures."""
     path = ARTIFACTS / "calibrations" / "main_design" / "noise_00" / "manifest.json"
     if not path.is_file():
         raise RuntimeError(f"power analysis requires calibration manifest: {path}")
@@ -39,12 +40,17 @@ def _require_complete_calibration(families: list[str]) -> None:
     cohorts = manifest.get("cohorts")
     if not isinstance(cohorts, dict) or set(cohorts) != set(families):
         raise RuntimeError("calibration manifest does not contain exactly all dataset families")
-    failed = sorted(
-        family for family in families
-        if not isinstance(cohorts[family], dict) or cohorts[family].get("status") != "OK"
-    )
-    if failed:
-        raise RuntimeError(f"calibration cohorts are not all OK: {failed}")
+    if any(not isinstance(cohorts[family], dict) for family in families):
+        raise RuntimeError("calibration manifest contains a malformed cohort record")
+    statuses = {family: cohorts[family].get("status") for family in families}
+    if any(status not in {"OK", "ERROR"} for status in statuses.values()):
+        raise RuntimeError("calibration manifest contains an unknown cohort status")
+    failed = sorted(family for family, status in statuses.items() if status == "ERROR")
+    return {
+        "calibration_status": "DEGRADED" if failed else "OK",
+        "calibration_problem_families": failed,
+        "calibration_problem_family_count": len(failed),
+    }
 
 
 def _ceil_to_10(value: float) -> int:
@@ -58,7 +64,7 @@ def power_analysis() -> dict:
         raise RuntimeError(f"power analysis requires DESIGN_COMPLETE state, got {run_state()}")
     config = load_config()
     test_rows, families, prompts_per_family = _frozen_test_design()
-    _require_complete_calibration(families)
+    calibration = _calibration_manifest_status(families)
     raw = ARTIFACTS / "results" / "main_design_noise_00_generation_raw.jsonl"
     thresholds = ARTIFACTS / "thresholds" / "main_design_noise_00.jsonl"
     if not raw.exists() or not thresholds.exists():
@@ -77,12 +83,18 @@ def power_analysis() -> dict:
         if row.get("method") in PRIMARY_METHODS
         and row.get("calibration_status") == "ERROR"
     ]
-    if calibration_errors:
-        row = calibration_errors[0]
-        raise RuntimeError(
-            "power analysis rejects calibration errors: "
-            f"{row['method']}/{row.get('family')}/{row.get('prompt_id')}"
-        )
+    row_error_families = sorted({
+        str(row["family"]) for row in calibration_errors if row.get("family") is not None
+    })
+    problem_families = sorted(set(
+        list(calibration["calibration_problem_families"]) + row_error_families
+    ))
+    calibration.update({
+        "calibration_status": "DEGRADED" if problem_families else "OK",
+        "calibration_problem_families": problem_families,
+        "calibration_problem_family_count": len(problem_families),
+        "calibration_error_row_count": len(calibration_errors),
+    })
     by_method_prompt: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     for row in raw_rows:
         if (
@@ -132,18 +144,35 @@ def power_analysis() -> dict:
     desired = float(config["power_target"])
     if set(differences) != set(families):
         raise RuntimeError("dev families do not match the frozen dataset manifest")
-    variance = sum(
-        float(np.var(values, ddof=1)) / prompts_per_family
-        for values in differences.values() if len(values) > 1
-    ) / max(1, len(differences)) ** 2
-    standard_error = math.sqrt(variance)
-    power = float(norm.cdf(target / standard_error - norm.ppf(1 - alpha / 2))) if standard_error else 1.0
-    mde = (
-        (norm.ppf(1 - alpha / 2) + norm.ppf(desired)) * standard_error
-        if standard_error else 0.0
-    )
-    required_prompts_per_family = _ceil_to_10(
-        prompts_per_family * (float(mde) / target) ** 2
+    usable = {
+        family: values for family, values in differences.items()
+        if family not in problem_families
+    }
+    estimable = bool(usable) and all(len(values) > 1 for values in usable.values())
+    if estimable:
+        variance = sum(
+            float(np.var(values, ddof=1)) / prompts_per_family
+            for values in usable.values()
+        ) / len(usable) ** 2
+        standard_error: float | None = math.sqrt(variance)
+        power: float | None = (
+            float(norm.cdf(target / standard_error - norm.ppf(1 - alpha / 2)))
+            if standard_error else 1.0
+        )
+        mde: float | None = (
+            (norm.ppf(1 - alpha / 2) + norm.ppf(desired)) * standard_error
+            if standard_error else 0.0
+        )
+        required_prompts_per_family: int | None = _ceil_to_10(
+            prompts_per_family * (mde / target) ** 2
+        )
+    else:
+        standard_error = power = mde = required_prompts_per_family = None
+    power_status = (
+        "ADEQUATE"
+        if calibration["calibration_status"] == "OK"
+        and power is not None and power >= desired
+        else "UNDERPOWERED"
     )
     result = {
         "source_split": "dev", "gold_test_labels_read": False,
@@ -160,9 +189,13 @@ def power_analysis() -> dict:
         "calibration_manifest_sha256": file_hash(
             ARTIFACTS / "calibrations" / "main_design" / "noise_00" / "manifest.json"
         ),
+        **calibration,
+        "power_status": power_status,
+        "power_estimable": estimable,
+        "power_family_count": len(usable),
         "required_prompts_per_family": required_prompts_per_family,
         "standard_error": standard_error, "achieved_power": power,
-        "minimum_detectable_effect": float(mde),
+        "minimum_detectable_effect": float(mde) if mde is not None else None,
     }
     write_json(ARTIFACTS / "design" / "power_mde.json", result)
     return result
@@ -191,13 +224,8 @@ def record_design() -> dict:
     }
     if any(result.get(key) != value for key, value in protocol.items()):
         raise RuntimeError("design artifact power-protocol mismatch")
-    achieved = float(result.get("achieved_power", -math.inf))
-    if not math.isfinite(achieved) or achieved < desired:
-        raise RuntimeError(
-            f"achieved power {result.get('achieved_power')} is below required {desired}"
-        )
     test_rows, families, prompts_per_family = _frozen_test_design()
-    _require_complete_calibration(families)
+    calibration = _calibration_manifest_status(families)
     manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
     calibration_manifest = (
         ARTIFACTS / "calibrations" / "main_design" / "noise_00" / "manifest.json"
@@ -212,6 +240,30 @@ def record_design() -> dict:
         or result.get("calibration_manifest_sha256") != file_hash(calibration_manifest)
     ):
         raise RuntimeError("design artifact does not match the frozen test design")
+    problem_families = result.get("calibration_problem_families")
+    error_rows = result.get("calibration_error_row_count")
+    if (
+        result.get("power_status") not in {"ADEQUATE", "UNDERPOWERED"}
+        or result.get("calibration_status") not in {"OK", "DEGRADED"}
+        or not isinstance(problem_families, list)
+        or problem_families != sorted(set(map(str, problem_families)))
+        or not set(problem_families) <= set(families)
+        or result.get("calibration_problem_family_count") != len(problem_families)
+        or not isinstance(error_rows, int) or error_rows < 0
+        or (result.get("calibration_status") == "OK") != (not problem_families)
+        or not set(calibration["calibration_problem_families"]) <= set(problem_families)
+    ):
+        raise RuntimeError("design artifact has invalid scientific status metadata")
+    achieved_value = result.get("achieved_power")
+    achieved = float(achieved_value) if achieved_value is not None else None
+    expected_power_status = (
+        "ADEQUATE"
+        if result.get("calibration_status") == "OK"
+        and achieved is not None and math.isfinite(achieved) and achieved >= desired
+        else "UNDERPOWERED"
+    )
+    if result["power_status"] != expected_power_status:
+        raise RuntimeError("design artifact power status is inconsistent with its estimates")
     config["confirmatory_design"] = {
         "status": "finalized",
         "source_run_id": ARTIFACTS.name,
@@ -226,6 +278,15 @@ def record_design() -> dict:
         "dataset_manifest_sha256": file_hash(DATA / "manifest.json"),
         "test_dataset_sha256": file_hash(DATA / "test.jsonl"),
         "calibration_manifest_sha256": file_hash(calibration_manifest),
+        "power_status": result["power_status"],
+        "achieved_power": achieved_value,
+        "desired_power": desired,
+        "minimum_detectable_effect": result.get("minimum_detectable_effect"),
+        "required_prompts_per_family": result.get("required_prompts_per_family"),
+        "calibration_status": result["calibration_status"],
+        "calibration_problem_families": problem_families,
+        "calibration_problem_family_count": len(problem_families),
+        "calibration_error_row_count": error_rows,
     }
     write_json(CONFIG_PATH, config)
     set_run_state("SUPERSEDED", reason="dev design recorded into a new confirmatory config revision")

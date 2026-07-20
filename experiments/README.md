@@ -8,16 +8,19 @@ PWSeq-IFBench claims:
 3. zero-label calibration versus equal voting;
 4. posterior-weighted selective generation.
 
-The program is fail-closed. Development and static tests happen before
-`freeze`; after a manifest has been frozen, runtime failures are appended to
-`artifacts/<run-id>/issues.jsonl` and are not repaired under that run id.
-Independent stages continue and their final state is recorded separately.
+Technical integrity is fail-closed: frozen hashes, schemas, cardinalities,
+lineage, dev-before-test ordering, and process failures stop the affected run.
+Scientific negatives do not. Underpowered designs, failed calibration
+cohorts, failed exactness hypotheses, and low bootstrap support remain visible
+as statuses in the artifacts and can be inspected while the run continues.
 
 The complete model-free validation is local and does not depend on hosted CI:
 
 ```bash
 make unit-ci
 make experiments-ci
+# or both:
+make check
 ```
 
 The finite-distribution target used by the hard exactness experiment is
@@ -48,36 +51,19 @@ make -C experiments power RUN_ID=$DESIGN_RUN
 make -C experiments record-design RUN_ID=$DESIGN_RUN
 ```
 
-`power` is a fail-closed dev-only gate. It runs only after
-`DESIGN_COMPLETE`, requires all 12 clean `main_design` EM cohorts to be `OK`,
-and rejects any generation row with `calibration_status=ERROR`. The test size
-and per-family allocation come from the frozen dataset manifest; only that
-split structure is used, never test labels. The resulting artifact reports
-both achieved power and `required_prompts_per_family`.
-
-Legacy failed `paper-v5` design runs can be evaluated only as an explicit
-retrospective diagnostic, stored under a separate content-addressed `diag-*`
-artifact root:
-
-```bash
-make -C experiments diagnose-failed SOURCE_RUN_ID=$DESIGN_RUN
-```
-
-This command rejects test rows, never writes canonical labels into the source
-run, and marks every result posthoc/non-confirmatory. It reports the historical
-gate blockers separately from retrospective signals; it cannot repair or
-resume the failed run. The current protocol has no technical rule-selection
-gate: every frozen rule is passed to calibration, and an unidentifiable family
-is recorded as a failed calibration cohort without a fallback posterior.
+`power` is a dev-only diagnostic executed after `DESIGN_COMPLETE`. The test
+size and per-family allocation come from the frozen dataset manifest; only
+that split structure is used, never test labels. Its artifact records
+`ADEQUATE` or `UNDERPOWERED`, `OK` or `DEGRADED` calibration, affected
+families, achieved power, and `required_prompts_per_family` when estimable.
 
 `record-design` stores the dev-derived operating design and supersedes the
-design run only when `achieved_power >= power_target`; otherwise it fails
-closed and does not finalize the confirmatory design. On low power, extend the
-frozen test split (and its overlays/manifest) to at least the reported
-`required_prompts_per_family`, increment the dataset and experiment revision,
-and start a new dev-only design run. Test labels remain unread throughout this
-decision. After a passing design gate, commit the resulting config and create
-the separate confirmatory run:
+design run even when its scientific status is `UNDERPOWERED` or `DEGRADED`.
+Hashes, prompt grids, provenance, and frozen test identity must still match.
+The recorded status lets the operator either continue or expand the frozen
+test split before unblinding; test labels remain unread throughout this
+decision. Commit the resulting config, then create the separate confirmatory
+run:
 
 ```bash
 RUN_ID=$(make -s -C experiments freeze)
